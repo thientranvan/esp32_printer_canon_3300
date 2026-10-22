@@ -8,6 +8,7 @@ use POSIX qw(strftime);
 
 # ponytail: A4/cassette 1 and <=100 pages, <=20 MiB. Validate other paper sources before extending.
 my $socket;
+my $stationHost;
 my @completedSheets=(0);my $lastCompleted=-1;
 my $cache = '/Library/Caches/ESP32Printer';
 my $pending = "$cache/pending.txt";
@@ -146,10 +147,26 @@ sub plan_pages {
     }
     return @plan;
 }
+sub check_control {
+    my ($job) = @_; my $paused=0;
+    require JSON::PP;
+    while (1) {
+        open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2',"http://$stationHost/printer/status") or fail('Cannot read job control');
+        local $/; my $body=<$curl>;close($curl) or fail('ESP job control unavailable; outcome uncertain');
+        my $s=eval { JSON::PP::decode_json($body) };fail('Invalid job control response') unless $s && ($s->{job_control}{id}//'') eq $job;
+        my $request=$s->{job_control}{request}//'';
+        fail('Operator cancelled submission; buffered pages may still print. Inspect before retry.') if $request eq 'cancel_requested';
+        if ($request eq 'resume_requested') {ack(0xF003,pack('C',2));return;}
+        return unless $request eq 'pause_requested';
+        if (!$paused) {ack(0xF003,pack('C',1));$paused=1;}
+        status();select(undef,undef,undef,0.25);
+    }
+}
 sub print_pages {
     my (@pages) = @_;
     @completedSheets=(0);$lastCompleted=-1;
     for my $p (@pages){push @completedSheets,$completedSheets[-1]+((ord(substr($p->[0],9,1))&4)?0:1);}
+    my $job="mac-".time."-$$";ack(0xF002,$job);
     ack(0xF001, pack('V', scalar(@pages)));
     my $model = command(0xA1A1);
     fail('Printer model mismatch') unless substr($model, 2, 2) eq "\x94\x2a";
@@ -168,6 +185,7 @@ sub print_pages {
     ack(0xE0A5, pack('VvCCx8', 0xADEADBEE, 0, 0, 0));
     my $page = 0;
     for my $entry (@pages) {
+        check_control($job);
         my ($parameters, $bands) = @$entry;
         ++$page;
         my $deadline = time + 60;
@@ -290,6 +308,7 @@ sub main {
     my ($host, $port, $id) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?(?:/(esp32-[0-9a-f]{12}))?/?\z};
     if ($id) { $cache .= "/$id"; $pending = "$cache/pending.txt"; }
     fail('Invalid device URI') unless $host;
+    $stationHost=$host;
     my $duplex = $ARGV[4] =~ /(?:^|\s)CNDuplex=True(?:\s|$)/i;
     fail('Select Canon Print Style / Binding Location for duplex') if !$duplex && $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
     my $collate = $ARGV[4] !~ /(?:^|\s)Collate=False(?:\s|$)/i;
