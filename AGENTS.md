@@ -14,3 +14,8 @@
 - Không in/lưu token, mật khẩu hoặc nội dung credential vào log debug; lọc dữ liệu
   nhạy cảm trước khi hiển thị log. Không commit `station/device_secret.h`, credential,
   bản sao flash hoặc firmware có bí mật.
+
+- Quan sát 22/10/2026: mở lại COM bằng pyserial dù đặt DTR/RTS false trước open
+  vẫn có lần làm bo boot lại (uptime về 3 giây). Không lặp cách này để đọc log,
+  nhất là khi có job. Ưu tiên giữ monitor liên tục từ sau lần nạp, giải phóng
+  cổng khi flash; kiểm tra uptime để phát hiện reset ngoài ý muốn.
