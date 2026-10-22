@@ -15,6 +15,7 @@ for kind, filename in [("setup", "esp32-printer-setup-v3.ps1"), ("diagnostics", 
         assert script.startswith("param([string]$Token, [string]$StationIP)")
         assert "token=$Token" in script and "token='TOKEN'" not in script
 assert "ssh-ed25519 AAAA" not in Path("installers/esp32-printer-remote-v3.ps1").read_text()
+assert 'esp_read_mac(mac,ESP_MAC_WIFI_STA)' in source, "Station ID must not depend on Wi-Fi interface startup timing"
 mac = Path("install_mac.sh").read_text()
 backend_hash = re.search(r"^backend_sha=([0-9a-f]{64})$", mac, re.M)[1]
 assert hashlib.sha256(Path("mac_backend.pl").read_bytes()).hexdigest() == backend_hash, "Update installer backend pin when backend changes"

@@ -16,7 +16,7 @@ trap '/bin/rm -f "$profile"' EXIT
 /usr/bin/curl --fail --silent --show-error --noproxy '*' --connect-timeout 10 --max-time 15 "http://$host/setup/profile.json" -o "$profile"
 id=$(/usr/bin/plutil -extract id raw -o - "$profile")
 name=${2:-$(/usr/bin/plutil -extract name raw -o - "$profile")}
-/usr/bin/perl -e 'exit !($ARGV[0] =~ /\Aesp32-[0-9a-f]{12}\z/ && length($ARGV[1]) && length($ARGV[1]) <= 192 && $ARGV[1] !~ /[\x00-\x1f\x7f\\\/";]/)' "$id" "$name" || { echo 'Invalid station ID/name.' >&2; exit 1; }
+/usr/bin/perl -e 'exit !($ARGV[0] =~ /\Aesp32-[0-9a-f]{12}\z/ && $ARGV[0] ne "esp32-000000000000" && length($ARGV[1]) && length($ARGV[1]) <= 192 && $ARGV[1] !~ /[\x00-\x1f\x7f\\\/";]/)' "$id" "$name" || { echo 'Invalid station ID/name.' >&2; exit 1; }
 [ "$(/usr/bin/plutil -extract schema raw -o - "$profile")" = 1 ]
 [ "$(/usr/bin/plutil -extract model raw -o - "$profile")" = LBP3300 ]
 [ "$(/usr/bin/plutil -extract ip raw -o - "$profile")" = "$host" ]

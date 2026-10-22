@@ -1,6 +1,7 @@
 """Run on the ESP access point: python check_station.py http://192.168.4.1"""
 import getpass
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -20,6 +21,8 @@ with client.open(base + "/status", timeout=10) as response:
     status = json.load(response)
 assert status["healthy"] and status["flash"] == 16777216 and status["psram"] == 8388608, status
 assert status["static_ip"] is True, status
+assert re.fullmatch(r"esp32-[0-9a-f]{12}", status["station"]["id"]), status["station"]
+assert status["station"]["id"] != "esp32-000000000000", status["station"]
 assert isinstance(status["ssid"], str) and isinstance(status["rssi"], int), status
 assert status["usb"]["error"] == 0, status
 if status["usb"]["installed"]:

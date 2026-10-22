@@ -6,6 +6,7 @@
 #include <ESPmDNS.h>
 #include <esp_core_dump.h>
 #include <esp_partition.h>
+#include <esp_mac.h>
 #include "device_secret.h"
 #include "usb_monitor.h"
 #include "capt_tcp.h"
@@ -251,7 +252,10 @@ void setup() {
   bool storageOK = prefs.begin("printer", false);
   if (storageOK) supportCommand = prefs.getString("supportcmd", supportCommand);
   bool wifiOK = WiFi.mode(WIFI_AP_STA);
-  stationID = "esp32-" + WiFi.macAddress(); stationID.replace(":", ""); stationID.toLowerCase();
+  uint8_t mac[6]={};bool idOK=esp_read_mac(mac,ESP_MAC_WIFI_STA)==ESP_OK;
+  bool nonzero=false;for(uint8_t b:mac)nonzero|=b!=0;idOK=idOK&&nonzero&&!(mac[0]&1);
+  char id[19];snprintf(id,sizeof(id),"esp32-%02x%02x%02x%02x%02x%02x",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  stationID=idOK?String(id):String("");
   StationSettings saved = {};
   if (prefs.getBytes("station", &saved, sizeof(saved)) == sizeof(saved) && saved.version == 1 &&
       memchr(saved.name,0,sizeof(saved.name)) && memchr(saved.ip,0,sizeof(saved.ip)) &&
@@ -267,7 +271,7 @@ void setup() {
   WiFi.setHostname(hostname.c_str());
   WiFi.setAutoReconnect(true);
   bool apOK = WiFi.softAP(("ESP32-Printer-" + stationID.substring(12)).c_str(), DEVICE_PASSWORD);
-  healthy = storageOK && wifiOK && staticOK && apOK && memoryOK &&
+  healthy = idOK && storageOK && wifiOK && staticOK && apOK && memoryOK &&
             ESP.getFlashChipSize() == 16777216 && ESP.getPsramSize() == 8388608;
   csrf = String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX);
   if (storageOK) connectSaved();

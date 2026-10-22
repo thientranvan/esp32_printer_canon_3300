@@ -7,7 +7,7 @@ $address=$null
 if ($StationIP -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}$' -or ![Net.IPAddress]::TryParse($StationIP,[ref]$address) -or $address.AddressFamily -ne 'InterNetwork') { throw 'Invalid ESP IPv4 address.' }
 $StationIP=$address.ToString()
 $profile=Invoke-RestMethod -Uri "http://$StationIP/setup/profile.json" -TimeoutSec 10
-if ($profile.schema -ne 1 -or $profile.model -ne 'LBP3300' -or $profile.id -notmatch '^esp32-[0-9a-f]{12}$' -or $profile.ip -ne $StationIP) { throw 'Target is not a supported ESP32 printer station, or its IP differs.' }
+if ($profile.schema -ne 1 -or $profile.model -ne 'LBP3300' -or $profile.id -notmatch '^esp32-[0-9a-f]{12}$' -or $profile.id -eq 'esp32-000000000000' -or $profile.ip -ne $StationIP) { throw 'Target is not a supported ESP32 printer station, or its IP differs.' }
 $stationId=[string]$profile.id
 if (!$PrinterName) { $PrinterName=[string]$profile.name }
 if (!$PrinterName -or $PrinterName.Length -gt 64 -or $PrinterName -match '[\x00-\x1f\x7f\\/";]') { throw 'Printer name must contain 1..64 characters, without control characters, slash, quote or semicolon.' }
