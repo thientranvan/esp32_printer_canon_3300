@@ -410,6 +410,35 @@ Temporary CUPS debug logging was restored to its original disabled setting.
 
 ### Windows: native queue and per-client bridge physically confirmed
 
+**Continuous multi-page printing (2026-10-22):** Windows now keeps one TCP
+connection and one CAPT reservation for the entire document, including copies.
+Initialization/discard runs once; E1A1 stages 2/6 and E0A7 run for each decoded
+page; stage 4 and E0A9 run only after the final page has completed.
+
+The submission window allows two decoded pages ahead of the engine's
+`page_printing` counter (A0A8 payload offset 16). It does **not** wait for
+`page_completed` (offset 20) before submitting page three. An earlier window
+based on completed sheets made sheets 1–2 continuous but introduced a pause
+before sheet 3, confirmed by user. Final completion still checks output count.
+
+Three numbered native Windows queue test pages completed in 17.28 seconds,
+versus 23.65 seconds with the conservative output-based window. User confirmed
+all three final test sheets came out consecutively. These are short-job timings,
+not a rated pages-per-minute benchmark or a measured comparison with direct USB.
+This optimization currently applies to Windows; the Mac backend still uses its
+previous per-page sequence.
+
+Self-test simulates delayed paper exit, requires page three before first output,
+checks one reservation/release and verifies collated/uncollated copy order.
+`C:\ProgramData\ESP32Printer\last-job.txt` retains only the last successful
+job's raster/submission/completion timings. `status.txt` reports total duration.
+The pending marker now covers the whole document; uncertain failure preserves
+the capture and progress, stops, and never automatically resends the document.
+Existing Windows test PC was upgraded remotely; other PCs rerun the latest
+[installer](installers/esp32-printer-setup-v3.ps1) from the ESP website with an
+empty queue. No firmware update or new printer selection is required.
+
+
 Open `http://192.168.1.199`, authenticate, download **Windows setup v3**, run in
 64-bit administrator PowerShell. The official Canon LBP3300 x64 driver must
 already be installed. The page includes a file-picker command to avoid Downloads
@@ -438,7 +467,7 @@ A4=2/plain=1, selects cassette with E1A9 and applies its source to D0A0.
 unresolved job. SYSTEM/Administrators only. Input is size/sequence/model checked
 before printer mutation. Captures are flushed to disk. A pending marker is saved
 before mutating commands; an uncertain page stops the bridge without automatic
-resend, preserving the capture and completed-page progress. Completed captures
+resend, preserving the capture and submission/completion progress. Completed captures
 are removed. Safe pre-mutation connection failures retry; unresolved captures on
 startup require inspection. This is not a durable ESP/VPS queue. To disable the
 client bridge: `Stop-ScheduledTask -TaskName ESP32CaptBridge` then
