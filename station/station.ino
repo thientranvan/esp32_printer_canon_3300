@@ -173,6 +173,10 @@ void home() {
   String page = R"HTML(<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Trạm in ESP32</title>
 <style>body{font:18px system-ui;max-width:640px;margin:32px auto;padding:0 16px}label{display:block;margin:16px 0}input,button{font:inherit;max-width:100%;box-sizing:border-box}button{padding:8px}small{display:block}</style>
 <h1>Trạm in ESP32</h1><p>Canon LBP3300 · A4, cassette 1 · Đã xác nhận in thử qua LAN.</p><p id="status" aria-live="polite">Đang đọc trạng thái...</p>
+<label>ID ESP của trạm này <input id="station-id" value="__STATION_ID__" readonly style="width:100%"></label>
+<button type="button" onclick="copyStationID()">Sao chép ID ESP</button><span id="station-id-result" role="status"></span>
+<p>Đăng ký ID này tại <a href="https://quanly.lophocbinhminh.com/index.php?page=printers" target="_blank" rel="noopener">Quản lý máy in trên server</a>. Server cấp token riêng; sao chép token vào <a href="#station-settings">Cấu hình trạm in</a> bên dưới và bật kết nối web. Token server chỉ hiển thị một lần khi cấp.</p>
+<script>function copyStationID(){const field=document.getElementById('station-id');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('station-id-result').textContent=copied?' Đã sao chép ID ESP.':' Đã chọn ID. Nhấn Ctrl+C hoặc Command+C để sao chép.';}</script>
 <h2>Lệnh cần chạy hiện tại</h2><p>Mở PowerShell quản trị và dán lệnh. Nội dung tự cập nhật mỗi 3 giây; không tự chạy.</p>
 <textarea id="live-command" aria-label="Lệnh PowerShell cần chạy hiện tại" readonly rows="8" style="width:100%;box-sizing:border-box"></textarea>
 <button id="live-copy" type="button" disabled onclick="copyLiveCommand()">Sao chép lệnh hiện tại</button><p id="live-result" role="status">Đang tải lệnh...</p>
@@ -215,7 +219,7 @@ refreshCommand();setInterval(refreshCommand,3000);
 <form method="post" action="/wifi"><input type="hidden" name="token" value=")HTML";
   page += csrf;
   page += R"HTML("><label>Tên mạng (SSID) <input name="ssid" maxlength="32" required autocomplete="off"></label><label>Mật khẩu Wi-Fi <input name="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Kết nối</button></form>
-<h2>Cấu hình trạm in</h2><p>Mỗi ESP có ID riêng. Ví dụ: Máy 1 / .199, Máy 2 / .200, Máy 3 / .201. Khi đổi IP, cài lại hàng đợi trên máy tính. Lưu sẽ khởi động lại trạm.</p>
+<h2 id="station-settings">Cấu hình trạm in</h2><p>Mỗi ESP có ID riêng. Ví dụ: Máy 1 / .199, Máy 2 / .200, Máy 3 / .201. Khi đổi IP, cài lại hàng đợi trên máy tính. Lưu sẽ khởi động lại trạm.</p>
 <form method="post" action="/station"><input type="hidden" name="token" value="__CSRF__">
 <label>Tên máy in <input id="station-name" name="name" maxlength="64" required></label>
 <label>IP tĩnh <input id="station-ip" name="ip" required></label>
@@ -231,6 +235,7 @@ refreshCommand();setInterval(refreshCommand,3000);
   page += R"HTML("><label>Firmware <input name="firmware" type="file" accept=".bin" required></label><button>Cập nhật và khởi động lại</button></form>
 <script>async function refresh(){try{let r=await fetch('/status');if(!r.ok)return;let s=await r.json();if(!window.stationLoaded){document.getElementById('station-name').value=s.station.name;for(const k of ['ip','gateway','mask','dns'])document.getElementById('station-'+k).value=s.network[k];document.getElementById('cloud-enabled').checked=s.cloud.enabled;window.stationLoaded=true;}document.getElementById('cloud-status').textContent='Web server: '+s.cloud.state+(s.cloud.error?' · '+s.cloud.error:'');document.querySelector('h1').textContent=s.station.name+' · Trạm in ESP32';document.getElementById('tcp').textContent='TCP 9100: '+(s.tcp.state===2?'Đang có phiên in':s.tcp.state===1?'Đang chờ lượt':'Đang chờ máy gửi')+' · Tiến độ ảnh in: '+s.tcp.completed+'/'+(s.tcp.total||'?')+' · Lệnh đã chuyển: '+s.tcp.commands+(s.tcp.error?' · Lỗi: '+s.tcp.error:'');document.getElementById('status').textContent=`Kiểm tra: ${s.healthy?'Đạt':'Lỗi'} | Thời gian chạy: ${s.uptime}s | Wi-Fi: ${s.connected?s.ssid+' · '+s.rssi+' dBm · IP tĩnh '+s.ip:s.connecting?'Đang kết nối':'Chưa kết nối'} | Flash: ${s.flash} | PSRAM: ${s.psram}`;document.getElementById('usb-link').textContent='Chế độ Host: '+(s.usb.host_mode?'Có':'Không')+' · Tín hiệu kết nối USB: '+(s.usb.physical_link?'Có':'Chưa có')+' · Thiết bị đã nhận: '+s.usb.devices;document.getElementById('usb').textContent=(s.usb.recovering?'Đang tự phục hồi kết nối USB':s.usb.responsive?'Máy in phản hồi USB; chưa xác nhận sẵn sàng in':s.usb.connected?'Đã nhận USB Canon nhưng máy in chưa phản hồi / mất liên lạc':s.usb.installed?'Chưa kết nối được máy in; tự dò và phục hồi':'USB Host chưa sẵn sàng')+'\n'+s.usb.details+(s.usb.error?'\nMã lỗi: '+s.usb.error:'');}catch{document.getElementById('status').textContent='Mất kết nối với ESP. Đang thử lại...';}}refresh();setInterval(refresh,3000);</script></html>)HTML";
   page.replace("__CSRF__", csrf);
+  page.replace("__STATION_ID__", stationID);
   page.replace("__STATION_IP__", stationIP.toString());
   server.send(200, "text/html; charset=utf-8", page);
 }
