@@ -12,9 +12,9 @@ Ba bo dùng cùng source, cấu hình riêng qua trang quản trị:
 
 | Tên | IP dự kiến | ID |
 | --- | --- | --- |
-| Phòng 1 | 192.168.1.199 | `esp32-<12 ký tự MAC lowercase>` của bo 1 |
-| Phòng 2 | 192.168.1.200 | ID của bo 2 |
-| Phòng 3 | 192.168.1.201 | ID của bo 3 |
+| Máy 1 | 192.168.1.199 | `esp32-<12 ký tự MAC lowercase>` của bo 1 |
+| Máy 2 | 192.168.1.200 | ID của bo 2 |
+| Máy 3 | 192.168.1.201 | ID của bo 3 |
 
 ID không đổi khi đổi tên/IP; server dùng ID làm khóa, không dùng IP làm danh tính.
 Dành các IP trên router để tránh DHCP cấp trùng. IP là địa chỉ LAN của ESP,
@@ -22,7 +22,7 @@ Dành các IP trên router để tránh DHCP cấp trùng. IP là địa chỉ L
 
 ## Luồng in từ web
 
-1. Người dùng đăng nhập web, chọn phòng, tài liệu và tùy chọn in. Server kiểm tra quyền
+1. Người dùng đăng nhập web, chọn máy in, tài liệu và tùy chọn in. Server kiểm tra quyền
    theo trạm và giới hạn tài liệu, tạo job với idempotency key do trình duyệt gửi.
 2. Worker trên server render tài liệu thành raster CAPT LBP3300, áp dụng N-up,
    ngang/dọc và xoay mặt sau theo cạnh lật, rồi tạo file `espjob-v1` bên dưới.
@@ -81,7 +81,7 @@ Ví dụ body (thêm field tương thích được phép):
 {
   "schema": 1,
   "boot_id": "af127c9b42",
-  "name": "Phòng 1",
+  "name": "Máy 1",
   "ip": "192.168.1.199",
   "uptime_s": 120,
   "printer": {
@@ -221,7 +221,7 @@ C0A4/trailer Windows không nằm trong phần bands. Bộ chuyển mẫu và va
 
 ## Phần dev server cần bàn giao
 
-- Migration stations/jobs/attempts/events, đăng ký ba ID/token, quyền người dùng theo phòng.
+- Migration stations/jobs/attempts/events, đăng ký ba ID/token, quyền người dùng theo máy in.
 - Worker render thật, kiểm tra duplex/N-up/font trên LBP3300; lưu artifact ngoài webroot,
   retention/xóa tài liệu theo chính sách ứng dụng. Không cho client upload CAPT tùy ý
   với quyền người dùng thông thường.

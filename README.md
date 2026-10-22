@@ -4,7 +4,7 @@ Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
 ## Cài đặt nhanh
 
-- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị và dùng IP/tên trạm như mục nhiều trạm bên dưới. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn tên trạm đã cấu hình, ví dụ **Phòng 1**, trong ứng dụng.
+- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị và dùng IP/tên trạm như mục nhiều trạm bên dưới. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn tên trạm đã cấu hình, ví dụ **Máy 1**, trong ứng dụng.
 - macOS: tải riêng [install_mac.sh](install_mac.sh), chạy `sudo sh install_mac.sh`. Không cần Python, clone repo hay có sẵn hàng đợi USB. Thiếu driver sẽ tự tải và cài gói Canon CAPT 10.0.10; thiếu backend sẽ tải bản đã cố định SHA-256 từ GitHub.
 - ESP: mở http://192.168.1.199 để xem trạng thái, tải bộ cài và sao chép lệnh hiện tại. Các đường dẫn `/setup/*.ps1` cũ chuyển hướng sang GitHub; firmware không nhúng bộ cài.
 - Hiện hỗ trợ A4, cassette 1, một/hai mặt cạnh dài hoặc ngắn, ngang/dọc và nhiều trang trên một mặt qua driver/ứng dụng. Mỗi máy chạy cầu nối riêng; ESP giữ USB, không cần máy trung gian bật cố định.
@@ -17,28 +17,28 @@ Mở trang quản trị của từng ESP, mục **Cấu hình trạm in**, đặ
 
 | Tên | IP |
 | --- | --- |
-| Phòng 1 | 192.168.1.199 |
-| Phòng 2 | 192.168.1.200 |
-| Phòng 3 | 192.168.1.201 |
+| Máy 1 | 192.168.1.199 |
+| Máy 2 | 192.168.1.200 |
+| Máy 3 | 192.168.1.201 |
 
 ID tự lấy từ MAC, không đổi theo tên/IP. Cấu hình lưu NVS, áp dụng sau reboot.
 Mỗi bo mới cần cấu hình riêng qua Wi-Fi AP `ESP32-Printer-<6 ký tự MAC cuối>`
 tại `http://192.168.4.1`; đừng đưa cả ba bo mặc định .199 vào cùng LAN trước khi đổi IP.
 Gateway/subnet/DNS sửa được; cần dành địa chỉ trên router để tránh trùng DHCP.
 
-Trên từng PC/Mac, mở đúng trang IP của phòng, tải bộ cài và sao chép lệnh ngay trên
+Trên từng PC/Mac, mở đúng trang IP của máy in, tải bộ cài và sao chép lệnh ngay trên
 trang. Lệnh đã chứa đúng IP; bộ cài đọc ID/tên từ `/setup/profile.json` của ESP đó
 trước khi thay đổi máy tính. Có thể chỉ định tên khác khi cài:
 
 ```powershell
-.\esp32-printer-setup-v3.ps1 -StationIP 192.168.1.200 -PrinterName "Phòng 2"
+.\esp32-printer-setup-v3.ps1 -StationIP 192.168.1.200 -PrinterName "Máy 2"
 ```
 
 ```sh
-sudo sh install_mac.sh 192.168.1.200 'Phòng 2'
+sudo sh install_mac.sh 192.168.1.200 'Máy 2'
 ```
 
-Không truyền tham số: hỏi IP rồi lấy tên từ trạm. Một máy cài được cả ba phòng.
+Không truyền tham số: hỏi IP rồi lấy tên từ trạm. Một máy cài được cả ba máy in.
 Windows dùng thư mục/task/mutex/port riêng theo station ID, port loopback 19101..19200;
 Mac dùng queue và cache/pending/lock riêng theo ID. Driver Canon dùng chung.
 Đổi IP: cài lại cùng ID để cập nhật địa chỉ, không cần sửa firmware/code.

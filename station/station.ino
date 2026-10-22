@@ -15,7 +15,7 @@
 WebServer server(80);
 Preferences prefs;
 String csrf;
-String stationID, stationName = "Phòng 1";
+String stationID, stationName = "Máy 1";
 IPAddress stationIP(192,168,1,199), stationGateway(192,168,1,1), stationMask(255,255,255,0), stationDNS(192,168,1,1);
 struct StationSettings {
   uint32_t version;
@@ -181,7 +181,7 @@ async function refreshCommand(){try{const r=await fetch('/support/command',{cach
 function copyLiveCommand(){const field=document.getElementById('live-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('live-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}
 refreshCommand();setInterval(refreshCommand,3000);
 </script>
-<h2>Cài máy in trên Windows</h2><p>Đã xác nhận in qua hàng đợi Windows. Chạy bộ cài này trên từng máy Windows 10/11 x64, kể cả máy chưa từng cài máy in. Bộ cài tự tải CAPT chính thức từ Canon (12 MB), kiểm tra SHA-256 và chữ ký rồi cài driver cùng cầu nối LAN. Máy đã có driver sẽ bỏ qua bước tải; không cần cắm USB máy in vào máy tính. Bộ cài lấy tên và IP từ trạm này; chọn tên phòng tương ứng trong danh sách máy in của Word, Chrome hoặc trình đọc PDF.</p>
+<h2>Cài máy in trên Windows</h2><p>Đã xác nhận in qua hàng đợi Windows. Chạy bộ cài này trên từng máy Windows 10/11 x64, kể cả máy chưa từng cài máy in. Bộ cài tự tải CAPT chính thức từ Canon (12 MB), kiểm tra SHA-256 và chữ ký rồi cài driver cùng cầu nối LAN. Máy đã có driver sẽ bỏ qua bước tải; không cần cắm USB máy in vào máy tính. Bộ cài lấy tên và IP từ trạm này; chọn tên máy in tương ứng trong danh sách máy in của Word, Chrome hoặc trình đọc PDF.</p>
 <p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1" download="esp32-printer-setup-v3.ps1">Tải bộ cài Windows v3</a>. Mở PowerShell quản trị, dán lệnh rồi chọn file bộ cài vừa tải:</p>
 <textarea id="setup-command" aria-label="Lệnh chạy bộ cài Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-setup-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea>
 <button type="button" onclick="copyRemote('setup-command')">Sao chép lệnh cài Windows</button><p id="setup-copy-result" role="status"></p>
@@ -215,7 +215,7 @@ refreshCommand();setInterval(refreshCommand,3000);
 <form method="post" action="/wifi"><input type="hidden" name="token" value=")HTML";
   page += csrf;
   page += R"HTML("><label>Tên mạng (SSID) <input name="ssid" maxlength="32" required autocomplete="off"></label><label>Mật khẩu Wi-Fi <input name="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Kết nối</button></form>
-<h2>Cấu hình trạm in</h2><p>Mỗi ESP có ID riêng. Ví dụ: Phòng 1 / .199, Phòng 2 / .200, Phòng 3 / .201. Khi đổi IP, cài lại hàng đợi trên máy tính. Lưu sẽ khởi động lại trạm.</p>
+<h2>Cấu hình trạm in</h2><p>Mỗi ESP có ID riêng. Ví dụ: Máy 1 / .199, Máy 2 / .200, Máy 3 / .201. Khi đổi IP, cài lại hàng đợi trên máy tính. Lưu sẽ khởi động lại trạm.</p>
 <form method="post" action="/station"><input type="hidden" name="token" value="__CSRF__">
 <label>Tên máy in <input id="station-name" name="name" maxlength="64" required></label>
 <label>IP tĩnh <input id="station-ip" name="ip" required></label>
