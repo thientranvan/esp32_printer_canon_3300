@@ -114,6 +114,15 @@ static void captTCPTask(void *) {
         }
         unsigned replyLength=CaptStatus::word(buffer+2);
         captRecordFrame(buffer,replyLength);
+        if(opcode==0xA0A8 && replyLength>=40 && CaptStatus::decode(buffer).service){
+          portENTER_CRITICAL(&captTelemetryLock);bool query=!captServiceAt||uint32_t(millis()-captServiceAt)>=1500;portEXIT_CRITICAL(&captTelemetryLock);
+          if(query){
+            uint8_t service[80]={0xA2,0xA2,4,0};int count=0;
+            if(tcpTransfer(service,4,false,count) && CaptStatus::reply(service,sizeof(service),0xA2A2,
+                [](uint8_t *p,int size,int &n){return tcpTransfer(p,size,true,n);}))
+              captRecordFrame(service,CaptStatus::word(service+2));
+          }
+        }
         if(opcode==0xA0A8 && replyLength>=40)captTCPCompleted.store(CaptStatus::decode(buffer).completed);
         if(client.write(buffer,replyLength)!=replyLength)break;
       }

@@ -220,7 +220,7 @@ public static class Esp32CaptBridge {
  [System.Runtime.InteropServices.DllImport("winspool.drv",EntryPoint="SetPrinterW",SetLastError=true)]
  static extern bool SetPrinter(IntPtr handle,uint level,ref uint status,uint command);
  [System.Runtime.InteropServices.DllImport("winspool.drv",EntryPoint="GetPrinterW",SetLastError=true)]
- static extern bool GetPrinter(IntPtr handle,uint level,out uint status,uint size,out uint needed);
+ static extern bool GetPrinter(IntPtr handle,uint level,IntPtr data,uint size,out uint needed);
  [System.Runtime.InteropServices.DllImport("winspool.drv")] static extern bool ClosePrinter(IntPtr handle);
  static bool Flag(string json,string key){return System.Text.RegularExpressions.Regex.IsMatch(json,"\\\""+key+"\\\"\\s*:\\s*true");}
  static bool monitorStarted=false;
@@ -242,9 +242,13 @@ public static class Esp32CaptBridge {
    }catch{status=0x80;}
    if(File.Exists(Pending))status|=0x100002;
    try{File.WriteAllText(Path.Combine(Root,"printer-state.json"),json);
-    IntPtr handle;PrinterDefaults defaults=new PrinterDefaults();defaults.Access=4;
-    if(OpenPrinter(name,out handle,ref defaults)){try{uint current,needed;if(!GetPrinter(handle,6,out current,4,out needed))throw new IOException("GetPrinter failed");status=(current&~(uint)(0x80|2|8|0x10|0x00400000|0x20000|0x400|0x100000))|status;if(!SetPrinter(handle,6,ref status,0))File.WriteAllText(Path.Combine(Root,"monitor-error.txt"),"SetPrinter: "+System.Runtime.InteropServices.Marshal.GetLastWin32Error());}finally{ClosePrinter(handle);}}
-   }catch{}
+    IntPtr handle;PrinterDefaults defaults=new PrinterDefaults();defaults.Access=12;
+    if(OpenPrinter(name,out handle,ref defaults)){try{uint needed;GetPrinter(handle,6,IntPtr.Zero,0,out needed);
+      if(needed<4||needed>64)throw new IOException("Invalid printer status size");
+      IntPtr data=System.Runtime.InteropServices.Marshal.AllocHGlobal((int)needed);uint current;
+      try{if(!GetPrinter(handle,6,data,needed,out needed))throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());current=(uint)System.Runtime.InteropServices.Marshal.ReadInt32(data);}
+      finally{System.Runtime.InteropServices.Marshal.FreeHGlobal(data);}status=(current&~(uint)(0x80|2|8|0x10|0x00400000|0x20000|0x400|0x100000))|status;if(!SetPrinter(handle,6,ref status,0))File.WriteAllText(Path.Combine(Root,"monitor-error.txt"),"SetPrinter: "+System.Runtime.InteropServices.Marshal.GetLastWin32Error());}finally{ClosePrinter(handle);}}else throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+   }catch(Exception e){try{File.WriteAllText(Path.Combine(Root,"monitor-error.txt"),e.Message);}catch{}}
    Thread.Sleep(2000);
   }
  }

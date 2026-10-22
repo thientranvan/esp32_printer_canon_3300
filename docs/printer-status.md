@@ -16,6 +16,13 @@
   đã thấy `printer.state="error"` và mã E100 trong `printer.capt.service_code`.
 - Mac CUPS đã nhận `printer-state-message="Canon service fault / E100 0000"`
   và `other-error`, giữ nguyên `paused` của hàng đợi cũ. Không tự tiếp tục job.
+- Windows 10/11 x64: đã biên dịch trên máy thật và chạy bridge self-test đạt.
+  Đã cập nhật bridge SYSTEM của Máy 1, queue báo PaperOut/UserIntervention thay
+  vì Ready; JSON trạng thái có E100 0000. Pending/captured job được giữ nguyên hash.
+  Lỗi Winspool đã sửa: cần ACCESS_USE | ACCESS_ADMINISTER và GetPrinter level 6
+  hỏi kích thước trước khi cấp bộ đệm (máy x64 trả 8 byte, không phải 4).
+- Test LAN chỉ đọc giữ phiên TCP 14 giây, lặp A0A8: E100 vẫn được cập nhật
+  nhờ truy vấn A2A2 trong cùng owner, không gửi dữ liệu in hoặc byte thừa cho client.
 - Chưa nghiệm thu vật lý hết giấy, kẹt giấy, mở nắp, hộp mực trên bo này.
   Không cố gây kẹt hoặc tự xóa service fault để thử.
 
@@ -26,6 +33,8 @@ khi cloud tắt/mất Internet. Không chen lệnh USB vào job LAN/cloud. Khi j
 chạy, bắt thụ động phản hồi A0A8 của chính client in. Không có phản hồi mới trên
 10 giây hoặc USB ngắt: `fresh=false`; không coi số liệu cũ là trạng thái hiện tại.
 Mã service quá 10 giây không đọc lại được sẽ để trống, không giữ mã cũ vô hạn.
+Proxy TCP bổ sung query A2A2 trong chính phiên sở hữu khi A0A8 báo service fault;
+đáp án A2A2 chỉ dùng cho telemetry, không chen byte vào phản hồi của client.
 
 Endpoint LAN chỉ đọc, không cần mật khẩu admin: `GET /printer/status`.
 Chặn client ngoài subnet; không mở cổng router. Không chứa token/cấu hình/bí mật.
@@ -96,7 +105,11 @@ Chạy lại bộ cài mới để có monitor; bộ cài cũ không tự đư�
   chuẩn, không có chỗ hiển thị chuỗi E100 tùy ý trong giao diện queue mặc định.
   Spooler có thể đánh dấu tài liệu đã chuyển sang bridge trước khi giấy ra;
   không lấy tiến trình spooler làm xác nhận vật lý.
-- Chưa kiểm chứng bridge mới trên Windows thật nếu máy SSH chưa kết nối được.
+- Đã nghiệm thu đọc lỗi trên Windows thật qua SSH. Giữ SSH dạng task
+  `ESP32PrinterSupport`, không nhầm thành dịch vụ `sshd`. Nếu IP Mac đổi, cần cập
+  nhật whitelist firewall và `from=` của authorized_keys; không mở ra Internet.
+  Bản bridge mới vẫn chạy monitor khi bị khóa bởi pending job; muốn in lại phải
+  kiểm tra/đối soát job rồi khởi động lại bridge, không tự phát lại file cũ.
 
 ## Việc dev server cần làm — không tự sửa ứng dụng server
 
