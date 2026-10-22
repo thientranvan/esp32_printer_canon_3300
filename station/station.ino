@@ -506,7 +506,7 @@ void setup() {
   } else {
     startUSB();
   }
-  Serial.printf("STATION: %s\nAP: ESP32-Printer-36B0\nPassword: %s\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL", DEVICE_PASSWORD);
+  Serial.printf("STATION: %s\nAP: ESP32-Printer-36B0\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL");
 }
 
 void loop() {

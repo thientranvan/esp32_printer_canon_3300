@@ -2,6 +2,24 @@
 
 Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
+## Kết nối phần cứng và debug hiện tại — 22/10/2026
+
+- Ưu tiên **cổng COM → Mac** để nạp firmware và đọc log UART 115200 baud trực tiếp.
+  Đã đọc được log boot `STATION: PASS` qua `/dev/cu.usbmodem5CF90462221`;
+  tên cổng có thể thay đổi, cần kiểm tra lại trước mỗi lần dùng.
+- Giữ **cổng USB native → OTG → Canon LBP3300** cho USB Host khi debug qua COM.
+  Người dùng xác nhận: sau khi hàn hai mối nối USB–OTG, máy in nối thẳng đã nhận,
+  **không cần hub, không cần cấp nguồn riêng cho đường USB/OTG**.
+  Chưa ghi nhận chính xác hai điểm hàn/pin; không suy đoán hoặc hướng dẫn hàn theo pin chưa xác minh.
+- Chỉ khi không cắm được COM mới quay lại cách thao tác/nạp qua mạng (OTA) và
+  bố trí USB/OTG trước đây. Đọc log không chủ động reset bo nếu không cần.
+- ESP vẫn cần nguồn nuôi; kết quả trên không có nghĩa máy in cấp nguồn cho ESP.
+  Việc nhận thiết bị nối thẳng do người dùng xác nhận, chưa nghiệm thu lại một lượt in
+  với sơ đồ mới trong phiên cập nhật tài liệu này.
+- Các mục về hub/VBUS bên dưới là lịch sử thử nghiệm trước khi sửa hai mối hàn,
+  không phải yêu cầu dùng hub cho bo đã sửa. Bo khác chưa sửa cần kiểm chứng riêng.
+
+
 ## Cài đặt nhanh
 
 - Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị và dùng IP/tên trạm như mục nhiều trạm bên dưới. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn tên trạm đã cấu hình, ví dụ **Máy 1**, trong ứng dụng.
@@ -245,7 +263,7 @@ Configuration and OTA use HTTP, Digest authentication and per-boot CSRF tokens.
 Configure through the password-protected AP or a trusted LAN; do not expose port 80
 to the Internet. Firmware signature verification is not enabled.
 In v1/v2 USB remains Serial/JTAG. In v3 the native USB port switches to USB Host;
-use Wi-Fi for configuration and OTA, not the native USB serial port.
+use COM/UART0 for flashing and serial debugging; Wi-Fi configuration/OTA is the fallback when COM cannot be connected. Do not use the native Host port as a serial console.
 
 ### USB monitor (v3)
 
@@ -320,8 +338,9 @@ authentication, hardware status, page serving and CSRF rejection without changin
 
 Validated topology: ESP native **USB** port → powered USB hub `214B:7260` →
 powered-on Canon LBP3300. Supply ESP separately through 5V/GND.
-Direct OTG connection has not enumerated; missing VBUS is a hypothesis, not a
-measurement. COM is USB–UART, not the printer Host port. Hub detection and the
+Before the USB–OTG solder repair, direct OTG had not enumerated; missing VBUS
+was an unmeasured hypothesis. After repair, the user confirmed direct enumeration
+without a hub or separate USB power; see current wiring above. COM is USB–UART, not the printer Host port. Hub detection and the
 SDK panic were separate problems from brownout (`reset_reason=9`). Never disable
 the brownout detector to mask power problems.
 
