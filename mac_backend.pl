@@ -8,7 +8,8 @@ use POSIX qw(strftime);
 
 # ponytail: A4/cassette 1 and <=100 pages, <=20 MiB. Validate other paper sources before extending.
 my $socket;
-my $pending = '/Library/Caches/ESP32Printer/pending.txt';
+my $cache = '/Library/Caches/ESP32Printer';
+my $pending = "$cache/pending.txt";
 sub packet { return pack('vv', $_[0], length($_[1] // '') + 4) . ($_[1] // ''); }
 sub fail { die "$_[0]\n"; }
 sub write_all {
@@ -125,6 +126,7 @@ sub plan_pages {
 }
 sub print_pages {
     my (@pages) = @_;
+    ack(0xF001, pack('V', scalar(@pages)));
     my $model = command(0xA1A1);
     fail('Printer model mismatch') unless substr($model, 2, 2) eq "\x94\x2a";
     my @c = status();
@@ -197,7 +199,8 @@ sub main {
     fail('Invalid CUPS arguments') unless @ARGV == 5 || @ARGV == 6;
     # No proprietary Canon backchannel server: let filter use its PPD defaults.
     POSIX::close(3); POSIX::close(4);
-    my ($host, $port) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?/?\z};
+    my ($host, $port, $id) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?(?:/(esp32-[0-9a-f]{12}))?/?\z};
+    if ($id) { $cache .= "/$id"; $pending = "$cache/pending.txt"; }
     fail('Invalid device URI') unless $host;
     my $duplex = $ARGV[4] =~ /(?:^|\s)CNDuplex=True(?:\s|$)/i;
     fail('Select Canon Print Style / Binding Location for duplex') if !$duplex && $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
@@ -212,7 +215,7 @@ sub main {
         last unless $n; $job .= $part; fail('Job exceeds 20 MiB') if length($job) > 20 * 1024 * 1024;
     }
     my @pages = pages($job); # Validate the entire job before touching USB.
-    sysopen(my $lock, '/Library/Caches/ESP32Printer/lock', O_WRONLY | O_CREAT, 0600) or fail('Cannot open local lock');
+    sysopen(my $lock, "$cache/lock", O_WRONLY | O_CREAT, 0600) or fail('Cannot open local lock');
     flock($lock, LOCK_EX) or fail('Cannot lock local printer');
     fail('Previous result uncertain; inspect pending.txt') if -e $pending;
     $socket = IO::Socket::INET->new(PeerAddr => $host, PeerPort => ($port || 9100), Proto => 'tcp', Timeout => 70)
