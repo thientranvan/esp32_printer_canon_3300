@@ -129,3 +129,35 @@ Hiện UI server vẫn gom `state=error` thành “Lỗi máy in chưa xác đ�
 4. Online ESP khác máy in sẵn sàng. Giữ cơ chế uncertain/no-auto-reprint hiện có.
 
 Không sửa PHP, DB, dịch vụ hoặc thay đổi dở của dev server. Bàn giao file này riêng.
+
+### Windows: cửa sổ trạng thái và cài lại (23/10/2026)
+
+- Bridge SYSTEM chỉ đặt được các cờ chuẩn của Windows; `User intervention`
+  không mang chuỗi mã Canon. Cửa sổ CAPT gốc chưa hỗ trợ giao thức bridge này.
+- Bộ cài cung cấp cửa sổ WinForms riêng trong phiên desktop người dùng: mã Canon
+  (đã đọc E100 0000), trạng thái USB/mạng, cờ giấy/nắp/kẹt/mực đã giải mã,
+  hàng đợi Windows và bộ đếm máy in. Tự mở khi thấy job mới hoặc lỗi đổi;
+  đóng cửa sổ sẽ thu về tray; mở lại từ tray hoặc Start Menu `ESP32-<ID>`.
+  Common Startup chạy monitor ở lần đăng nhập tiếp theo; task Interactive khởi chạy
+  ngay cho tài khoản đang cài. Task SYSTEM không hiển thị cửa sổ.
+- Poll mỗi 2 giây, HTTP timeout 1 giây; không phải push tức thời. Job quá ngắn
+  có thể nằm giữa hai lần poll. Chỉ hiện mẫu số khi ESP có tổng hợp lệ cho job
+  đang hoạt động. Counter CAPT là lượt in mặt, không phải số tờ hay trang Word.
+  Spooler gửi xong không đồng nghĩa máy đã nhả giấy.
+- Mã dịch vụ chỉ mô tả lỗi máy; không suy đoán linh kiện hỏng từ E100. Các tình
+  huống kẹt giấy/nắp/mực vẫn cần kiểm chứng vật lý; không cố gây kẹt để thử.
+- Bộ cài hỏi tên, Enter giữ tên đã cài (hoặc tên trạm cho máy mới). Tham số
+  `-PrinterName` bỏ qua câu hỏi. ID ESP và cổng `ESP32_LOCAL_<ID>` quyết định
+  danh tính, không phải tên hiển thị/IP. Đổi IP cùng ID cập nhật bridge;
+  đổi tên sẽ đổi tên queue đang có, dọn queue trùng cùng cổng khi tất cả rảnh.
+  Tên thuộc trạm/cổng khác bị từ chối. Máy USB Canon riêng không bị xóa.
+- Khi có job Windows hoặc capture chưa xác nhận, bộ cài chỉ cập nhật cửa sổ
+  trạng thái rồi dừng trước thay bridge/queue. Không xóa, phát lại hoặc coi
+  job đó thành công. Hiện máy thử còn hai job Windows và capture cũ đang giữ.
+- Monitor chỉ chứa IP/ID/tên trạm, file được Users đọc/chạy nhưng không sửa.
+  Không nới quyền thư mục CAPT chứa tài liệu. Không token trong UI.
+
+Kiểm tra: `powershell -NoProfile -File .\check_windows_status.ps1` trên Windows.
+Đã chạy test chọn queue/đổi tên/xung đột và handler UI E100/offline/unknown-total
+trên Windows thật; task UI đang chạy. Chưa kiểm chứng trực quan cửa sổ trên
+màn hình người dùng, chưa in lại vì lỗi E100 và job chưa xác nhận.

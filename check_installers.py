@@ -36,3 +36,6 @@ if len(sys.argv) == 2:
         digest = hashlib.sha256((folder / name).read_bytes()).hexdigest()
         assert digest in script, "Driver checksum pin differs from verified Canon download: " + name
 print("Installer packaging, backend pin and bootstrap checks passed")
+
+ui = Path("installers/esp32-printer-status.ps1").read_text()
+assert "$statusSource=@'\n" + ui + "\n'@" in windows, "Embedded status UI differs from source"

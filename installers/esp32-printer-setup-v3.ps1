@@ -9,7 +9,13 @@ $StationIP=$address.ToString()
 $profile=Invoke-RestMethod -Uri "http://$StationIP/setup/profile.json" -TimeoutSec 10
 if ($profile.schema -ne 1 -or $profile.model -ne 'LBP3300' -or $profile.id -notmatch '^esp32-[0-9a-f]{12}$' -or $profile.id -eq 'esp32-000000000000' -or $profile.ip -ne $StationIP) { throw 'Target is not a supported ESP32 printer station, or its IP differs.' }
 $stationId=[string]$profile.id
-if (!$PrinterName) { $PrinterName=[string]$profile.name }
+$portName="ESP32_LOCAL_$stationId"
+$stationQueues=@(Get-Printer | Where-Object { $_.PortName -eq $portName })
+if (!$PrinterName) {
+ $defaultName=if ($stationQueues.Count) { $stationQueues[0].Name } else { [string]$profile.name }
+ $answer=Read-Host "Printer name [$defaultName]"
+ $PrinterName=if ([string]::IsNullOrWhiteSpace($answer)) { $defaultName } else { $answer.Trim() }
+}
 if (!$PrinterName -or $PrinterName.Length -gt 64 -or $PrinterName -match '[\x00-\x1f\x7f\\/";]') { throw 'Printer name must contain 1..64 characters, without control characters, slash, quote or semicolon.' }
 Write-Host "Station: $PrinterName / $stationId / $StationIP"
 $root=Join-Path $env:ProgramData "ESP32Printer\Stations\$stationId"
@@ -25,10 +31,105 @@ else {
 }
 if ($localPort -lt 19101 -or $localPort -gt 19200) { throw 'Invalid existing station bridge port.' }
 if (![Environment]::Is64BitProcess -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Requires Windows 10/11 x64 and 64-bit Windows PowerShell as administrator. Windows ARM64 is not supported.' }
-$existing=Get-Printer -Name $printerName -ErrorAction SilentlyContinue
-if ($existing -and $existing.PortName -ne $portName) { throw 'Printer name belongs to another station. Choose a different name; no queue was changed.' }
-if (@(Get-Printer | Where-Object { $_.PortName -eq $portName -and $_.JobCount -ne 0 }).Count) { throw 'Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
-if ((Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count) { throw 'Unresolved bridge job found. Inspect pending.txt/status.txt before reinstalling; nothing was resent.' }
+$nameConflict=Get-Printer -Name $printerName -ErrorAction SilentlyContinue
+$existing=$stationQueues | Where-Object { $_.Name -eq $printerName } | Select-Object -First 1
+if (!$existing) { $existing=$stationQueues | Select-Object -First 1 }
+if ($nameConflict -and $nameConflict.PortName -ne $portName) { throw 'Printer name belongs to another station. Choose a different name; no queue was changed.' }
+# Status UI runs in each user's desktop, separately from the SYSTEM bridge.
+$statusRoot=Join-Path $env:ProgramData "ESP32PrinterStatus\$stationId"
+New-Item -ItemType Directory -Force $statusRoot | Out-Null
+& icacls.exe $statusRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Cannot secure status UI directory.' }
+$statusSource=@'
+param([Parameter(Mandatory=$true)][string]$Config)
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+$settings=Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+$created=$false
+$mutex=New-Object Threading.Mutex($true,"Local\ESP32PrinterStatus-$($settings.id)",[ref]$created)
+if (!$created) { exit }
+$form=New-Object Windows.Forms.Form
+$form.Text="$($settings.name) - ESP32 / Canon LBP3300"
+$form.Size=New-Object Drawing.Size(620,360)
+$form.StartPosition='CenterScreen'
+$text=New-Object Windows.Forms.TextBox
+$text.Multiline=$true;$text.ReadOnly=$true;$text.Dock='Fill';$text.ScrollBars='Vertical'
+$text.Font=New-Object Drawing.Font('Segoe UI',12)
+$form.Controls.Add($text)
+$tray=New-Object Windows.Forms.NotifyIcon
+$tray.Icon=[Drawing.SystemIcons]::Information
+$tray.Text='ESP32 printer status';$tray.Visible=$true
+$tray.add_DoubleClick({$form.Show();$form.WindowState='Normal';$form.Activate()})
+$menu=New-Object Windows.Forms.ContextMenuStrip
+[void]$menu.Items.Add('Open status',$null,{$form.Show();$form.Activate()})
+[void]$menu.Items.Add('Exit monitor',$null,{$script:exitMonitor=$true;$form.Close()})
+$tray.ContextMenuStrip=$menu
+$form.add_FormClosing({param($sender,$eventArgs) if (!$script:exitMonitor) {$eventArgs.Cancel=$true;$form.Hide()}})
+$script:lastSignal='';$script:lastJobs='';$script:polling=$false
+$timer=New-Object Windows.Forms.Timer
+$timer.Interval=2000
+$timer.add_Tick({
+ if ($script:polling) { return };$script:polling=$true
+ try {
+  $settings=Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+  $form.Text="$($settings.name) - ESP32 / Canon LBP3300"
+  $jobs=@(Get-PrintJob -PrinterName $settings.name -ErrorAction SilentlyContinue)
+  $jobKey=($jobs | ForEach-Object { $_.ID }) -join ','
+  $lines=@("$($settings.name) | $($settings.ip)","Updated: $(Get-Date -Format HH:mm:ss)")
+  $signal=''
+  try {
+   $s=Invoke-RestMethod -Uri "http://$($settings.ip)/printer/status" -TimeoutSec 1
+   if (!$s.connected -or !$s.responsive) { $signal='Printer USB disconnected / not responding' }
+   elseif (!$s.capt.fresh) { $signal='Printer status stale; progress unknown' }
+   else {
+    $errors=@()
+    if ($s.capt.service_error) { $errors+="Canon $($s.capt.service_code) - printer service fault; inspect printer" }
+    if ($s.capt.paper_jam) { $errors+='Paper jam' }
+    if ($s.capt.cover_open) { $errors+='Cover open' }
+    if ($s.capt.paper_required) { $errors+='Check paper size / source (not proof tray is empty)' }
+    if ($s.capt.toner_warning) { $errors+='Toner warning' }
+    $signal=$errors -join "`r`n"
+   }
+   $lines+=if ($signal) {$signal} elseif ($s.active) {'Printing'} else {'Printer idle'}
+   if ($s.active -and $s.total -gt 0) { $lines+="Completed impressions: $($s.completed) / $($s.total)" }
+   elseif ($s.capt.fresh) { $lines+="Printer counters: decoded $($s.capt.decoded), started $($s.capt.started), completed $($s.capt.completed). Job total unavailable." }
+  } catch { $signal='ESP offline / network unavailable';$lines+=$signal }
+  $queue=Get-Printer -Name $settings.name -ErrorAction SilentlyContinue
+  if ($queue.PrinterStatus -match 'UserIntervention') {
+   $lines+='Bridge/queue requires attention. An uncertain previous job may be held; do not resend automatically.'
+   $signal+="`r`nQueue requires attention"
+  }
+  $lines+="Windows queue: $($jobs.Count) job(s). Spool completion does not mean paper output."
+  foreach ($job in $jobs) { $lines+="#$($job.ID) $($job.DocumentName): $($job.JobStatus); spool pages $($job.PagesPrinted)/$($job.TotalPages)" }
+  $text.Text=$lines -join "`r`n`r`n"
+  if (($signal -and $signal -ne $script:lastSignal) -or ($jobKey -and $jobKey -ne $script:lastJobs)) { $form.Show();$form.WindowState='Normal';$form.Activate() }
+  $script:lastSignal=$signal;$script:lastJobs=$jobKey
+ } catch { $text.Text="Status monitor error: $($_.Exception.Message)" }
+ finally { $script:polling=$false }
+})
+$timer.Start()
+try { [Windows.Forms.Application]::Run($form) } finally { $timer.Dispose();$tray.Dispose();$mutex.Dispose() }
+
+'@
+[IO.File]::WriteAllText("$statusRoot\status.ps1",$statusSource,[Text.UTF8Encoding]::new($true))
+@{id=$stationId;ip=$StationIP;name=$(if ($existing) {$existing.Name} else {$PrinterName})} | ConvertTo-Json | Set-Content -Encoding UTF8 "$statusRoot\station.json"
+$shell=New-Object -ComObject WScript.Shell
+foreach ($folder in @([Environment]::GetFolderPath('CommonStartup'),[Environment]::GetFolderPath('CommonPrograms'))) {
+ $shortcut=$shell.CreateShortcut((Join-Path $folder "ESP32-$stationId.lnk"))
+ $shortcut.TargetPath="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+ $shortcut.Arguments="-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$statusRoot\status.ps1`" -Config `"$statusRoot\station.json`""
+ $shortcut.Description="ESP32 printer status: $PrinterName"
+ $shortcut.Save()
+}
+$uiUser=[Security.Principal.WindowsIdentity]::GetCurrent().Name
+$uiAction=New-ScheduledTaskAction -Execute $shortcut.TargetPath -Argument $shortcut.Arguments
+$uiPrincipal=New-ScheduledTaskPrincipal -UserId $uiUser -LogonType Interactive -RunLevel Limited
+$uiSettings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName "ESP32PrinterStatus-$stationId" -Action $uiAction -Principal $uiPrincipal -Settings $uiSettings -Force | Out-Null
+Start-ScheduledTask -TaskName "ESP32PrinterStatus-$stationId"
+
+if (@(Get-Printer | Where-Object { $_.PortName -eq $portName -and $_.JobCount -ne 0 }).Count) { throw 'Status window installed. Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
+if ((Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count) { throw 'Status window installed. Unresolved bridge job found. Inspect pending.txt/status.txt before reinstalling; nothing was resent.' }
 $port=Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue
 if ($port -and ($port.PrinterHostAddress -ne '127.0.0.1' -or $port.PortNumber -ne $localPort)) { throw 'Existing bridge port has conflicting settings.' }
 $listener=Get-NetTCPConnection -LocalPort $localPort -State Listen -ErrorAction SilentlyContinue
@@ -406,9 +507,16 @@ for($i=0;$i -lt 10;$i++) {
 }
 if (!$ready) { Get-Content "$root\status.txt" -ErrorAction SilentlyContinue;throw 'Bridge did not start.' }
 if (!$port) { Add-PrinterPort -Name $portName -PrinterHostAddress '127.0.0.1' -PortNumber $localPort }
-if ($existing) { Set-Printer -Name $printerName -DriverName $driverName -PortName $portName }
+if ($existing) {
+ if ($existing.Name -ne $printerName) { Rename-Printer -Name $existing.Name -NewName $printerName }
+ Set-Printer -Name $printerName -DriverName $driverName -PortName $portName
+ foreach ($duplicate in $stationQueues) {
+  if ($duplicate.Name -ne $existing.Name -and $duplicate.Name -ne $printerName) { Remove-Printer -Name $duplicate.Name }
+ }
+}
 else { Add-Printer -Name $printerName -DriverName $driverName -PortName $portName }
 if (!$existing) { Set-PrintConfiguration -PrinterName $printerName -PaperSize A4 -DuplexingMode OneSided }
+@{id=$stationId;ip=$StationIP;name=$PrinterName} | ConvertTo-Json | Set-Content -Encoding UTF8 "$statusRoot\station.json"
 $created=Get-Printer -Name $printerName
 if ($created.PortName -ne $portName -or $created.DriverName -ne $driverName) { throw 'Printer verification failed.' }
 Write-Host "Ready: $printerName"
