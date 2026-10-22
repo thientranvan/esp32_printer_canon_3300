@@ -8,6 +8,8 @@ from prepare_cloud_job import self_test
 
 self_test()
 source = Path('station/cloud_print.h').read_text()
+assert 'static const char *cloudOrigin="https://quanly.lophocbinhminh.com";' in source, 'Wrong production cloud origin'
+assert 'quanly.lophochinhminh.com' not in Path('station/station.ino').read_text(), 'Stale cloud domain in device UI'
 # Compile the production engine unchanged, replacing USB/network calls with a fake printer.
 engine = source[source.index('static bool cloudPrint('):source.index('static void cloudTask(')]
 harness = r'''

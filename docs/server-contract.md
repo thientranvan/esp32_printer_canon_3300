@@ -1,18 +1,17 @@
-# Contract ESP32–quanly.lophochinhminh.com, v1
+# Contract ESP32–quanly.lophocbinhminh.com, v1
 
-> Cập nhật server 22/10/2026: dev server ghi nhận phần quản lý/API/hàng đợi/menu đã có;
-> xem `docs/printers.md` trong repo ứng dụng. Domain theo ghi chú dev server là
-> `https://quanly.lophocbinhminh.com`, khác origin hiện còn trong firmware/contract bên dưới.
-> Cần thống nhất origin và nạp cấu hình/firmware tương ứng trước kiểm thử HTTPS.
-> Renderer Ubuntu đã in thực tế thành công; xem `tools/esp32-renderer/README.md` trên server.
-> Chưa nghiệm thu luồng web → worker → HTTPS → ESP đầu-cuối.
+> Đồng bộ docs server ngày 22/10/2026: quản lý/API/hàng đợi/menu và adapter
+> HTML → PDF → CAPT đã triển khai; xem [triển khai server](server-deployment.md).
+> Origin firmware đã sửa thành `https://quanly.lophocbinhminh.com`, build và kiểm tra
+> offline đạt. Chưa nạp vào bo theo yêu cầu người dùng; chưa đăng ký ID/token thật,
+> chưa nghiệm thu cloud đầu-cuối. Không coi build thành công là ESP đã kết nối server.
 
 ## Phạm vi và trạng thái
 
 Firmware đã có HTTPS heartbeat, claim/download, kiểm tra SHA-256, chạy CAPT chuẩn hóa,
 USB arbiter chung với LAN, journal NVS chống tự in lặp. Mặc định cloud **tắt**.
 Đã có renderer PDF Ubuntu bản đầu trong `server-renderer/`; trang thử đã in ra chữ đầy đủ.
-Endpoint/dashboard/worker ứng dụng do dev server triển khai riêng; chưa có kiểm thử cloud đầu-cuối.
+Endpoint/dashboard/worker đã có trên server theo docs bàn giao; chưa có kiểm thử cloud đầu-cuối.
 Đã truy cập SSH `binhminh` và bàn giao tài liệu tại
 `/var/www/lop1/docs/esp32-printer-contract.md`; source renderer tại
 `/var/www/lop1/tools/esp32-renderer`. Chỉ thêm tài liệu/công cụ độc lập; không sửa mã
@@ -62,7 +61,7 @@ Xem `server-renderer/README.md` để build, chạy không-root và yêu cầu s
 API phải từ chối tùy chọn chưa hỗ trợ, không âm thầm in sai. Bước 2 mô tả đích đầy đủ,
 không khẳng định bản đầu đã hỗ trợ tất cả. Driver LAN Windows/Mac hỗ trợ nhiều tùy chọn
 là luồng khác. Ứng dụng phải xuất Word/HTML/ảnh thành PDF trước.
-Dev server cần nối worker hiện có với renderer này và kiểm thử HTTPS đầu-cuối.
+Worker server đã nối renderer; còn đăng ký thiết bị, nạp firmware và nghiệm thu HTTPS đầu-cuối.
 
 `prepare_cloud_job.py input.capt output.espjob` chuyển **capture đã render bởi driver
 Canon Windows** sang định dạng ESP; không render tài liệu đầu vào. Script từ chối ghi đè
@@ -70,7 +69,7 @@ file đích. Đầu ra giữ metadata copies/collate/duplex; renderer phải xoa
 
 ## Xác thực và giao vận
 
-Origin cố định: `https://quanly.lophochinhminh.com`.
+Origin cố định: `https://quanly.lophocbinhminh.com`.
 Base path: `/api/print/v1/stations/{station_id}`.
 Firmware xác minh CA/hostname bằng ESP-IDF certificate bundle, cần NTP trước HTTPS.
 Không theo redirect, không nhận URL tải tùy ý từ server. Cấu hình reverse proxy phục vụ

@@ -46,7 +46,7 @@ Mac dùng queue và cache/pending/lock riêng theo ID. Driver Canon dùng chung.
 Mac giữ queue ID và cập nhật tên hiển thị. Hàng đợi legacy “Canon LBP3300 (ESP32 LAN)”
 không tự xóa; vẫn dùng .199, cache/task cũ và cần dọn thủ công sau khi hết việc nếu không dùng nữa.
 
-Firmware đã có client HTTPS chủ động tới `quanly.lophochinhminh.com`, heartbeat,
+Firmware đã có client HTTPS chủ động tới `quanly.lophocbinhminh.com`, heartbeat,
 claim, tải prepared CAPT <=4 MiB, kiểm tra checksum, gửi USB và journal chống tự in lặp.
 Cloud mặc định tắt, cần token riêng mỗi trạm từ server. In LAN vẫn độc lập server.
 **Chưa có endpoint/dashboard/worker render trên server; chưa thể in tài liệu từ web thật.**
@@ -671,3 +671,7 @@ checks the production backend parser and job-info layout. Firmware build and OTA
 passed. CUPS integration was tested through an actual OS queue, not just a helper.
 
 Renderer PDF Ubuntu: [server-renderer/README.md](server-renderer/README.md). Đã in thử thực tế; bản đầu A4 một mặt. API/worker cloud chưa tích hợp.
+
+Cloud server docs synced 2026-10-22: [server deployment](docs/server-deployment.md).
+Firmware origin corrected to `https://quanly.lophocbinhminh.com`; build/offline checks passed.
+OTA deferred at user request. Real station registration/token and end-to-end cloud print remain pending.

@@ -8,7 +8,7 @@
 
 // ponytail: one prepared job in PSRAM, <=4 MiB; VPS retains durable queue/files.
 // No PDF renderer on ESP. Never retry a job after first possible USB side effect.
-static const char *cloudOrigin="https://quanly.lophochinhminh.com";
+static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
 struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http; bool progressKnown; };

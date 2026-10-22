@@ -222,7 +222,7 @@ refreshCommand();setInterval(refreshCommand,3000);
 <label>Gateway <input id="station-gateway" name="gateway" required></label>
 <label>Subnet <input id="station-mask" name="mask" required></label>
 <label>DNS <input id="station-dns" name="dns" required></label>
-<label><input type="checkbox" id="cloud-enabled" name="cloud_enabled"> Kết nối quanly.lophochinhminh.com</label>
+<label><input type="checkbox" id="cloud-enabled" name="cloud_enabled"> Kết nối quanly.lophocbinhminh.com</label>
 <label>Token riêng của trạm do server cấp <input name="cloud_token" type="password" maxlength="96" autocomplete="new-password" placeholder="Để trống để giữ token đã lưu"></label>
 <p id="cloud-status" role="status"></p><button>Lưu cấu hình và khởi động lại</button></form>
 <form method="post" action="/cloud/resolve" onsubmit="return confirm('Chỉ bỏ khóa khi đã kiểm tra giấy đã in và xử lý công việc dở trên máy in. Không tự in lại. Tiếp tục?')"><input type="hidden" name="token" value="__CSRF__"><button>Đã kiểm tra máy in: bỏ khóa công việc web không rõ kết quả</button></form>
