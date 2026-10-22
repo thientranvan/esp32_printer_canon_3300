@@ -4,10 +4,12 @@
 
 Firmware đã có HTTPS heartbeat, claim/download, kiểm tra SHA-256, chạy CAPT chuẩn hóa,
 USB arbiter chung với LAN, journal NVS chống tự in lặp. Mặc định cloud **tắt**.
-Chưa triển khai endpoint/dashboard/renderer trên server, chưa có kiểm thử cloud đầu-cuối.
+Đã có renderer PDF Ubuntu bản đầu trong `server-renderer/`; trang thử đã in ra chữ đầy đủ.
+Chưa triển khai endpoint/dashboard/worker ứng dụng, chưa có kiểm thử cloud đầu-cuối.
 Đã truy cập SSH `binhminh` và bàn giao tài liệu tại
-`/var/www/lop1/docs/esp32-printer-contract.md`. Chỉ thêm tài liệu; không sửa mã ứng dụng,
-database, dịch vụ, cấu hình hoặc thay đổi chưa commit của dev server.
+`/var/www/lop1/docs/esp32-printer-contract.md`; source renderer tại
+`/var/www/lop1/tools/esp32-renderer`. Chỉ thêm tài liệu/công cụ độc lập; không sửa mã
+ứng dụng, database, dịch vụ, cấu hình hoặc thay đổi chưa commit của dev server.
 Contract độc lập framework.
 
 Source ESP: https://github.com/thientranvan/esp32_printer_canon_3300
@@ -39,12 +41,21 @@ Dành các IP trên router để tránh DHCP cấp trùng. IP là địa chỉ L
    không cần server. Khi LAN đang in, cloud chờ lượt tiếp theo.
 6. Server lưu trạng thái/tiến độ, trình duyệt nhận qua polling/SSE/WebSocket tùy ứng dụng.
 
-**Renderer là phần bắt buộc chưa có trong repo.** ESP không đọc Word/PDF/HTML/JPEG,
+**Renderer bắt buộc chạy phía server.** ESP không đọc Word/PDF/HTML/JPEG,
 không chạy driver CAPT gốc. TCP 9100 và endpoint tải file không biến PDF thành CAPT.
-Driver Windows/Mac đã được kiểm chứng; chưa xác minh worker CAPT Linux trên VPS.
-Có thể làm worker tại VPS nếu driver/filter tương thích, hoặc một dịch vụ render riêng
-ngoài LAN; không yêu cầu PC của người dùng bật thường trực. Không hứa cloud in được
-chỉ bằng cách thêm hàng đợi mà chưa có renderer.
+
+`server-renderer/render.py` đã chạy trên Ubuntu 22.04 x86_64 của VPS: PDF →
+Poppler → raster Hi-SCoA → `espjob-v1`, không cần máy Windows/Mac thường trực.
+Đã kiểm tra parser firmware, giải nén đối chiếu từng band và in thực tế một trang
+qua LAN; người dùng xác nhận giấy/chữ đầy đủ ngày 2026-10-22.
+Xem `server-renderer/README.md` để build, chạy không-root và yêu cầu sandbox.
+
+**Giới hạn renderer cloud hiện tại:** PDF bố cục A4 dọc, một mặt, cassette 1,
+1–42 trang, copies 1–99, tối đa 4 MiB đầu ra. Chưa có tham số duplex/N-up/ngang;
+API phải từ chối tùy chọn chưa hỗ trợ, không âm thầm in sai. Bước 2 mô tả đích đầy đủ,
+không khẳng định bản đầu đã hỗ trợ tất cả. Driver LAN Windows/Mac hỗ trợ nhiều tùy chọn
+là luồng khác. Ứng dụng phải xuất Word/HTML/ảnh thành PDF trước.
+Worker, endpoint, dashboard và kiểm thử HTTPS đầu-cuối vẫn do dev server triển khai.
 
 `prepare_cloud_job.py input.capt output.espjob` chuyển **capture đã render bởi driver
 Canon Windows** sang định dạng ESP; không render tài liệu đầu vào. Script từ chối ghi đè

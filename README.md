@@ -669,3 +669,5 @@ checks, fragmented TCP responses, real CAPT over TCP, exclusive TCP/HTTP ownersh
 release/reacquisition, and continued live USB. `perl mac_backend.pl --self-test`
 checks the production backend parser and job-info layout. Firmware build and OTA
 passed. CUPS integration was tested through an actual OS queue, not just a helper.
+
+Renderer PDF Ubuntu: [server-renderer/README.md](server-renderer/README.md). Đã in thử thực tế; bản đầu A4 một mặt. API/worker cloud chưa tích hợp.
