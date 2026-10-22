@@ -1,0 +1,11 @@
+backups/
+station/device_secret.h
+__pycache__/
+
+.print-test-pending.json
+
+.DS_Store
+build/
+*.bin
+*.elf
+*.map

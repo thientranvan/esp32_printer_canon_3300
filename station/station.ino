@@ -1,0 +1,434 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <Update.h>
+#include <ESPmDNS.h>
+#include <esp_core_dump.h>
+#include <esp_partition.h>
+#include "device_secret.h"
+#include "usb_monitor.h"
+#include "capt_tcp.h"
+#include "usb_trace.h"
+
+WebServer server(80);
+Preferences prefs;
+String csrf;
+bool healthy = false;
+bool uploadOK = false;
+uint32_t rebootAt = 0;
+uint32_t connectionAt = 0;
+bool connecting = false;
+String pendingSSID, pendingPassword;
+String windowsReport;
+String supportCommand = "# Hiện không cần chạy thêm lệnh trên Windows.";
+struct WiFiConfig { char ssid[33]; char password[64]; };
+
+String jsonString(const String &value) {
+  String result = "\"";
+  for (size_t i = 0; i < value.length(); ++i) {
+    uint8_t c = value[i];
+    if (c == '"' || c == '\\') { result += '\\'; result += char(c); }
+    else if (c < 32) {
+      char escaped[7];
+      snprintf(escaped, sizeof(escaped), "\\u%04x", c);
+      result += escaped;
+    } else result += char(c);
+  }
+  return result + "\"";
+}
+
+void connectSaved() {
+  WiFiConfig config = {};
+  if (prefs.getBytes("wifi", &config, sizeof(config)) != sizeof(config)) return;
+  if (!memchr(config.ssid, 0, sizeof(config.ssid)) ||
+      !memchr(config.password, 0, sizeof(config.password))) return;
+  if (config.ssid[0]) WiFi.begin(config.ssid, config.password);
+}
+
+bool authorized() {
+  if (server.authenticate("admin", DEVICE_PASSWORD)) return true;
+  server.requestAuthentication(DIGEST_AUTH, "ESP32 printer");
+  return false;
+}
+
+bool validPost() {
+  return server.method() == HTTP_POST && server.arg("token") == csrf;
+}
+
+int hexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+uint32_t captSession() {
+  String value = server.arg("session");
+  if (!value.length() || value.length() > 10) return 0;
+  uint64_t result = 0;
+  for (char c : value) {
+    if (c < '0' || c > '9') return 0;
+    result = result * 10 + c - '0';
+  }
+  return result >= 2 && result <= UINT32_MAX ? uint32_t(result) : 0;
+}
+
+void captResult() {
+  if (!authorized()) return;
+  uint32_t session = captSession();
+  if (!session) { server.send(400, "text/plain", "Invalid session"); return; }
+  if (!claimCapt(session)) { server.send(409, "text/plain", "Printer session busy"); return; }
+  int state = captCommand.state.load();
+  String result = "{\"state\":" + String(state);
+  if (state == 3) {
+    result += ",\"error\":" + String(captCommand.error) + ",\"data\":\"";
+    const char *hex = "0123456789abcdef";
+    for (int i = 0; i < captCommand.received; ++i) {
+      result += hex[captCommand.data[i] >> 4];
+      result += hex[captCommand.data[i] & 15];
+    }
+    result += "\"";
+  }
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", result + "}");
+}
+
+void captSubmit() {
+  if (!authorized()) return;
+  if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+  if (readUSB().recovering) { server.send(409, "text/plain", "USB recovering; no command accepted"); return; }
+  String data = server.arg("data"), readSize = server.arg("read");
+  bool input = !readSize.isEmpty();
+  int size = 0;
+  if (input) {
+    if (readSize.length() > 4 || !data.isEmpty()) { server.send(400, "text/plain", "Invalid read"); return; }
+    for (size_t i = 0; i < readSize.length(); ++i) {
+      if (readSize[i] < '0' || readSize[i] > '9') { server.send(400, "text/plain", "Invalid read"); return; }
+      size = size * 10 + readSize[i] - '0';
+    }
+    if (size < 64 || size > 4096 || size % 64) { server.send(400, "text/plain", "Read must be 64..4096, multiple of 64"); return; }
+  } else {
+    if (data.length() < 8 || data.length() > 8192 || data.length() % 2) { server.send(400, "text/plain", "Invalid CAPT packet size"); return; }
+    for (size_t i = 0; i < data.length(); ++i)
+      if (hexDigit(data[i]) < 0) { server.send(400, "text/plain", "Invalid hex"); return; }
+    size = data.length() / 2;
+    int declared = (hexDigit(data[4]) * 16 + hexDigit(data[5])) |
+                   ((hexDigit(data[6]) * 16 + hexDigit(data[7])) << 8);
+    if (declared != size) { server.send(400, "text/plain", "CAPT length mismatch"); return; }
+  }
+  uint32_t session = captSession();
+  if (!session) { server.send(400, "text/plain", "Invalid session"); return; }
+  if (!claimCapt(session)) { server.send(409, "text/plain", "Printer session busy"); return; }
+  int state = captCommand.state.load();
+  if ((state != 0 && state != 3) || !captCommand.state.compare_exchange_strong(state, 5)) {
+    server.send(409, "text/plain", "CAPT operation busy"); return;
+  }
+  captCommand.size = size;
+  captCommand.received = 0;
+  captCommand.error = 0;
+  captCommand.input = input;
+  if (!input) for (int i = 0; i < size; ++i)
+    captCommand.data[i] = hexDigit(data[i*2]) * 16 + hexDigit(data[i*2+1]);
+  captCommand.state.store(1);
+  server.send(202, "application/json", "{\"queued\":true}");
+}
+
+void home() {
+  if (!authorized()) return;
+  server.sendHeader("Cache-Control", "no-store");
+  String page = R"HTML(<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Trạm in ESP32</title>
+<style>body{font:18px system-ui;max-width:640px;margin:32px auto;padding:0 16px}label{display:block;margin:16px 0}input,button{font:inherit;max-width:100%;box-sizing:border-box}button{padding:8px}small{display:block}</style>
+<h1>Trạm in ESP32</h1><p>Canon LBP3300 · A4, cassette 1 · Đã xác nhận in thử qua LAN.</p><p id="status" aria-live="polite">Đang đọc trạng thái...</p>
+<h2>Lệnh cần chạy hiện tại</h2><p>Mở PowerShell quản trị và dán lệnh. Nội dung tự cập nhật mỗi 3 giây; không tự chạy.</p>
+<textarea id="live-command" aria-label="Lệnh PowerShell cần chạy hiện tại" readonly rows="8" style="width:100%;box-sizing:border-box"></textarea>
+<button id="live-copy" type="button" disabled onclick="copyLiveCommand()">Sao chép lệnh hiện tại</button><p id="live-result" role="status">Đang tải lệnh...</p>
+<script>
+async function refreshCommand(){try{const r=await fetch('/support/command',{cache:'no-store'});if(!r.ok)throw Error();const s=await r.json();const field=document.getElementById('live-command');if(field.value!==s.command){field.value=s.command;document.getElementById('live-result').textContent='Đã nhận lệnh mới.';}document.getElementById('live-copy').disabled=!s.command;}catch{document.getElementById('live-copy').disabled=true;document.getElementById('live-result').textContent='Chưa tải được lệnh hiện tại. Đang thử lại...';}}
+function copyLiveCommand(){const field=document.getElementById('live-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('live-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}
+refreshCommand();setInterval(refreshCommand,3000);
+</script>
+<h2>Cài máy in trên Windows</h2><p>Đã xác nhận in qua hàng đợi Windows. Cài driver Canon LBP3300 x64 chính thức trước, sau đó chạy bộ cài này trên từng máy Windows 10/11 x64. Chọn máy in <strong>Canon LBP3300 (ESP32 LAN)</strong> trong Word, Chrome hoặc trình đọc PDF.</p>
+<p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1" download="esp32-printer-setup-v3.ps1">Tải bộ cài Windows v3</a>. Mở PowerShell quản trị, dán lệnh rồi chọn file bộ cài vừa tải:</p>
+<textarea id="setup-command" aria-label="Lệnh chạy bộ cài Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-setup-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
+<button type="button" onclick="copyRemote('setup-command')">Sao chép lệnh cài Windows</button><p id="setup-copy-result" role="status"></p>
+<p>Hiện hỗ trợ A4, một mặt, khay cassette 1. Cầu nối tự chạy cùng Windows; mỗi máy tự gửi tới ESP, không cần máy trung gian bật thường trực.</p><p id="tcp" aria-live="polite"></p>
+<p><a href="https://github.com/thientranvan/esp32_printer_canon_3300">Mã nguồn và hướng dẫn cài macOS</a>. Bộ cài lưu trên GitHub, không chiếm flash ESP.</p><details><summary>Chẩn đoán và điều khiển Windows</summary><p>Token gửi báo cáo (chỉ dùng cho phiên ESP hiện tại): <code>)HTML";
+  page += csrf;
+  page += R"HTML(</code></p><p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-diagnostics.ps1" download="esp32-printer-diagnostics.ps1">Tải chẩn đoán Windows</a>: chỉ đọc thông tin driver/cổng in và gửi về ESP.</p>
+<p>Tải tệp chẩn đoán, mở PowerShell bằng quyền quản trị rồi dán lệnh. Trong hộp chọn file, chọn script chẩn đoán vừa tải:</p>
+<textarea id="diagnostics-command" aria-label="Lệnh chạy chẩn đoán Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-diagnostics.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
+<button type="button" onclick="copyDiagnostics()">Sao chép lệnh</button><p id="copy-result" role="status"></p>
+<script>function copyDiagnostics(){const field=document.getElementById('diagnostics-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('copy-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}</script>
+<h3>Điều khiển Windows từ Mac để sửa máy in</h3>
+<p>Bản portable v3 (sửa quyền khóa SSH): tải OpenSSH chính thức của Microsoft từ GitHub (khoảng 6 MB), kiểm tra SHA256 trước khi chạy. Không cần Windows Update và không thay đổi thiết lập chặn cập nhật. Nếu script cũ đang chờ cài Windows Update, nhấn Ctrl+C trước.</p>
+<p>Bật SSH riêng trên cổng 22222, chỉ nhận khóa công khai và IP máy hỗ trợ do bạn nhập. Không dùng mật khẩu SSH, không mở cổng router. Quyền quản trị cho phép kiểm tra và sửa máy Windows; kết nối vẫn bật sau khi khởi động lại cho đến khi tắt.</p>
+<p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-remote-v3.ps1" download="esp32-printer-remote-v3.ps1">Tải script bật điều khiển</a> . Mở PowerShell quản trị rồi chạy lệnh; hộp chọn file sẽ mở, chọn script bật điều khiển vừa tải:</p>
+<textarea id="remote-command" aria-label="Lệnh bật điều khiển Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-remote-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
+<button type="button" onclick="copyRemote('remote-command')">Sao chép lệnh bật</button>
+<p>Tắt quyền điều khiển bất cứ lúc nào bằng PowerShell quản trị:</p>
+<textarea id="remote-stop" aria-label="Lệnh tắt điều khiển Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Stop-ScheduledTask -TaskName ESP32PrinterSupport; Disable-ScheduledTask -TaskName ESP32PrinterSupport; Remove-NetFirewallRule -Name ESP32PrinterSupport</textarea>
+<button type="button" onclick="copyRemote('remote-stop')">Sao chép lệnh tắt</button><p id="remote-copy-result" role="status"></p>
+<script>function copyRemote(id){const field=document.getElementById(id);field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById(id==='setup-command'?'setup-copy-result':'remote-copy-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}</script>
+</details><h2>Máy in USB</h2><p id="usb-link"></p><pre id="usb" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere">Đang kiểm tra...</pre>
+<form method="post" action="/usb/start"><input type="hidden" name="token" value=")HTML";
+  page += csrf;
+  page += R"HTML("><button>Bật USB Host</button><p>Nếu lỗi USB tái diễn, mạch có thể khởi động lại và vào chế độ phục hồi.</p></form>
+<h2>Kết nối Wi-Fi</h2><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><p>IP tĩnh: 192.168.1.199 · Subnet: 255.255.255.0 · Gateway/DNS: 192.168.1.1. Cấu hình dành cho LAN hiện tại.</p>
+<form method="post" action="/wifi"><input type="hidden" name="token" value=")HTML";
+  page += csrf;
+  page += R"HTML("><label>Tên mạng (SSID) <input name="ssid" maxlength="32" required autocomplete="off"></label><label>Mật khẩu Wi-Fi <input name="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Kết nối</button></form>
+<h2>Cập nhật firmware</h2><p>Chọn tệp ứng dụng .bin dành cho bo này. Giữ nguồn ổn định khi cập nhật.</p><form method="post" enctype="multipart/form-data" action="/update?token=)HTML";
+  page += csrf;
+  page += R"HTML("><label>Firmware <input name="firmware" type="file" accept=".bin" required></label><button>Cập nhật và khởi động lại</button></form>
+<script>async function refresh(){try{let r=await fetch('/status');if(!r.ok)return;let s=await r.json();document.getElementById('tcp').textContent='TCP 9100: '+(s.tcp.state===2?'Đang có phiên in':s.tcp.state===1?'Đang chờ lượt':'Đang chờ máy gửi')+' · Lệnh đã chuyển: '+s.tcp.commands+(s.tcp.error?' · Lỗi: '+s.tcp.error:'');document.getElementById('status').textContent=`Kiểm tra: ${s.healthy?'Đạt':'Lỗi'} | Thời gian chạy: ${s.uptime}s | Wi-Fi: ${s.connected?s.ssid+' · '+s.rssi+' dBm · IP tĩnh '+s.ip:s.connecting?'Đang kết nối':'Chưa kết nối'} | Flash: ${s.flash} | PSRAM: ${s.psram}`;document.getElementById('usb-link').textContent='Chế độ Host: '+(s.usb.host_mode?'Có':'Không')+' · Tín hiệu kết nối USB: '+(s.usb.physical_link?'Có':'Chưa có')+' · Thiết bị đã nhận: '+s.usb.devices;document.getElementById('usb').textContent=(s.usb.recovering?'Đang tự phục hồi kết nối USB':s.usb.responsive?'Máy in phản hồi USB; chưa xác nhận sẵn sàng in':s.usb.connected?'Đã nhận USB Canon nhưng máy in chưa phản hồi / mất liên lạc':s.usb.installed?'Chưa kết nối được máy in; tự dò và phục hồi':'USB Host chưa sẵn sàng')+'\n'+s.usb.details+(s.usb.error?'\nMã lỗi: '+s.usb.error:'');}catch{document.getElementById('status').textContent='Mất kết nối với ESP. Đang thử lại...';}}refresh();setInterval(refresh,3000);</script></html>)HTML";
+  server.send(200, "text/html; charset=utf-8", page);
+}
+
+void setup() {
+  Serial.begin(115200);
+  rgbLedWrite(48, 0, 0, 0);
+  delay(1000);
+  bool memoryOK = false;
+  auto memory = static_cast<volatile uint8_t *>(ps_malloc(65536));
+  if (memory) {
+    memoryOK = true;
+    for (size_t i = 0; i < 65536; ++i) memory[i] = uint8_t(i ^ (i >> 8));
+    for (size_t i = 0; i < 65536; ++i) {
+      if (memory[i] != uint8_t(i ^ (i >> 8))) { memoryOK = false; break; }
+    }
+    free(const_cast<uint8_t *>(memory));
+  }
+  bool storageOK = prefs.begin("printer", false);
+  if (storageOK) supportCommand = prefs.getString("supportcmd", supportCommand);
+  bool wifiOK = WiFi.mode(WIFI_AP_STA);
+  // ponytail: fixed current LAN; add editable network settings when moving to another subnet.
+  bool staticOK = WiFi.config(IPAddress(192,168,1,199), IPAddress(192,168,1,1),
+                              IPAddress(255,255,255,0), IPAddress(192,168,1,1));
+  WiFi.setHostname("esp32-printer");
+  WiFi.setAutoReconnect(true);
+  bool apOK = WiFi.softAP("ESP32-Printer-36B0", DEVICE_PASSWORD);
+  healthy = storageOK && wifiOK && staticOK && apOK && memoryOK &&
+            ESP.getFlashChipSize() == 16777216 && ESP.getPsramSize() == 8388608;
+  csrf = String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX);
+  if (storageOK) connectSaved();
+  MDNS.begin("esp32-printer");
+  MDNS.addService("http", "tcp", 80);
+  MDNS.addService("pdl-datastream", "tcp", 9100);
+  MDNS.addServiceTxt("pdl-datastream", "tcp", "ty", "Canon LBP3300 CAPT");
+  startCaptTCP();
+  server.on("/", HTTP_GET, home);
+  server.on("/support/command", HTTP_GET, [] {
+    if (!authorized()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json; charset=utf-8", "{\"command\":" + jsonString(supportCommand) + "}");
+  });
+  server.on("/support/command", HTTP_POST, [] {
+    if (!authorized()) return;
+    if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+    String command = server.arg("command");
+    if (!command.length() || command.length() > 8192) { server.send(400, "text/plain", "Command must be 1..8192 bytes"); return; }
+    if (!prefs.putString("supportcmd", command)) { server.send(500, "text/plain", "Cannot save command"); return; }
+    supportCommand = command;
+    server.send(200, "text/plain", "Saved");
+  });
+  server.on("/setup/windows.ps1", HTTP_GET, [] {
+    if (!authorized()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.sendHeader("Location", "https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1");
+    server.send(302, "text/plain", "Download from GitHub");
+  });
+  server.on("/setup/windows-diagnostics.ps1", HTTP_GET, [] {
+    if (!authorized()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.sendHeader("Location", "https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-diagnostics.ps1");
+    server.send(302, "text/plain", "Download from GitHub");
+  });
+  server.on("/setup/windows-remote.ps1", HTTP_GET, [] {
+    if (!authorized()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.sendHeader("Location", "https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-remote-v3.ps1");
+    server.send(302, "text/plain", "Download from GitHub");
+  });
+  server.on("/support/windows", HTTP_POST, [] {
+    // Downloaded admin script carries this boot's CSRF capability, not admin password.
+    if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+    String data = server.arg("data");
+    if (!data.length() || data.length() > 60000) { server.send(400, "text/plain", "Report must be 1..60000 bytes"); return; }
+    windowsReport = data;
+    server.send(200, "text/plain", "Saved in RAM");
+  });
+  server.on("/support/windows", HTTP_GET, [] {
+    if (!authorized()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(windowsReport.length() ? 200 : 404, "text/plain; charset=utf-8", windowsReport);
+  });
+  server.on("/printer/command", HTTP_GET, captResult);
+  server.on("/printer/command", HTTP_POST, captSubmit);
+  server.on("/printer/release", HTTP_POST, [] {
+    if (!authorized()) return;
+    if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+    uint32_t session = captSession();
+    if (!session) { server.send(400, "text/plain", "Invalid session"); return; }
+    int state = captCommand.state.load();
+    if (state != 0 && state != 3) { server.send(409, "text/plain", "USB operation busy"); return; }
+    releaseCapt(session);
+    server.send(200, "application/json", "{\"released\":true}");
+  });
+  server.on("/usb/start", HTTP_POST, [] {
+    if (!authorized()) return;
+    if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+    if (usbTaskStarted) { server.sendHeader("Location", "/"); server.send(303); return; }
+    server.sendHeader("Location", "/");
+    server.send(303);
+    startUSB();
+  });
+  server.on("/crash.bin", HTTP_GET, [] {
+    if (!authorized()) return;
+    size_t address = 0, size = 0;
+    const esp_partition_t *partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+    esp_err_t error = esp_core_dump_image_check();
+    if (error == ESP_OK) error = esp_core_dump_image_get(&address, &size);
+    if (error != ESP_OK || !partition || address != partition->address || size > partition->size) {
+      server.send(404, "text/plain", "No valid crash dump"); return;
+    }
+    server.setContentLength(size);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/octet-stream", "");
+    char buffer[512];
+    for (size_t offset = 0; offset < size; offset += sizeof(buffer)) {
+      size_t count = min(sizeof(buffer), size - offset);
+      if (esp_partition_read(partition, offset, buffer, count) != ESP_OK) { server.client().stop(); return; }
+      server.sendContent(buffer, count);
+    }
+  });
+  server.on("/crash", HTTP_GET, [] {
+    if (!authorized()) return;
+    esp_core_dump_summary_t summary = {};
+    esp_err_t error = esp_core_dump_image_check();
+    if (error == ESP_OK) error = esp_core_dump_get_summary(&summary);
+    if (error != ESP_OK) { server.send(404, "text/plain", esp_err_to_name(error)); return; }
+    String report = "Task: " + String(summary.exc_task) + "\nPC: 0x" + String(summary.exc_pc, HEX) +
+      "\nCause: " + summary.ex_info.exc_cause + "\nAddress: 0x" + String(summary.ex_info.exc_vaddr, HEX) +
+      "\nELF SHA256: " + String(reinterpret_cast<const char *>(summary.app_elf_sha256)) + "\nBacktrace:";
+    for (size_t i = 0; i < summary.exc_bt_info.depth && i < 16; ++i)
+      report += " 0x" + String(summary.exc_bt_info.bt[i], HEX);
+    report += "\n";
+    report += usbTraceReport();
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "text/plain", report);
+  });
+  server.on("/status", HTTP_GET, [] {
+    if (!authorized()) return;
+    USBStatus usb = readUSB();
+    String json = String("{\"healthy\":") + (healthy ? "true" : "false") +
+      ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
+      ",\"connecting\":" + (connecting ? "true" : "false") +
+      ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +
+      ",\"rssi\":" + WiFi.RSSI() + ",\"static_ip\":true" +
+      ",\"reset_reason\":" + int(esp_reset_reason()) +
+      ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"uptime\":" + millis()/1000 +
+      ",\"flash\":" + ESP.getFlashChipSize() + ",\"psram\":" + ESP.getPsramSize() +
+      ",\"usb\":{\"installed\":" + (usb.installed ? "true" : "false") +
+      ",\"connected\":" + (usb.connected ? "true" : "false") +
+      ",\"responsive\":" + (usb.responsive ? "true" : "false") +
+      ",\"recovering\":" + (usb.recovering ? "true" : "false") +
+      ",\"response_age_ms\":" + (usb.responseAt ? String(uint32_t(millis() - usb.responseAt)) : String("null")) +
+      ",\"recoveries\":" + usb.recoveries +
+      ",\"heartbeat_error\":" + usb.heartbeatError +
+      ",\"host_mode\":" + (usb.hostMode ? "true" : "false") +
+      ",\"physical_link\":" + (usb.physicalLink ? "true" : "false") +
+      ",\"power_command\":" + (usb.powerCommand ? "true" : "false") +
+      ",\"port_register\":" + usb.portRegister + ",\"devices\":" + usb.devices +
+      ",\"descriptor_id\":" + usb.descriptorID + ",\"descriptor_class\":" + usb.descriptorClass + ",\"descriptor_count\":" + usb.descriptorCount +
+      ",\"error\":" + usb.error + ",\"details\":" + jsonString(usb.details) + "}" +
+      ",\"tcp\":{\"port\":9100,\"state\":" + captTCPState.load() +
+      ",\"error\":" + captTCPError.load() + ",\"last_header\":" + captTCPHeader.load() +
+      ",\"commands\":" + captTCPCommands.load() + "}}";
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", json);
+  });
+  server.on("/wifi", HTTP_POST, [] {
+    if (!authorized()) return;
+    if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+    String ssid = server.arg("ssid"), password = server.arg("password");
+    if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 ||
+        (password.length() > 0 && password.length() < 8)) {
+      server.send(400, "text/plain", "Invalid SSID or password length"); return;
+    }
+    if (connecting) { server.send(409, "text/plain", "Connection pending"); return; }
+    pendingSSID = ssid;
+    pendingPassword = password;
+    WiFi.disconnect();
+    WiFi.begin(ssid.c_str(), password.c_str());
+    connectionAt = millis();
+    connecting = true;
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+  server.on("/update", HTTP_POST, [] {
+    if (!authorized()) return;
+    if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+    bool ok = uploadOK && !Update.hasError();
+    server.send(ok ? 200 : 400, "text/plain; charset=utf-8", ok ? "Cập nhật thành công. Đang khởi động lại." : "Cập nhật thất bại. Firmware hiện tại được giữ.");
+    if (ok) rebootAt = millis() + 2000;
+  }, [] {
+    if (!server.authenticate("admin", DEVICE_PASSWORD) || !validPost()) return;
+    HTTPUpload &upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      uploadOK = false;
+      if (!upload.filename.endsWith(".bin")) return;
+      uploadOK = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
+    } else if (upload.status == UPLOAD_FILE_WRITE && uploadOK) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        uploadOK = false;
+        Update.abort();
+      }
+    } else if (upload.status == UPLOAD_FILE_END && uploadOK) {
+      uploadOK = Update.end(true);
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+      Update.abort();
+      uploadOK = false;
+    }
+  });
+  server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
+  server.begin();
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  if (resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||
+      resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT) {
+    USBStatus status = {};
+    snprintf(status.details, sizeof(status.details), "USB Host tạm dừng để kiểm tra crash (reset %d). Web vẫn hoạt động để cập nhật firmware.", int(resetReason));
+    publishUSB(status);
+  } else {
+    startUSB();
+  }
+  Serial.printf("STATION: %s\nAP: ESP32-Printer-36B0\nPassword: %s\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL", DEVICE_PASSWORD);
+}
+
+void loop() {
+  server.handleClient();
+  if (connecting && WiFi.status() == WL_CONNECTED) {
+    WiFiConfig config = {};
+    pendingSSID.toCharArray(config.ssid, sizeof(config.ssid));
+    pendingPassword.toCharArray(config.password, sizeof(config.password));
+    bool saved = prefs.putBytes("wifi", &config, sizeof(config)) == sizeof(config);
+    Serial.printf("Wi-Fi connected: %s; saved=%d\n", WiFi.localIP().toString().c_str(), saved);
+    pendingPassword = "";
+    connecting = false;
+  } else if (connecting && millis() - connectionAt > 30000) {
+    WiFi.disconnect();
+    connectSaved();
+    pendingPassword = "";
+    connecting = false;
+    Serial.println("Wi-Fi attempt failed; restored saved settings");
+  }
+  uint32_t phase = millis() % 3000;
+  rgbLedWrite(48, !healthy && phase < 100 ? 2 : 0, healthy && phase < 100 ? 2 : 0, 0);
+  if (rebootAt && int32_t(millis() - rebootAt) >= 0) ESP.restart();
+  static uint32_t lastLog = 0;
+  if (millis() - lastLog >= 3000) {
+    lastLog = millis();
+    Serial.printf("STATION: %s, uptime=%lu, AP=%s, LAN=%s, heap=%u\n", healthy ? "PASS" : "FAIL", millis()/1000, WiFi.softAPIP().toString().c_str(), WiFi.localIP().toString().c_str(), ESP.getFreeHeap());
+  }
+  delay(2);
+}
