@@ -114,7 +114,7 @@ xác định” kèm mã/raw, không tự gán “thiếu giấy” chỉ vì ti
 Có thể bổ sung decoder sau khi có capture và kiểm chứng từng lỗi trên LBP3300.
 
 `cloud.state`: `disabled`, `connecting`, `idle`, `server_error`, `downloading`,
-`printing`, `completed`, `failed`, `uncertain`, `resolved`, `blocked`.
+`waiting_printer`, `printing`, `completed`, `failed`, `uncertain`, `resolved`, `blocked`.
 `cloud.http` là mã HTTP gần nhất hoặc -1 lỗi giao vận, không phải mã lỗi máy in.
 
 Tiến độ có đơn vị **ảnh/mặt in sau dàn trang**, đã tính copies; không phải trang tài liệu

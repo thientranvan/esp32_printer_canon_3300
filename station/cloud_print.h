@@ -89,7 +89,7 @@ static bool cloudDownload(const String &id,const String &lease,uint8_t *data,siz
     }
     if(offset==size) {
       uint8_t hash[32];char text[65];
-      mbedtls_sha256(data,size,hash,0);
+      if(mbedtls_sha256(data,size,hash,0)!=0){esp_http_client_close(h);esp_http_client_cleanup(h);return false;}
       for(int i=0;i<32;++i)snprintf(text+i*2,3,"%02x",hash[i]);
       ok=expected==text;
     }
@@ -193,7 +193,7 @@ static void cloudTask(void *) {
     if(WiFi.status()!=WL_CONNECTED || time(nullptr)<1700000000){cloudState("connecting","Waiting for Wi-Fi / trusted clock");vTaskDelay(pdMS_TO_TICKS(1000));continue;}
     if(id.length())cloudState(state.c_str(),error.c_str());else cloudState("idle");
     if(!id.length() && readUSB().responsive && !captTCPState.load() && claimCapt(CloudOwner)) {
-      unsigned counters[4];cloudCounters(counters);releaseCapt(CloudOwner);
+      cloudCommand(0xA0A8);releaseCapt(CloudOwner);
     }
     bool online=cloudHeartbeat(true);
     if(!online){cloudState("server_error","HTTPS heartbeat failed; see HTTP code");failures=min(failures+1,6U);vTaskDelay(pdMS_TO_TICKS(failures*5000));continue;}
@@ -226,14 +226,19 @@ static void cloudTask(void *) {
         cloudWorking.store(true);cloudState("downloading");
         auto *data=static_cast<uint8_t *>(ps_malloc(size_t(bytes)));Prepared::Job job;
         bool validData=data && cloudDownload(id,lease,data,size_t(bytes),hash) && Prepared::parse(data,size_t(bytes),job);
-        if(validData && claimCapt(CloudOwner)) {
+        bool acquired=false;
+        if(validData) {
+          cloudState("waiting_printer");
+          while(!(acquired=claimCapt(CloudOwner))) {cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));}
+        }
+        if(validData && acquired) {
           portENTER_CRITICAL(&cloudLock);cloudView.total=job.plan.size();cloudView.progressKnown=true;portEXIT_CRITICAL(&cloudLock);
           cloudNeedsInspection.store(true);state="uncertain";error="USB submission may have started; inspect before reprinting";
           if(!persist()){free(data);releaseCapt(CloudOwner);cloudState("blocked","Cannot persist before USB");vTaskDelete(nullptr);return;}
           cloudState("printing");bool done=cloudPrint(job);
           if(done){cloudNeedsInspection.store(false);state="completed";error="";}
           releaseCapt(CloudOwner);
-        }else {state="failed";error=validData?"LAN acquired printer before cloud job":"Download, checksum, memory or format validation failed; no pages sent";}
+        }else {state="failed";error="Download, checksum, memory or format validation failed; no pages sent";}
         free(data);
         if(!persist()){cloudState("blocked","Cannot persist outcome; journal retained");vTaskDelete(nullptr);return;}
         cloudWorking.store(false);
@@ -244,5 +249,6 @@ static void cloudTask(void *) {
 }
 static void startCloud() {
   if(!stationSettings.cloudEnabled)return;
+  if(!healthy){cloudState("blocked","Station self-test failed");return;}
   if(xTaskCreate(cloudTask,"print-cloud",16384,nullptr,1,nullptr)!=pdPASS)cloudState("blocked","Cannot start cloud task");
 }

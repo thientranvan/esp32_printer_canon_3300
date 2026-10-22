@@ -4,12 +4,12 @@ Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
 ## Cài đặt nhanh
 
-- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị và dùng IP/tên trạm như mục nhiều trạm bên dưới. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn **Canon LBP3300 (ESP32 LAN)** trong ứng dụng.
+- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị và dùng IP/tên trạm như mục nhiều trạm bên dưới. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn tên trạm đã cấu hình, ví dụ **Phòng 1**, trong ứng dụng.
 - macOS: tải riêng [install_mac.sh](install_mac.sh), chạy `sudo sh install_mac.sh`. Không cần Python, clone repo hay có sẵn hàng đợi USB. Thiếu driver sẽ tự tải và cài gói Canon CAPT 10.0.10; thiếu backend sẽ tải bản đã cố định SHA-256 từ GitHub.
 - ESP: mở http://192.168.1.199 để xem trạng thái, tải bộ cài và sao chép lệnh hiện tại. Các đường dẫn `/setup/*.ps1` cũ chuyển hướng sang GitHub; firmware không nhúng bộ cài.
 - Hiện hỗ trợ A4, cassette 1, một/hai mặt cạnh dài hoặc ngắn, ngang/dọc và nhiều trang trên một mặt qua driver/ứng dụng. Mỗi máy chạy cầu nối riêng; ESP giữ USB, không cần máy trung gian bật cố định.
 
-Chẩn đoán: [script](installers/esp32-printer-diagnostics.ps1) nhận `-Token` từ trang ESP đã đăng nhập; token đổi khi ESP khởi động lại. Hỗ trợ từ xa: [script](installers/esp32-printer-remote-v3.ps1) hỏi IP và khóa công khai máy hỗ trợ, chỉ dành cho quản trị có chủ đích; không cần cho việc in.
+Chẩn đoán: [script](installers/esp32-printer-diagnostics.ps1) nhận `-StationIP` và `-Token` từ trang ESP đã đăng nhập; token đổi khi ESP khởi động lại. Hỗ trợ từ xa: [script](installers/esp32-printer-remote-v3.ps1) hỏi IP và khóa công khai máy hỗ trợ, chỉ dành cho quản trị có chủ đích; không cần cho việc in.
 
 ## Nhiều trạm và in từ web
 
@@ -56,7 +56,10 @@ Không sửa server trong phiên này (SSH `binhminh` chưa xác thực được
 
 Kiểm tra mới: `python3 check_cloud.py` kiểm tra parser, chuẩn hóa capture và mô phỏng
 engine C++ thực tế; `python3 check_installers.py` kiểm tra bộ cài. Chưa nghiệm thu
-ba bo đồng thời hay cloud đầu-cuối. Trạng thái hỗ trợ USB/phản hồi/phiên LAN/cloud,
+ba bo đồng thời hay cloud đầu-cuối. Bo .199 đã qua kiểm tra profile ID phần cứng,
+lệnh cài gắn IP, JavaScript, từ chối cấu hình sai/CSRF, lưu cấu hình/reboot và TCP/HTTP
+độc quyền với máy in thật; bộ cài nhiều trạm chưa chạy lại trên Windows vì SSH PC đang tắt.
+Trạng thái hỗ trợ USB/phản hồi/phiên LAN/cloud,
 ảnh in đã hoàn tất/tổng; chưa giải mã đầy đủ cảm biến kẹt giấy/toner của CAPT.
 
 ## Bộ cài đầy đủ, kể cả máy chưa có driver
