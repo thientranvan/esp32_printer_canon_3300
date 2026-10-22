@@ -5,9 +5,7 @@ $root=Join-Path $env:ProgramData 'ESP32Printer'
 $printerName='Canon LBP3300 (ESP32 LAN)'
 $driverName='Canon LBP3300 ESP32 Render'
 $portName='ESP32_LOCAL_19100'
-if (![Environment]::Is64BitProcess) { throw 'Run 64-bit Windows PowerShell as administrator.' }
-$source=Get-CimInstance Win32_PrinterDriver | Where-Object Name -eq 'Canon LBP3300,3,Windows x64'
-if (!$source) { throw 'Install the official Canon LBP3300 x64 driver first, then rerun this installer.' }
+if (![Environment]::Is64BitProcess -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Requires Windows 10/11 x64 and 64-bit Windows PowerShell as administrator. Windows ARM64 is not supported.' }
 $existing=Get-Printer -Name $printerName -ErrorAction SilentlyContinue
 if ($existing -and $existing.JobCount -ne 0) { throw 'Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
 if ((Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count) { throw 'Unresolved bridge job found. Inspect pending.txt/status.txt before reinstalling; nothing was resent.' }
@@ -20,6 +18,49 @@ foreach ($connection in $listener) {
 New-Item -ItemType Directory -Force $root | Out-Null
 & icacls.exe $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Cannot secure bridge directory.' }
+# Canon driver stays on Canon CDN; no driver binary is redistributed by this repo.
+function Install-CanonDriver {
+ $url='https://gdlp01.c-wss.com/gds/4/0100002764/04/LBP3300_R150_V330_W64_uk_EN_2.exe'
+ $sha256='480956b6175404f4b330f70f258b3c208a60dfacdf313ec2507cb87ed604bcfd'
+ $cache=Join-Path $root 'DriverCache';New-Item -ItemType Directory -Force $cache | Out-Null
+ $archive=Join-Path $cache 'canon.exe'
+ if (!(Test-Path $archive) -or (Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) {
+  Write-Host 'Downloading official Canon CAPT 3.30 x64 (12 MB); this can take a few minutes.'
+  Write-Host 'Canon information/license: https://vn.canon/en/support/0100276401'
+  [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  $partial=$archive+'.partial'
+  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $partial -TimeoutSec 180
+  if ((Get-FileHash $partial -Algorithm SHA256).Hash -ne $sha256) { throw 'Canon download SHA-256 mismatch. Nothing was executed or installed.' }
+  Move-Item -Force $partial $archive
+ }
+ $signature=Get-AuthenticodeSignature $archive
+ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Canon') { throw 'Canon Authenticode signature is not trusted. Driver was not installed.' }
+ $unpacked=Join-Path $cache ([Guid]::NewGuid().ToString())
+ try {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [IO.Compression.ZipFile]::ExtractToDirectory($archive,$unpacked)
+  $inf=Join-Path $unpacked 'Driver\CNAB5STD.INF'
+  if (!(Test-Path $inf)) { throw 'Canon package is missing the LBP3300 INF.' }
+  Write-Host 'Staging signed Canon driver in Windows Driver Store...'
+  & "$env:windir\System32\pnputil.exe" /add-driver $inf | Out-Host
+  if ($LASTEXITCODE -eq 3010) { throw 'Windows requires a restart. Restart and run this installer again.' }
+  if ($LASTEXITCODE -ne 0) { throw "Canon driver staging failed: $LASTEXITCODE. No signing/security policy was changed." }
+  $package=Get-WindowsDriver -Online -All | Where-Object {
+   [IO.Path]::GetFileName($_.OriginalFileName) -ieq 'CNAB5STD.INF' -and $_.ProviderName -eq 'Canon' -and [string]$_.Version -eq '3.30.0.0'
+  } | Select-Object -First 1
+  if (!$package) { throw 'Signed Canon package was not found in Driver Store.' }
+  Write-Host 'Registering Canon LBP3300 renderer...'
+  Add-PrinterDriver -Name 'Canon LBP3300' -InfPath $package.OriginalFileName
+ } finally {
+  if (Test-Path $unpacked) { Remove-Item -LiteralPath $unpacked -Recurse -Force }
+ }
+ $driver=Get-CimInstance Win32_PrinterDriver | Where-Object Name -eq 'Canon LBP3300,3,Windows x64'
+ if (!$driver) { throw 'Canon driver registration failed. Check Windows PrintService logs.' }
+ return $driver
+}
+$source=Get-CimInstance Win32_PrinterDriver | Where-Object Name -eq 'Canon LBP3300,3,Windows x64'
+if (!$source) { $source=Install-CanonDriver }
+else { Write-Host 'Canon LBP3300 driver already installed; no driver download needed.' }
 $sourceCode=@'
 using System;
 using System.IO;

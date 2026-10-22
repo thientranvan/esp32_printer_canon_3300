@@ -4,12 +4,46 @@ Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
 ## Cài đặt nhanh
 
-- Windows 10/11 x64: cài driver Canon LBP3300 chính thức trước, tải [bộ cài PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị. Chọn **Canon LBP3300 (ESP32 LAN)** trong ứng dụng.
-- macOS: cài driver Canon CAPT tương thích, tải/clone repo rồi chạy `sudo sh install_mac.sh`. Xem hướng dẫn macOS bên dưới.
+- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn **Canon LBP3300 (ESP32 LAN)** trong ứng dụng.
+- macOS: tải riêng [install_mac.sh](install_mac.sh), chạy `sudo sh install_mac.sh`. Không cần Python, clone repo hay có sẵn hàng đợi USB. Thiếu driver sẽ tự tải và cài gói Canon CAPT 10.0.10; thiếu backend sẽ tải bản đã cố định SHA-256 từ GitHub.
 - ESP: mở http://192.168.1.199 để xem trạng thái, tải bộ cài và sao chép lệnh hiện tại. Các đường dẫn `/setup/*.ps1` cũ chuyển hướng sang GitHub; firmware không nhúng bộ cài.
 - Hiện hỗ trợ A4, cassette 1, một/hai mặt cạnh dài hoặc ngắn, ngang/dọc và nhiều trang trên một mặt qua driver/ứng dụng. Mỗi máy chạy cầu nối riêng; ESP giữ USB, không cần máy trung gian bật cố định.
 
 Chẩn đoán: [script](installers/esp32-printer-diagnostics.ps1) nhận `-Token` từ trang ESP đã đăng nhập; token đổi khi ESP khởi động lại. Hỗ trợ từ xa: [script](installers/esp32-printer-remote-v3.ps1) hỏi IP và khóa công khai máy hỗ trợ, chỉ dành cho quản trị có chủ đích; không cần cho việc in.
+
+## Bộ cài đầy đủ, kể cả máy chưa có driver
+
+ESP chỉ hiển thị liên kết GitHub và lệnh sao chép. Driver không nằm trong firmware
+hay repo; tải trực tiếp từ Canon bằng HTTPS. Cần Internet và quyền quản trị.
+Nếu driver đã có đủ, bỏ qua tải/cài driver; các hàng đợi đang dùng được giữ lại.
+Bộ cài dừng khi hàng đợi ESP còn việc hoặc có pending marker, không tự xóa/in lại.
+
+| Hệ điều hành | Driver tải tự động | Nguồn Canon | SHA-256 |
+| --- | --- | --- | --- |
+| Windows x64 | CAPT R1.50 / 3.30, 12 MB | [Canon LBP3300](https://vn.canon/en/support/0100276401) | `480956b6175404f4b330f70f258b3c208a60dfacdf313ec2507cb87ed604bcfd` |
+| macOS 11.7.11–27 | CAPT 10.0.10, 43 MB | [Canon CAPT Mac](https://vn.canon/en/support/0101321320) | `f116426b93443a420181a15e35e50f3a1cfaa3cb69c1b25ada9a752eb51e2819` |
+
+Windows kiểm tra SHA-256 và chữ ký Authenticode Canon của EXE rồi giải nén như ZIP,
+**không chạy EXE tự giải nén**. `pnputil /add-driver` xác minh/stage INF và catalog
+vào Driver Store; `Add-PrinterDriver` đăng ký Canon từ INF trong store. Sau đó mới
+đăng ký alias renderer không language monitor, biên dịch cầu nối và tạo máy in LAN.
+Không cần cắm máy in USB vào PC, không dùng Windows Update hoặc tắt kiểm tra chữ ký.
+Driver Canon chính thức liệt kê Windows 10 x64; đường cài cũng nhắm Windows 11 x64
+nhưng chưa có máy Windows 11 để xác nhận. Windows ARM64/32-bit chưa hỗ trợ.
+
+Mac kiểm tra SHA-256 DMG, chữ ký **Canon Inc. (XE2XNRRXZ5)** và Gatekeeper trước khi
+chạy Installer. PPD lấy trực tiếp từ bộ driver, không lấy từ máy in USB đã cấu hình.
+Runtime/PPD đã có sẽ được giữ nguyên, không ép nâng cấp driver đang hoạt động.
+Backend tải theo commit cố định và SHA-256; script chạy được chỉ với công cụ macOS
+có sẵn. Khi cập nhật backend, phải cập nhật pin trong `install_mac.sh` (kiểm tra sẽ
+báo lỗi nếu lệch). Hàng đợi ESP đã có giữ nguyên tùy chọn mặc định khi cài lại.
+
+Đã tải/xác minh cả hai gói Canon. Nhánh chuẩn bị Windows đã giải nén, gọi PnPUtil
+và đăng ký driver thành công trên PC hiện tại; bộ cài đầy đủ được chạy lại trên máy
+đã có driver. Gói Mac đã xác minh chữ ký/notarization và chứa PPD LBP3300. Chưa có VM
+Windows/Mac trắng để kiểm tra đầu-cuối nhánh cài mới; không xóa driver đang hoạt động
+của người dùng để giả lập. Kiểm tra: `python3 check_installers.py`; thêm thư mục chứa
+hai gói tải Canon làm đối số để kiểm tra checksum thực, ví dụ `python3 check_installers.py /tmp`.
 
 ## Tùy chọn in đã triển khai
 
@@ -399,12 +433,12 @@ Native-driver TCP connections alone do not convert PDF to CAPT.
 
 ### macOS: installed and CUPS test completed
 
-Run `sudo sh install_mac.sh` from this checkout. Requires the official Canon driver,
-its existing `/etc/cups/ppd/Canon_LBP3300_1.ppd`, and local Python 3.13 for installer
-PPD edits only. Installer copies `mac_backend.pl` into `/Library/Printers/ESP32Printer`,
+Run `sudo sh install_mac.sh`, either standalone or from this checkout. Missing Canon
+CAPT runtime/PPD is downloaded and installed automatically as described above.
+Installer copies the verified `mac_backend.pl` into `/Library/Printers/ESP32Printer`,
 registers root-only backend `/usr/libexec/cups/backend/esp32capt`, and creates the
 non-shared `Canon_LBP3300_ESP32` queue, displayed as **Canon LBP3300 (ESP32 LAN)**.
-It leaves existing USB queues and the default printer unchanged.
+Updating an already installed runtime leaves existing USB queues and the default printer unchanged.
 
 The runtime uses Apple's system `/usr/bin/perl`, no Python helper service. CUPS sandbox
 rejected Homebrew Python execution; the system interpreter works without disabling
@@ -458,8 +492,8 @@ empty queue. No firmware update or new printer selection is required.
 
 
 Open `http://192.168.1.199`, authenticate, download **Windows setup v3**, run in
-64-bit administrator PowerShell. The official Canon LBP3300 x64 driver must
-already be installed. The page includes a file-picker command to avoid Downloads
+64-bit administrator PowerShell. Missing official Canon LBP3300 x64 driver is
+downloaded, verified and installed automatically. The page includes a file-picker command to avoid Downloads
 path/duplicate-filename errors. No machine-wide ExecutionPolicy change, Windows
 Update, OpenSSH, Python, or always-on intermediary is needed for printing.
 
