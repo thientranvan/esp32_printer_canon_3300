@@ -707,3 +707,10 @@ Bỏ các khối lệnh hỗ trợ/điều khiển Windows và nội dung chẩn
 các endpoint hỗ trợ cũ vẫn giữ để tương thích công cụ. Chỉ poll `/status` sau khi request
 trước hoàn tất, mỗi 3 giây; không poll `/support/command` nền. Giao diện khoảng 13 KB.
 Kiểm tra offline: `python3 check_home.py` (cần Node), không gửi lệnh in hoặc đổi cấu hình.
+
+### Trạng thái máy in (22/10/2026)
+
+Đã đọc E100 0000 thật bằng CAPT A0A8/A2A2; sửa phản hồi USB chia 6+54 byte.
+ESP có task poll độc lập cloud; Mac/Windows có monitor trong bộ cài mới.
+Chi tiết kiểm chứng, giới hạn cảm biến, progress và contract server:
+[docs/printer-status.md](docs/printer-status.md).

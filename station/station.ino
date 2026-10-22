@@ -181,6 +181,7 @@ void home() {
 <section class="card" aria-labelledby="network-title"><h2 id="network-title">Kết nối</h2><p class="meta">Wi-Fi</p><div id="wifi" class="big">Đang đọc…</div><p id="network"></p><p id="cloud">Web: đang đọc…</p></section>
 <section class="card wide"><h2>Đăng ký máy in trên web</h2><label for="station-id">ID ESP</label><div class="row"><input id="station-id" value="__STATION_ID__" readonly><button type="button" onclick="copyField('station-id')">Sao chép ID</button></div><p class="meta">Thêm ID này trên <a href="https://quanly.lophocbinhminh.com/index.php?page=printers" target="_blank" rel="noopener">trang quản lý máy in</a>, lấy token rồi dán vào <a href="#settings">cấu hình trạm</a>.</p></section>
 </div>
+<section class="card" id="support" hidden style="margin-top:16px"><h2>Lệnh hỗ trợ Windows</h2><p>Mở PowerShell bằng quyền quản trị, sao chép rồi chạy lệnh. Nội dung tự cập nhật khi có bước chẩn đoán mới.</p><textarea id="support-command" readonly rows="4" aria-label="Lệnh hỗ trợ Windows"></textarea><button type="button" onclick="copyField('support-command')">Sao chép lệnh hỗ trợ</button></section>
 <details><summary>Cài máy in trên máy tính</summary><p>Cài một lần trên từng máy. Bộ cài tự tải driver Canon nếu chưa có.</p>
 <div class="grid"><section><h2>Windows 10 / 11</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1" download>Tải bộ cài Windows</a><p class="meta">Tải file, mở PowerShell quản trị, sao chép lệnh rồi chọn file vừa tải.</p><textarea id="windows-command" aria-label="Lệnh cài Windows" readonly rows="4">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea><button type="button" onclick="copyField('windows-command')">Sao chép lệnh Windows</button></section>
 <section><h2>macOS</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_mac.sh" download>Tải bộ cài Mac</a><p class="meta">Tải file, mở Terminal, sao chép lệnh rồi chọn file vừa tải.</p><textarea id="mac-command" aria-label="Lệnh cài Mac" readonly rows="4">capt_installer=$(osascript -e 'POSIX path of (choose file with prompt "Chon install_mac.sh")') &amp;&amp; sudo /bin/sh "$capt_installer" __STATION_IP__</textarea><button type="button" onclick="copyField('mac-command')">Sao chép lệnh Mac</button></section></div>
@@ -203,6 +204,7 @@ function copyField(id){const field=el(id);field.focus();field.select();let ok=fa
 const cloudNames={disabled:'Chưa bật',connecting:'Đang kết nối',idle:'Đã kết nối',server_error:'Lỗi kết nối server',downloading:'Đang tải lệnh in',waiting_printer:'Đang chờ máy in',printing:'Đang in',completed:'Đã hoàn tất',failed:'Lệnh in lỗi',uncertain:'Cần kiểm tra kết quả in',resolved:'Đã đối soát',blocked:'Đang bị khóa'};
 async function refresh(){try{
  const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();const s=await r.json(),u=s.usb,c=s.cloud,t=s.tcp;
+ el('support').hidden=!s.support_command||s.support_command.startsWith('#');el('support-command').value=s.support_command||'';
  el('name').textContent=s.station.name;el('connection').textContent=s.healthy?'Trạm hoạt động':'Trạm cần kiểm tra';el('connection').dataset.tone=s.healthy?'ok':'error';
  el('wifi').textContent=s.connected?s.ssid:s.connecting?'Đang kết nối…':'Chưa kết nối Wi-Fi';el('network').textContent=s.connected?'IP '+s.ip+' · '+s.rssi+' dBm':'Kết nối Wi-Fi để in qua LAN và web.';
  el('cloud').textContent='Web: '+(cloudNames[c.state]||c.state)+(c.error?' · '+c.error:'');
@@ -211,6 +213,14 @@ async function refresh(){try{
  else if(u.error){title='Lỗi kết nối USB';note='Mã lỗi '+u.error+'. Xem chẩn đoán bên dưới.';}
  else if(u.connected&&!u.responsive){title='Máy in chưa phản hồi';note='Kiểm tra nguồn và kết nối USB.';}
  else if(u.connected&&u.responsive){title=t.state===2?'Đang in qua LAN':c.state==='printing'?'Đang in từ web':'Máy in đã kết nối';note='USB có phản hồi; chưa xác minh cảm biến giấy/mực.';}
+ const p=s.capt||{};
+ if(u.connected&&u.responsive){
+  if(!p.fresh){title='Đang đọc trạng thái máy in';note='Chưa có phản hồi CAPT mới; không xác nhận máy sẵn sàng.';}
+  else {const faults=[];if(p.service_error)faults.push(p.service_code||'Lỗi service');if(p.paper_jam)faults.push('Kẹt giấy');if(p.cover_open)faults.push('Nắp đang mở');if(p.paper_required)faults.push('Cần giấy / kiểm tra khổ và nguồn giấy');if(p.toner_warning)faults.push('Kiểm tra hộp mực');
+   if(faults.length){title=faults.join(' · ');note='Trạng thái đọc từ máy in. Không tự xóa lỗi hoặc in lại.';}
+   else note='CAPT đã phản hồi · cập nhật '+Math.round(p.age_ms/1000)+' giây trước.';
+  }
+ }
  el('printer').textContent=title;el('printer-note').textContent=note;
  const active=c.state==='printing'||c.state==='waiting_printer'||c.state==='downloading',lan=t.state===1||t.state===2;
  el('job').hidden=!(active||lan);const total=active?c.total:t.total,done=active?c.completed:t.completed,known=active?c.progress_known:total>0;
@@ -357,6 +367,14 @@ void setup() {
     server.sendHeader("Cache-Control", "no-store");
     server.send(windowsReport.length() ? 200 : 404, "text/plain; charset=utf-8", windowsReport);
   });
+  server.on("/printer/status", HTTP_GET, [] {
+    IPAddress remote=server.client().remoteIP(),local=WiFi.localIP(),mask=WiFi.subnetMask();
+    if(!WiFi.isConnected() || (uint32_t(remote)&uint32_t(mask))!=(uint32_t(local)&uint32_t(mask))){server.send(403,"text/plain","LAN only");return;}
+    auto u=readUSB();auto c=cloudSnapshot();bool web=cloudBusy();server.sendHeader("Cache-Control","no-store");
+    server.send(200,"application/json",String("{\"schema\":1,\"connected\":")+(u.connected?"true":"false")+
+      ",\"responsive\":"+(u.responsive?"true":"false")+",\"capt\":"+captTelemetryJSON()+
+      ",\"active\":"+((captTCPState.load()==2||web)?"true":"false")+",\"total\":"+(web?c.total:captTCPTotal.load())+",\"completed\":"+(web?c.completed:captTCPCompleted.load())+"}");
+  });
   server.on("/printer/command", HTTP_GET, captResult);
   server.on("/printer/command", HTTP_POST, captSubmit);
   server.on("/printer/release", HTTP_POST, [] {
@@ -422,7 +440,7 @@ void setup() {
       ",\"rssi\":" + WiFi.RSSI() + ",\"static_ip\":true" +
       ",\"reset_reason\":" + int(esp_reset_reason()) +
       ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"uptime\":" + millis()/1000 +
-      ",\"flash\":" + ESP.getFlashChipSize() + ",\"psram\":" + ESP.getPsramSize() +
+      ",\"support_command\":" + jsonString(supportCommand) + ",\"flash\":" + ESP.getFlashChipSize() + ",\"psram\":" + ESP.getPsramSize() +
       ",\"usb\":{\"installed\":" + (usb.installed ? "true" : "false") +
       ",\"connected\":" + (usb.connected ? "true" : "false") +
       ",\"responsive\":" + (usb.responsive ? "true" : "false") +

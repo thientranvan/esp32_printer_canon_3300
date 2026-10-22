@@ -1,10 +1,10 @@
 # Contract ESP32–quanly.lophocbinhminh.com, v1
 
-> Đồng bộ docs server ngày 22/10/2026: quản lý/API/hàng đợi/menu và adapter
-> HTML → PDF → CAPT đã triển khai; xem [triển khai server](server-deployment.md).
-> Origin firmware đã sửa thành `https://quanly.lophocbinhminh.com`, build và kiểm tra
-> offline đạt. Chưa nạp vào bo theo yêu cầu người dùng; chưa đăng ký ID/token thật,
-> chưa nghiệm thu cloud đầu-cuối. Không coi build thành công là ESP đã kết nối server.
+> Cập nhật 22/10/2026: Máy 1 đã nạp firmware qua COM, cloud bật và heartbeat HTTP 204.
+> Đã xác minh server lưu lỗi máy thật **E100 0000**. Chưa nghiệm thu cloud đầu-cuối
+> với job thực sau cập nhật này. Trường lỗi/progress và phần UI server cần bổ sung:
+> [trạng thái CAPT](printer-status.md). Ghi chú “chưa nạp” trong bản bàn giao server
+> bên dưới là lịch sử, không phải trạng thái hiện tại.
 
 ## Phạm vi và trạng thái
 

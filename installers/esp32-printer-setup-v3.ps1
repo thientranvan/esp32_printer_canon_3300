@@ -150,7 +150,12 @@ public static class Esp32CaptBridge {
   b=ReadExact(s,4);Need(U16(b,0)==op && U16(b,2)>=4 && U16(b,2)<=4096,"Invalid CAPT reply");return ReadExact(s,U16(b,2)-4);
  }
  static byte[] Ack(Stream s,int op,byte[] data) { byte[] b=Command(s,op,data,true);Need(b.Length>=2 && (b[0]&128)==0,"Printer rejected "+op.ToString("X4"));return b; }
- static ushort[] Status(Stream s) { byte[] b=Ack(s,0xA0A8,null);Need(b.Length>=36,"Truncated printer status");return new ushort[]{U16(b,14),U16(b,16),U16(b,18),U16(b,20)}; }
+ static ushort[] Status(Stream s) {
+  byte[] b=Ack(s,0xA0A8,null);Need(b.Length>=36,"Truncated printer status");
+  if((b[2]&8)!=0){byte[] e=Ack(s,0xA2A2,null);string code=e.Length>=8&&e[1]>0?"E"+U16(e,4).ToString("X3")+" "+U16(e,6).ToString("X4"):"service fault";
+   throw new IOException("Canon "+code+"; inspect printer before resuming");}
+  return new ushort[]{U16(b,14),U16(b,16),U16(b,18),U16(b,20)};
+ }
  static byte[] Info(int id,int stage,int page) {
   byte[] b=new byte[72];DateTime t=DateTime.Now;Put32(b,4,(uint)page);b[16]=(byte)stage;b[17]=1;Put16(b,18,id);Put16(b,20,65116);Put16(b,22,65116);Put16(b,24,t.Year);
   b[26]=(byte)(t.Month-1);b[27]=(byte)t.Day;b[28]=(byte)t.Hour;b[29]=(byte)t.Minute;b[30]=(byte)t.Second;b[31]=1;return b;
@@ -203,9 +208,45 @@ public static class Esp32CaptBridge {
    progress(number,"Submitted");
   }
   Stopwatch completion=Stopwatch.StartNew();
-  while(true){counters=Status(s);if(counters[3]>=total)break;if(completion.Elapsed.TotalSeconds>60)throw new IOException("Job completion uncertain; inspect printer before retry");Thread.Sleep(200);}
+  int lastCompleted=-1;
+  while(true){counters=Status(s);if(counters[3]!=lastCompleted){progress(counters[3],"Printer completed");lastCompleted=counters[3];}if(counters[3]>=total)break;if(completion.Elapsed.TotalSeconds>60)throw new IOException("Job completion uncertain; inspect printer before retry");Thread.Sleep(200);}
   Ack(s,0xE1A1,Info(id,4,total));byte[] release=new byte[2];Put16(release,0,id);Ack(s,0xE0A9,release);
   progress(total,"Completed");
+ }
+ [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+ struct PrinterDefaults { public IntPtr DataType,DevMode; public uint Access; }
+ [System.Runtime.InteropServices.DllImport("winspool.drv",EntryPoint="OpenPrinterW",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]
+ static extern bool OpenPrinter(string name,out IntPtr handle,ref PrinterDefaults defaults);
+ [System.Runtime.InteropServices.DllImport("winspool.drv",EntryPoint="SetPrinterW",SetLastError=true)]
+ static extern bool SetPrinter(IntPtr handle,uint level,ref uint status,uint command);
+ [System.Runtime.InteropServices.DllImport("winspool.drv",EntryPoint="GetPrinterW",SetLastError=true)]
+ static extern bool GetPrinter(IntPtr handle,uint level,out uint status,uint size,out uint needed);
+ [System.Runtime.InteropServices.DllImport("winspool.drv")] static extern bool ClosePrinter(IntPtr handle);
+ static bool Flag(string json,string key){return System.Text.RegularExpressions.Regex.IsMatch(json,"\\\""+key+"\\\"\\s*:\\s*true");}
+ static bool monitorStarted=false;
+ static void MonitorPrinter(){
+  string name=System.Text.Encoding.UTF8.GetString(Convert.FromBase64String("__PRINTER_NAME_BASE64__"));
+  while(true){
+   uint status=0;string json="";
+   try{
+    System.Net.HttpWebRequest request=(System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://__STATION_IP__/printer/status");
+    request.Proxy=null;request.Timeout=2500;request.ReadWriteTimeout=2500;
+    using(System.Net.WebResponse response=request.GetResponse())using(StreamReader reader=new StreamReader(response.GetResponseStream())){
+     char[] data=new char[65537];int length=0,count;while(length<data.Length && (count=reader.Read(data,length,data.Length-length))>0)length+=count;
+     if(length>65536)throw new InvalidDataException("Status too large");json=new string(data,0,length);
+    }
+    if(!Flag(json,"connected")||!Flag(json,"responsive"))status=0x80;
+    else if(!Flag(json,"fresh"))status=0x2;
+    else {if(Flag(json,"service_error"))status|=2;if(Flag(json,"paper_jam"))status|=8;if(Flag(json,"paper_required"))status|=0x10;
+     if(Flag(json,"cover_open"))status|=0x00400000;if(Flag(json,"toner_warning"))status|=0x20000;if(Flag(json,"active"))status|=0x400;}
+   }catch{status=0x80;}
+   if(File.Exists(Pending))status|=0x100002;
+   try{File.WriteAllText(Path.Combine(Root,"printer-state.json"),json);
+    IntPtr handle;PrinterDefaults defaults=new PrinterDefaults();defaults.Access=4;
+    if(OpenPrinter(name,out handle,ref defaults)){try{uint current,needed;if(!GetPrinter(handle,6,out current,4,out needed))throw new IOException("GetPrinter failed");status=(current&~(uint)(0x80|2|8|0x10|0x00400000|0x20000|0x400|0x100000))|status;if(!SetPrinter(handle,6,ref status,0))File.WriteAllText(Path.Combine(Root,"monitor-error.txt"),"SetPrinter: "+System.Runtime.InteropServices.Marshal.GetLastWin32Error());}finally{ClosePrinter(handle);}}
+   }catch{}
+   Thread.Sleep(2000);
+  }
  }
  static void Note(string text){File.WriteAllText(Path.Combine(Root,"status.txt"),DateTime.Now.ToString("s")+" "+text);}
  static void Send(string file) {
@@ -288,13 +329,16 @@ public static class Esp32CaptBridge {
  }
  public static int Main(string[] args) {
   try{
+   if(args.Length==1 && args[0]=="--monitor"){Directory.CreateDirectory(Root);MonitorPrinter();return 0;}
    if(args.Length==1 && args[0]=="--self-test"){SelfTest();return 0;}
    if(args.Length==2 && args[0]=="--check"){Job j=Parse(File.ReadAllBytes(args[1]));Console.WriteLine(j.Pages.Count+" page(s), "+j.Copies+" copies");return 0;}
    Directory.CreateDirectory(Root);bool created;
    using(Mutex mutex=new Mutex(true,"Global\\ESP32CaptBridge-__STATION_ID__",out created)){
-    Need(created,"Another bridge is running");Need(!File.Exists(Pending),"Uncertain previous page; inspect pending.txt");
+    Need(created,"Another bridge is running");
     if(args.Length==2 && args[0]=="--send"){Send(args[1]);return 0;}
-    Need(args.Length==0,"Unsupported arguments");Need(Directory.GetFiles(Root,"*.capt").Length==0,"Unresolved captured job; inspect bridge folder");
+    Need(args.Length==0,"Unsupported arguments");
+    Thread monitor=new Thread(MonitorPrinter);monitor.IsBackground=true;monitor.Start();monitorStarted=true;
+    Need(!File.Exists(Pending) && Directory.GetFiles(Root,"*.capt").Length==0,"Uncertain previous job; inspect bridge folder. Status monitor remains active.");
     TcpListener listener=new TcpListener(IPAddress.Loopback,__LOCAL_PORT__);listener.Start(1);Note("Ready on localhost:__LOCAL_PORT__");
     while(true){string file=Path.Combine(Root,DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff")+".capt");
      bool empty=false;
@@ -306,11 +350,11 @@ public static class Esp32CaptBridge {
      Note("Printing "+Path.GetFileName(file));Send(file);File.Copy(file+".progress",Path.Combine(Root,"last-job.txt"),true);File.Delete(file);File.Delete(file+".progress");
     }
    }
-  }catch(Exception e){try{Directory.CreateDirectory(Root);Note("STOPPED: "+e.Message);}catch{}Console.Error.WriteLine(e.ToString());return 1;}
+  }catch(Exception e){try{Directory.CreateDirectory(Root);Note("STOPPED: "+e.Message);}catch{}Console.Error.WriteLine(e.ToString());if(monitorStarted){while(true)Thread.Sleep(1000);}return 1;}
  }
 }
 '@
-$sourceCode=$sourceCode.Replace('__STATION_IP__',$StationIP).Replace('__STATION_ID__',$stationId).Replace('__LOCAL_PORT__',[string]$localPort)
+$sourceCode=$sourceCode.Replace('__STATION_IP__',$StationIP).Replace('__STATION_ID__',$stationId).Replace('__LOCAL_PORT__',[string]$localPort).Replace('__PRINTER_NAME_BASE64__',[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PrinterName)))
 [IO.File]::WriteAllText("$root\bridge.cs",$sourceCode)
 $staged=Join-Path $root 'bridge.new.exe'
 if (Test-Path $staged) { Remove-Item $staged }

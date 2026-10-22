@@ -1,4 +1,5 @@
 #pragma once
+#include "capt_status.h"
 
 // ponytail: one diagnostic operation at a time, 4096 bytes; add job ownership
 // and a spool before accepting concurrent print clients.
@@ -18,13 +19,45 @@ static CaptCommand captCommand;
 static portMUX_TYPE captTelemetryLock=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t captRawStatus[64]={};
 static size_t captRawSize=0;
-static uint32_t captRawAt=0;
+static uint32_t captRawAt=0, captServiceAt=0;
+static unsigned captServiceCode=0,captServiceSub=0;
+static CaptStatus::Frames captFrames;
+static void captRecordFrame(const uint8_t *p,size_t n) {
+    unsigned op=CaptStatus::word(p);
+    portENTER_CRITICAL(&captTelemetryLock);
+    if(op==0xA0A8 && n>=40){
+      captRawSize=min(n,sizeof(captRawStatus));memcpy(captRawStatus,p,captRawSize);captRawAt=millis();
+      if(!CaptStatus::decode(p).service){captServiceAt=0;captServiceCode=captServiceSub=0;}
+    }else if(op==0xA2A2 && n>=12 && p[5] && p[5]<=16){
+      captServiceCode=CaptStatus::word(p+8);captServiceSub=CaptStatus::word(p+10);captServiceAt=millis();
+    }
+    portEXIT_CRITICAL(&captTelemetryLock);
+}
+static void captObserve(const uint8_t *data,size_t size) {
+  captFrames.feed(data,size,[](const uint8_t *p,size_t n){captRecordFrame(p,n);});
+}
+static bool captFresh() {
+  portENTER_CRITICAL(&captTelemetryLock);bool fresh=captRawSize>=40 && uint32_t(millis()-captRawAt)<10000;portEXIT_CRITICAL(&captTelemetryLock);return fresh;
+}
+static bool captFault() {
+  uint8_t data[64];size_t n;uint32_t at;
+  portENTER_CRITICAL(&captTelemetryLock);n=captRawSize;at=captRawAt;memcpy(data,captRawStatus,n);portEXIT_CRITICAL(&captTelemetryLock);
+  if(n<40||uint32_t(millis()-at)>10000)return false;
+  auto f=CaptStatus::decode(data);return f.service||f.jam||f.cover||f.paper;
+}
 static String captTelemetryJSON() {
-  uint8_t data[64];size_t size;uint32_t at;
-  portENTER_CRITICAL(&captTelemetryLock);size=captRawSize;at=captRawAt;memcpy(data,captRawStatus,size);portEXIT_CRITICAL(&captTelemetryLock);
+  uint8_t data[64];size_t size;uint32_t at,serviceAt;unsigned code,sub;
+  portENTER_CRITICAL(&captTelemetryLock);size=captRawSize;at=captRawAt;memcpy(data,captRawStatus,size);serviceAt=captServiceAt;code=captServiceCode;sub=captServiceSub;portEXIT_CRITICAL(&captTelemetryLock);
   String hex;const char *digits="0123456789abcdef";
   for(size_t i=0;i<size;++i){hex+=digits[data[i]>>4];hex+=digits[data[i]&15];}
-  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+"}";
+  bool fresh=size>=40 && uint32_t(millis()-at)<10000 && readUSB().connected;
+  CaptStatus::Flags f={};if(size>=40)f=CaptStatus::decode(data);
+  char service[24]="";if(fresh&&f.service&&serviceAt&&uint32_t(millis()-serviceAt)<10000)snprintf(service,sizeof(service),"E%03X %04X",code,sub);
+  String decoded=String(",\"fresh\":")+(fresh?"true":"false")+",\"service_error\":"+(f.service?"true":"false")+
+    ",\"service_code\":\""+service+"\",\"paper_jam\":"+(f.jam?"true":"false")+",\"cover_open\":"+(f.cover?"true":"false")+
+    ",\"toner_warning\":"+(f.toner?"true":"false")+",\"paper_required\":"+(f.paper?"true":"false")+
+    ",\"toner_percent\":null,\"decoded\":"+f.decoded+",\"started\":"+f.started+",\"exiting\":"+f.exiting+",\"completed\":"+f.completed;
+  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+decoded+"}";
 }
 
 static portMUX_TYPE captOwnerLock = portMUX_INITIALIZER_UNLOCKED;
@@ -56,6 +89,11 @@ static void releaseCapt(uint32_t owner) {
 static void captTransferDone(usb_transfer_t *) { captCommand.done = true; }
 
 static void serviceCapt(USBContext &context) {
+  if(context.gone){
+    captFrames.reset();portENTER_CRITICAL(&captTelemetryLock);
+    captRawSize=0;captRawAt=captServiceAt=0;captServiceCode=captServiceSub=0;
+    portEXIT_CRITICAL(&captTelemetryLock);
+  }
   auto &command = captCommand;
   int state = command.state.load();
   if (state == 1) {
@@ -101,13 +139,11 @@ static void serviceCapt(USBContext &context) {
         if (command.input) {
           command.received = transfer->actual_num_bytes;
           memcpy(command.data, transfer->data_buffer, command.received);
-          if(command.received>=40 && command.data[0]==0xA8 && command.data[1]==0xA0) {
-            portENTER_CRITICAL(&captTelemetryLock);captRawSize=min(size_t(command.received),sizeof(captRawStatus));
-            memcpy(captRawStatus,command.data,captRawSize);captRawAt=millis();portEXIT_CRITICAL(&captTelemetryLock);
-          }
+          captObserve(command.data,command.received);
         } else if (transfer->actual_num_bytes != command.size) command.error = ESP_ERR_INVALID_SIZE;
       }
     }
+    if(command.cancelled || command.error!=ESP_OK)captFrames.reset();
     if (!context.gone && (command.cancelled || command.error != ESP_OK)) {
       esp_err_t cleared = usb_host_endpoint_clear(context.device, transfer->bEndpointAddress);
       if (cleared != ESP_OK && command.error == ESP_OK) command.error = cleared;

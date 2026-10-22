@@ -1,0 +1,118 @@
+# Trạng thái Canon LBP3300: CAPT → ESP → máy tính/server
+
+## Kiểm chứng trên Máy 1, 22/10/2026
+
+- Nạp/debug qua COM `/dev/cu.usbmodem5CF90462221`, MAC `98:c3:77:a1:36:b0`.
+  Máy in nối trực tiếp native USB → OTG; bo đã được người dùng sửa hai mối hàn.
+- Đọc đúng **E100 0000** từ máy thật: A0A8 có cờ service; A2A2 trả
+  `a2 a2 0c 00 00 01 00 00 00 01 00 00`.
+- Phản hồi A0A8 60 byte bị chia thành **6 + 54 byte** khi lỗi. Bộ đọc cũ đòi
+  một transfer đủ cả frame, bỏ sót đuôi và làm lệch các lệnh tiếp theo.
+  Firmware mới ghép theo chiều dài CAPT; telemetry cũng ghép thụ động mọi phản hồi.
+  Query chỉ đọc còn xả phản hồi cũ/tail của client bị ngắt trước khi tìm đúng opcode;
+  không gửi lại lệnh in để khôi phục đồng bộ.
+- `/status` và `/printer/status` đọc được `service_code="E100 0000"`.
+  Heartbeat HTTP 204; đọc trực tiếp `print_stations.heartbeat_json` trên server
+  đã thấy `printer.state="error"` và mã E100 trong `printer.capt.service_code`.
+- Mac CUPS đã nhận `printer-state-message="Canon service fault / E100 0000"`
+  và `other-error`, giữ nguyên `paused` của hàng đợi cũ. Không tự tiếp tục job.
+- Chưa nghiệm thu vật lý hết giấy, kẹt giấy, mở nắp, hộp mực trên bo này.
+  Không cố gây kẹt hoặc tự xóa service fault để thử.
+
+## Dữ liệu và độ trễ
+
+Task trạng thái riêng poll CAPT mỗi 1,5 giây khi lấy được USB arbiter; vẫn chạy
+khi cloud tắt/mất Internet. Không chen lệnh USB vào job LAN/cloud. Khi job đang
+chạy, bắt thụ động phản hồi A0A8 của chính client in. Không có phản hồi mới trên
+10 giây hoặc USB ngắt: `fresh=false`; không coi số liệu cũ là trạng thái hiện tại.
+Mã service quá 10 giây không đọc lại được sẽ để trống, không giữ mã cũ vô hạn.
+
+Endpoint LAN chỉ đọc, không cần mật khẩu admin: `GET /printer/status`.
+Chặn client ngoài subnet; không mở cổng router. Không chứa token/cấu hình/bí mật.
+Trang quản trị `/status` vẫn cần xác thực. Giao diện ESP poll 3 giây; heartbeat
+server chu kỳ nền khoảng 5 giây cộng thời gian HTTPS; UI server hiện poll 5 giây.
+Đây là cập nhật gần thời gian thực, không phải bảo đảm trễ cố định khi mạng lỗi.
+
+```json
+{
+  "schema": 1,
+  "connected": true,
+  "responsive": true,
+  "active": false,
+  "capt": {
+    "fresh": true,
+    "age_ms": 700,
+    "service_error": true,
+    "service_code": "E100 0000",
+    "paper_jam": false,
+    "cover_open": false,
+    "paper_required": false,
+    "toner_warning": false,
+    "toner_percent": null,
+    "decoded": 0,
+    "started": 0,
+    "exiting": 0,
+    "completed": 0
+  },
+  "total": 0,
+  "completed": 0
+}
+```
+
+`capt` còn có `opcode`, `frame_hex` để chẩn đoán. Flags/counters chỉ dùng khi
+`fresh=true`; false khi stale là **chưa biết**, không được suy ra máy hết lỗi.
+`paper_required` là yêu cầu giấy/khổ/nguồn giấy, không khẳng định khay vật lý trống.
+`toner_warning` yêu cầu kiểm tra hộp mực; không khẳng định phần trăm hay mực đã hết.
+Không có số phần trăm đáng tin từ LBP3300: giữ `toner_percent=null`.
+
+A0A8 payload: service byte 2 bit 3; jam word 12 bit 8; cover word 12 bit 14;
+toner word 12 bit 13; giấy word 8 bit 14. Bốn counter u16 tại offset
+14/16/18/20: decoded/started/exiting/completed. A2A2: count full-frame byte 5,
+record đầu tại full-frame byte 8 gồm u16 code/subcode; hiển thị hex `E%03X %04X`.
+Ánh xạ service/jam/cover/toner đối chiếu luồng xử lý driver Canon; cần các ca vật lý
+để nghiệm thu đầy đủ. Không tuyên bố giải mã mọi cảm biến hay mọi service code.
+
+Counter là **mặt ảnh in**, không phải phần trăm byte truyền, không phải tờ giấy.
+In hai mặt/N-up phải dùng số mặt sau layout. Counter riêng không cho biết tổng;
+chỉ hiển thị `completed/total` khi job metadata có total hợp lệ và job đang active.
+LAN dùng `total/completed` ngoài `capt`; cloud dùng `cloud.progress_known/total/completed`.
+USB bị ngắt/timeout sau side effect: giữ kết quả uncertain, không tự gửi lại.
+
+## Máy tính
+
+Chạy lại bộ cài mới để có monitor; bộ cài cũ không tự được thay thế bởi firmware.
+
+- Mac: cùng backend Perl, `--monitor IP QUEUE`; bộ cài tạo LaunchDaemon riêng
+  mỗi station. Monitor dùng JSON::PP/curl/ipptool có sẵn, CUPS qua Unix socket
+  với PeerCred. Cập nhật message/reasons kể cả khi rảnh; giữ lý do scheduler như
+  `paused`, không resume job. Khi in, backend gửi STATE, job-media-progress và
+  PAGE theo counter hoàn tất; duplex đếm tờ sau khi đủ hai mặt.
+- Mac hiện tại: đã chạy monitor bằng LaunchAgent của user cho queue cũ
+  `Canon_LBP3300_ESP32`; không thay backend root cũ nếu chưa chạy lại bộ cài.
+- Windows: bridge SYSTEM có thread poll mỗi 2 giây, SetPrinter level 6 cập nhật
+  ERROR/PAPER_JAM/PAPER_OUT/DOOR_OPEN/TONER_LOW/OFFLINE/PRINTING; giữ các bit khác.
+  Mã CAPT đầy đủ và counter lưu trong thư mục station `printer-state.json`;
+  `status.txt`/job `.progress` ghi tiến trình thực. Windows có thể chỉ hiện lỗi
+  chuẩn, không có chỗ hiển thị chuỗi E100 tùy ý trong giao diện queue mặc định.
+  Spooler có thể đánh dấu tài liệu đã chuyển sang bridge trước khi giấy ra;
+  không lấy tiến trình spooler làm xác nhận vật lý.
+- Chưa kiểm chứng bridge mới trên Windows thật nếu máy SSH chưa kết nối được.
+
+## Việc dev server cần làm — không tự sửa ứng dụng server
+
+Heartbeat giữ schema 1 và enum cũ. Fault CAPT dùng `printer.state="error"`;
+`printer.error_code` vẫn là **lỗi USB** cũ (có thể bằng 0 dù máy báo E100).
+Các trường mới nằm trong `printer.capt`; server hiện nhận và lưu đầy đủ.
+Không dùng `error_code==0` để kết luận máy sẵn sàng. Chặn claim nếu state error.
+
+Hiện UI server vẫn gom `state=error` thành “Lỗi máy in chưa xác định”. Dev cần:
+
+1. Đọc `printer.capt`, kiểm tra fresh và tuổi heartbeat (age_ms là tuổi mẫu tại
+   lúc gửi; cộng thời gian từ last_seen để hiển thị tuổi hiện tại).
+2. Hiển thị service_code nguyên văn khi service_error; thêm nhãn riêng cho jam,
+   cover, paper_required, toner_warning. Unknown/stale dùng “Chưa có trạng thái mới”.
+3. Hiển thị progress từ `lan` nếu busy_lan, từ `cloud` nếu busy_cloud; không coi
+   downloaded/submitted là completed. Fault có thể cùng tồn tại với progress dở.
+4. Online ESP khác máy in sẵn sàng. Giữ cơ chế uncertain/no-auto-reprint hiện có.
+
+Không sửa PHP, DB, dịch vụ hoặc thay đổi dở của dev server. Bàn giao file này riêng.

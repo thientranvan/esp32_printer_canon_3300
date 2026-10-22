@@ -109,23 +109,13 @@ static void captTCPTask(void *) {
         if (!ok) break;
         captTCPCommands.fetch_add(1);
         if (group == 0xC0 || group == 0xD0) continue; // Data packets have no reply.
-        if (!tcpTransfer(buffer, 64, true, received) || received < 4) break;
-        unsigned replyOpcode = unsigned(buffer[0]) | (unsigned(buffer[1]) << 8);
-        unsigned replyLength = unsigned(buffer[2]) | (unsigned(buffer[3]) << 8);
-        if (replyOpcode != opcode || replyLength < unsigned(received) || replyLength > 4096) {
-          captTCPError.store(ESP_ERR_INVALID_RESPONSE); break;
+        if(!CaptStatus::reply(buffer,4096,opcode,[](uint8_t *p,int size,int &n){return tcpTransfer(p,size,true,n);})){
+          captTCPError.store(ESP_ERR_INVALID_RESPONSE);break;
         }
-        if(opcode==0xA0A8 && received>=26)captTCPCompleted.store(unsigned(buffer[24])|(unsigned(buffer[25])<<8));
-        if (client.write(buffer, received) != size_t(received)) break;
-        unsigned sent = received;
-        while (sent < replyLength) {
-          if (!tcpTransfer(buffer, min(4096U, ((replyLength - sent + 63) / 64) * 64), true, received) ||
-              !received || sent + received > replyLength || client.write(buffer, received) != size_t(received)) {
-            ok = false; break;
-          }
-          sent += received;
-        }
-        if (!ok) break;
+        unsigned replyLength=CaptStatus::word(buffer+2);
+        captRecordFrame(buffer,replyLength);
+        if(opcode==0xA0A8 && replyLength>=40)captTCPCompleted.store(CaptStatus::decode(buffer).completed);
+        if(client.write(buffer,replyLength)!=replyLength)break;
       }
       releaseCapt(1);
     }

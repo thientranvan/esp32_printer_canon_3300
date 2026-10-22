@@ -28,8 +28,8 @@ uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=dc4005e054e78c33e6d7e1cc966171454ff787a27482236f4d7fde49e06b4ad8
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/548e52dbba96c3061620f3bbe4f4db6bdae9bd27/mac_backend.pl
+backend_sha=221c25c6883d5700d410f6a33e30f2ea40c919ca02bbdac7357c10eba54a0537
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/49abe9a5353ac3dd75595950c5729bc37dfdae12/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
@@ -111,4 +111,18 @@ if [ -z "$current_uri" ]; then
 else
   /usr/sbin/lpadmin -p "$queue" -v "$uri" -D "$name"
 fi
+label=com.esp32printer.status.$id
+plist=/Library/LaunchDaemons/$label.plist
+cat > "$work/status.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>$label</string>
+<key>ProgramArguments</key><array><string>/usr/bin/perl</string><string>$target_dir/mac_backend.pl</string><string>--monitor</string><string>$host</string><string>$queue</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
+<key>StandardErrorPath</key><string>$cache_dir/status-monitor.log</string></dict></plist>
+EOF
+/usr/bin/plutil -lint "$work/status.plist"
+/bin/launchctl bootout "system/$label" 2>/dev/null || true
+/usr/bin/install -o root -g wheel -m 644 "$work/status.plist" "$plist"
+/bin/launchctl bootstrap system "$plist"
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."

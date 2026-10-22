@@ -69,7 +69,7 @@ static uint32_t cloudLastHeartbeat=0;
 static bool cloudHeartbeat(bool force=false) {
   if(!force && uint32_t(millis()-cloudLastHeartbeat)<5000)return true;
   cloudLastHeartbeat=millis();auto u=readUSB();
-  String printer=u.recovering?"recovering":u.error?"error":!u.connected?"disconnected":!u.responsive?"unresponsive":captTCPState.load()==2?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
+  String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":captTCPState.load()==2?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
   String body="{\"schema\":1,\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
@@ -98,8 +98,8 @@ static bool cloudDownload(const String &id,const String &lease,uint8_t *data,siz
 }
 // Cloud uses a reserved owner, renewed for every transfer; shares USB arbiter with LAN.
 static constexpr uint32_t CloudOwner=CaptCloudOwner;
-static bool cloudTransfer(uint8_t *data,int size,bool input,int &received) {
-  if(!claimCapt(CloudOwner) || readUSB().recovering)return false;
+static bool cloudTransfer(uint8_t *data,int size,bool input,int &received,uint32_t owner=CloudOwner) {
+  if(!claimCapt(owner) || readUSB().recovering)return false;
   int state=captCommand.state.load();
   if((state!=0 && state!=3)||!captCommand.state.compare_exchange_strong(state,5))return false;
   captCommand.size=size;captCommand.input=input;captCommand.received=0;captCommand.error=0;
@@ -112,20 +112,25 @@ static bool cloudTransfer(uint8_t *data,int size,bool input,int &received) {
 static uint8_t cloudBuffer[4096];
 static void cloudPut16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
 static void cloudPut32(uint8_t *p,uint32_t n){cloudPut16(p,n);cloudPut16(p+2,n>>16);}
-static bool cloudCommand(unsigned op,const uint8_t *payload=nullptr,size_t size=0,bool reply=true) {
-  if(size>4092)return false;
-  cloudPut16(cloudBuffer,op);cloudPut16(cloudBuffer+2,size+4);
-  if(size)memcpy(cloudBuffer+4,payload,size);
-  int n=0;if(!cloudTransfer(cloudBuffer,size+4,false,n))return false;
+static bool captExchange(uint8_t *buffer,size_t capacity,uint32_t owner,unsigned op,const uint8_t *payload=nullptr,size_t size=0,bool reply=true) {
+  if(size+4>capacity)return false;
+  cloudPut16(buffer,op);cloudPut16(buffer+2,size+4);
+  if(size)memcpy(buffer+4,payload,size);
+  int n=0;if(!cloudTransfer(buffer,size+4,false,n,owner))return false;
   if(!reply)return true;
-  if(!cloudTransfer(cloudBuffer,64,true,n) || n<6 || Prepared::u16(cloudBuffer)!=op ||
-      Prepared::u16(cloudBuffer+2)!=n || (cloudBuffer[4]&128))return false;
+  if(!CaptStatus::reply(buffer,capacity,op,[owner](uint8_t *p,int size,int &n){return cloudTransfer(p,size,true,n,owner);}))return false;
+  captRecordFrame(buffer,Prepared::u16(buffer+2));
+  if(Prepared::u16(buffer+2)<6 || (buffer[4]&128))return false;
   return true;
+}
+static bool cloudCommand(unsigned op,const uint8_t *payload=nullptr,size_t size=0,bool reply=true) {
+  return captExchange(cloudBuffer,sizeof(cloudBuffer),CloudOwner,op,payload,size,reply);
 }
 static bool cloudCounters(unsigned *c) {
   if(!cloudCommand(0xA0A8) || Prepared::u16(cloudBuffer+2)<40)return false;
   for(int i=0;i<4;++i)c[i]=Prepared::u16(cloudBuffer+18+i*2);
   portENTER_CRITICAL(&cloudLock);cloudView.completed=c[3];portEXIT_CRITICAL(&cloudLock);
+  if(CaptStatus::decode(cloudBuffer).service){cloudCommand(0xA2A2);return false;}
   return true;
 }
 static bool cloudWait(unsigned counter,unsigned value,uint32_t limit,bool exact=false) {
@@ -190,11 +195,9 @@ static void cloudTask(void *) {
   cloudBoot=String(esp_random(),HEX)+String(esp_random(),HEX);configTime(0,0,"pool.ntp.org","time.google.com");
   unsigned failures=0;
   while(true) {
+    if(!stationSettings.cloudEnabled){vTaskDelay(pdMS_TO_TICKS(1500));continue;}
     if(WiFi.status()!=WL_CONNECTED || time(nullptr)<1700000000){cloudState("connecting","Waiting for Wi-Fi / trusted clock");vTaskDelay(pdMS_TO_TICKS(1000));continue;}
     if(id.length())cloudState(state.c_str(),error.c_str());else cloudState("idle");
-    if(!id.length() && readUSB().responsive && !captTCPState.load() && claimCapt(CloudOwner)) {
-      cloudCommand(0xA0A8);releaseCapt(CloudOwner);
-    }
     bool online=cloudHeartbeat(true);
     if(!online){cloudState("server_error","HTTPS heartbeat failed; see HTTP code");failures=min(failures+1,6U);vTaskDelay(pdMS_TO_TICKS(failures*5000));continue;}
     failures=0;
@@ -211,7 +214,7 @@ static void cloudTask(void *) {
         id="";lease="";state="";error="";
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
-    }else if(readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load()) {
+    }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load()) {
       String response;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256");
@@ -247,7 +250,26 @@ static void cloudTask(void *) {
     vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
+static constexpr uint32_t CaptStatusOwner=0xFFFFFFFD;
+static void captStatusTask(void *) {
+  uint8_t buffer[80];unsigned previous=~0U;
+  while(true){
+    if(readUSB().responsive && claimCapt(CaptStatusOwner)){
+      if(captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A8) && CaptStatus::word(buffer+2)>=40){
+        auto f=CaptStatus::decode(buffer);unsigned code=0,sub=0;char service[24]="unknown";
+        if(f.service && captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA2A2) && CaptStatus::word(buffer+2)>=12 && buffer[5]){
+          code=CaptStatus::word(buffer+8);sub=CaptStatus::word(buffer+10);snprintf(service,sizeof(service),"E%03X %04X",code,sub);
+        }
+        unsigned key=f.service|f.jam<<1|f.cover<<2|f.paper<<3|f.toner<<4|code<<8;
+        if(key!=previous){Serial.printf("CAPT status service=%u code=%s jam=%u cover=%u paper=%u toner=%u completed=%u\n",f.service,service,f.jam,f.cover,f.paper,f.toner,f.completed);previous=key;}
+      }
+      releaseCapt(CaptStatusOwner);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1500));
+  }
+}
 static void startCloud() {
+  if(healthy && xTaskCreate(captStatusTask,"printer-status",8192,nullptr,1,nullptr)!=pdPASS)Serial.println("CAPT status task failed");
   if(!stationSettings.cloudEnabled)return;
   if(!healthy){cloudState("blocked","Station self-test failed");return;}
   if(xTaskCreate(cloudTask,"print-cloud",16384,nullptr,1,nullptr)!=pdPASS)cloudState("blocked","Cannot start cloud task");

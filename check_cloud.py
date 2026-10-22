@@ -14,6 +14,7 @@ assert 'quanly.lophochinhminh.com' not in Path('station/station.ino').read_text(
 engine = source[source.index('static bool cloudPrint('):source.index('static void cloudTask(')]
 harness = r'''
 #include "station/prepared_job.h"
+#include "station/capt_status.h"
 #include <cassert>
 #include <cstdio>
 #include <algorithm>
@@ -75,4 +76,45 @@ with tempfile.TemporaryDirectory() as folder:
     subprocess.run([binary], check=True)
     binary = str(Path(folder, 'parser'))
     subprocess.run([compiler, *flags, 'check_prepared.cpp', '-o', binary], check=True)
+    subprocess.run([binary], check=True)
+
+# Exercise actual command reassembly, including the real 6+54-byte error reply.
+exchange = source[source.index('static bool captExchange('):source.index('static bool cloudCommand(')]
+exchange_harness = r'''
+#include "station/prepared_job.h"
+#include "station/capt_status.h"
+#include <cassert>
+#include <cstdio>
+#include <vector>
+#include <cstring>
+static std::vector<uint8_t> reply;
+static size_t offset=0, fragmentSize=6;
+static void captRecordFrame(const uint8_t *,size_t){}
+static void cloudPut16(uint8_t *p,unsigned v){p[0]=v;p[1]=v>>8;}
+static bool cloudTransfer(uint8_t *p,int capacity,bool input,int &received,uint32_t owner){
+ assert(owner==123);
+ if(!input){offset=0;received=0;return true;}
+ size_t n=offset==0?fragmentSize:reply.size()-offset;
+ if(!n||n>size_t(capacity))return false;
+ memcpy(p,reply.data()+offset,n);offset+=n;received=n;return true;
+}
+'''
+exchange_main = r'''
+int main(){
+ uint8_t out[80];reply.assign(60,0);reply[0]=0xa8;reply[1]=0xa0;reply[2]=60;reply[6]=8;
+ for(fragmentSize=1;fragmentSize<60;++fragmentSize){assert(captExchange(out,sizeof(out),123,0xA0A8));assert(offset==60&&out[6]==8);}
+ reply[2]=59;fragmentSize=6;assert(!captExchange(out,sizeof(out),123,0xA0A8));
+ reply[2]=60;reply[0]=0xa1;assert(!captExchange(out,sizeof(out),123,0xA0A8));
+ reply[0]=0xa8;reply[4]=128;assert(!captExchange(out,sizeof(out),123,0xA0A8));
+ puts("PASS: production CAPT reassembly, all splits, mismatched size/opcode, rejected reply");
+}
+'''
+with tempfile.TemporaryDirectory() as folder:
+    cpp = Path(folder, 'exchange.cpp')
+    cpp.write_text(exchange_harness + exchange + exchange_main)
+    binary = str(Path(folder, 'exchange'))
+    subprocess.run([compiler, *flags, str(cpp), '-o', binary], check=True)
+    subprocess.run([binary], check=True)
+    binary = str(Path(folder, 'status'))
+    subprocess.run([compiler, *flags, 'check_capt_status.cpp', '-o', binary], check=True)
     subprocess.run([binary], check=True)
