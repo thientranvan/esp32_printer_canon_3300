@@ -245,14 +245,12 @@ static void cloudTask(void *) {
     cloudNeedsInspection.store(state=="uncertain");jobBegin(id.c_str(),"cloud");jobFinish(state.c_str());cJSON_Delete(j);
   }
 
-  unsigned failures=0;
   while(true) {
     if(!stationSettings.cloudEnabled){vTaskDelay(pdMS_TO_TICKS(1500));continue;}
     if(WiFi.status()!=WL_CONNECTED || time(nullptr)<1700000000){cloudState("connecting","Waiting for Wi-Fi / trusted clock");vTaskDelay(pdMS_TO_TICKS(1000));continue;}
     if(id.length())cloudState(state.c_str(),error.c_str());else cloudState("idle");
     bool online=cloudHeartbeat(true);
-    if(!online){cloudState("server_error","HTTPS heartbeat failed; see HTTP code");failures=min(failures+1,6U);vTaskDelay(pdMS_TO_TICKS(failures*5000));continue;}
-    failures=0;
+    if(!online){cloudState("server_error","HTTPS heartbeat pending or failed; see HTTP code");vTaskDelay(pdMS_TO_TICKS(250));continue;}
     if(id.length()) {
       if(state=="uncertain" && cloudResolve.exchange(false)) {
         cloudNeedsInspection.store(false);jobFinish("resolved");state="resolved";error="Operator inspected printer; no automatic reprint";
