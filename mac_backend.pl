@@ -8,6 +8,7 @@ use POSIX qw(strftime);
 
 # ponytail: A4/cassette 1 and <=100 pages, <=20 MiB. Validate other paper sources before extending.
 my $socket;
+my @completedSheets=(0);my $lastCompleted=-1;
 my $cache = '/Library/Caches/ESP32Printer';
 my $pending = "$cache/pending.txt";
 sub packet { return pack('vv', $_[0], length($_[1] // '') + 4) . ($_[1] // ''); }
@@ -50,7 +51,28 @@ sub ack {
 sub status {
     my $s = ack(0xA0A8);
     fail('Truncated extended status') unless length($s) >= 36;
-    return unpack('x14v4', $s);
+    my $flags=unpack('x12v',$s);
+    my @conditions=(['media-jam-error', $flags&0x100],['cover-open-error',$flags&0x4000],
+      ['marker-supply-low-warning',$flags&0x2000],['media-empty-error',unpack('x8v',$s)&0x4000],
+      ['other-error',ord(substr($s,2,1))&8]);
+    for my $c (@conditions){print STDERR 'STATE: ',($c->[1]?'+':'-'),$c->[0],"\n";}
+    if(ord(substr($s,2,1))&8){
+      my $service=ack(0xA2A2);
+      if(length($service)>=8 && ord(substr($service,1,1))){
+        my ($code,$sub)=unpack('x4vv',$service);
+        print STDERR sprintf("ERROR: Canon service E%03X %04X\n",$code,$sub);
+      }
+      fail('Canon service fault; inspect printer before resuming');
+    }
+    my @c=unpack('x14v4',$s);
+    if($c[3]!=$lastCompleted && @completedSheets>1){
+      my $total=$#completedSheets;my $done=$c[3]>$total?$total:$c[3];
+      print STDERR 'ATTR: job-media-progress=',int(100*$done/$total),"\n";
+      print STDERR "PAGE: total $completedSheets[$done]\n";
+      $lastCompleted=$c[3];
+    }
+    print STDERR "INFO: Printer completed $c[3] image(s)\n" unless $flags&(0x100|0x4000);
+    return @c;
 }
 sub info {
     my ($id, $stage, $page) = @_;
@@ -126,6 +148,8 @@ sub plan_pages {
 }
 sub print_pages {
     my (@pages) = @_;
+    @completedSheets=(0);$lastCompleted=-1;
+    for my $p (@pages){push @completedSheets,$completedSheets[-1]+((ord(substr($p->[0],9,1))&4)?0:1);}
     ack(0xF001, pack('V', scalar(@pages)));
     my $model = command(0xA1A1);
     fail('Printer model mismatch') unless substr($model, 2, 2) eq "\x94\x2a";
@@ -169,7 +193,6 @@ sub print_pages {
         ack(0xE0A7, pack('v', $page));
         ack(0xE1A1, info($id, 6, $page));
         print STDERR "INFO: Submitted image $page/", scalar(@pages), "\n";
-        print STDERR "PAGE: $page 1\n";
     }
     my $deadline = time + 60;
     while (1) { @c = status(); last if $c[3] >= $page; fail('Completion uncertain') if time > $deadline; sleep 1; }
@@ -177,7 +200,72 @@ sub print_pages {
     ack(0xE0A9, pack('v', $id));
     unlink($pending) or fail('Cannot clear pending marker');
 }
+# Native CUPS monitor: no USB ownership, no print submission, no queue resume.
+sub monitor {
+    my ($host,$queue,$once)=@_;
+    fail('Invalid monitor address/queue') unless $host =~ /\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/ &&
+      !grep({$_>255} split /\./,$host) && $queue =~ /\A(?:ESP32_esp32[0-9a-f]{12}|Canon_LBP3300_ESP32)\z/;
+    require JSON::PP;require File::Temp;
+    my ($file,$path)=File::Temp::tempfile('esp-status-XXXX',TMPDIR=>1,UNLINK=>1);close($file);
+    my $last='';
+    while(1){
+      my @reasons;my $message='ESP disconnected';my $state;
+      eval {
+        open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','2','--max-time','3',"http://$host/printer/status") or die 'curl';
+        my $json='';while(length($json)<=65536){my $n=read($curl,my $part,4096);last unless $n;$json.=$part;}close($curl);
+        $state=JSON::PP->new->max_size(65536)->max_depth(16)->decode($json);
+        die 'schema' unless ref($state) eq 'HASH' && ($state->{schema}//0)==1;
+      };
+      if($@ || !$state->{connected} || !$state->{responsive}){push @reasons,'offline-report';}
+      elsif(!$state->{capt}{fresh}){push @reasons,'other-warning';$message='Waiting for fresh CAPT status';}
+      else {
+        my $p=$state->{capt};my @notes;
+        for my $c (['paper_jam','media-jam-error','Paper jam'],['cover_open','cover-open-error','Cover open'],
+          ['paper_required','media-empty-error','Check paper size/source'],['toner_warning','marker-supply-low-warning','Check toner'],
+          ['service_error','other-error','Canon service fault']){
+          if($p->{$c->[0]}){push @reasons,$c->[1];push @notes,$c->[2];}
+        }
+        push @notes,$p->{service_code} if ($p->{service_code}//'') =~ /\AE[0-9A-F]{3,4} [0-9A-F]{4}\z/;
+        $message=@notes?join(' / ',@notes):'Printer connected';
+        if($state->{active} && ($state->{total}//0)>0){$message.=' - completed '.int($state->{completed}//0).'/'.int($state->{total}).' impressions';}
+      }
+      my $key=join(',',@reasons).$message;
+      if($key ne $last){
+        # Preserve scheduler reasons (paused, backend failures, etc.). Only replace
+        # reasons owned by this monitor; never resume a paused/uncertain queue.
+        open(my $f,'>',$path) or die $!;
+        print $f "{ OPERATION Get-Printer-Attributes\nGROUP operation-attributes-tag\nATTR charset attributes-charset utf-8\nATTR language attributes-natural-language en\nATTR uri printer-uri ipp://localhost/printers/$queue\nATTR keyword requested-attributes printer-state-reasons\nSTATUS successful-ok\n}\n";close($f);
+        open(my $get,'-|','/usr/bin/ipptool','-tv','-T','3',"ipp://localhost/printers/$queue",$path) or die $!;
+        my $current=do{local $/;<$get>};my $ok=close($get);
+        if($ok && $current =~ /printer-state-reasons \((?:1setOf )?keyword\) = ([^\r\n]+)/){
+          my %owned=map {$_=>1} qw(none offline-report other-warning media-jam-error cover-open-error media-empty-error marker-supply-low-warning other-error);
+          push @reasons,grep {!$owned{$_} && /\A[a-z0-9-]+\z/} split(/,\s*/,$1);
+          my $reason=join(',',@reasons)||'none';
+          my $attr=sub {my($tag,$name,$value)=@_;return pack('Cn', $tag,length($name)).$name.pack('n',length($value)).$value;};
+          my $body=pack('CCnNC',1,1,0x4003,1,1).
+            $attr->(0x47,'attributes-charset','utf-8').$attr->(0x48,'attributes-natural-language','en').
+            $attr->(0x45,'printer-uri',"ipp://localhost/printers/$queue").
+            $attr->(0x42,'requesting-user-name',scalar(getpwuid($>))).pack('C',4).
+            $attr->(0x41,'printer-state-message',$message);
+          my $name='printer-state-reasons';for my $r (split /,/,$reason){$body.=$attr->(0x44,$name,$r);$name='';}$body.=pack('C',3);
+          open($f,'>',$path) or die $!;binmode($f);print $f $body;close($f);
+          # Unix socket preserves local peer credentials; TCP localhost requires
+          # interactive Basic auth on macOS and cannot serve a background monitor.
+          open(my $post,'-|','/usr/bin/curl','--silent','--show-error','--max-time','3','--noproxy','*',
+            '--unix-socket','/var/run/cupsd','-H','Authorization: PeerCred '.getpwuid($>),'-H','Content-Type: application/ipp','--data-binary',"\@$path",'http://localhost/admin/') or die $!;
+          my $reply='';read($post,$reply,4096);my $sent=close($post);
+          if($sent && length($reply)>=8 && unpack('x2n',$reply)<0x100){$last=$key;}
+          else {warn "CUPS status update rejected; check local administration permissions\n";}
+
+        }
+      }
+      last if $once;sleep 3;
+    }
+}
 sub main {
+    if(@ARGV>=3 && ($ARGV[0] eq '--monitor' || $ARGV[0] eq '--monitor-once')){
+      monitor($ARGV[1],$ARGV[2],$ARGV[0] eq '--monitor-once');return 0;
+    }
     if (@ARGV == 1 && $ARGV[0] eq '--self-test') {
         my $page = "\0" x 40; substr($page, 2, 3, "\x94\x2a\x02");
         my $body = packet(0xD0A0, $page) . packet(0xD0A4, "\0" x 8) . packet(0xD0A1) .
