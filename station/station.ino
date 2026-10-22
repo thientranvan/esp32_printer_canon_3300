@@ -193,14 +193,14 @@ refreshCommand();setInterval(refreshCommand,3000);
   page += csrf;
   page += R"HTML(</code></p><p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-diagnostics.ps1" download="esp32-printer-diagnostics.ps1">Tải chẩn đoán Windows</a>: chỉ đọc thông tin driver/cổng in và gửi về ESP.</p>
 <p>Tải tệp chẩn đoán, mở PowerShell bằng quyền quản trị rồi dán lệnh. Trong hộp chọn file, chọn script chẩn đoán vừa tải:</p>
-<textarea id="diagnostics-command" aria-label="Lệnh chạy chẩn đoán Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-diagnostics.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
+<textarea id="diagnostics-command" aria-label="Lệnh chạy chẩn đoán Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-diagnostics.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea>
 <button type="button" onclick="copyDiagnostics()">Sao chép lệnh</button><p id="copy-result" role="status"></p>
 <script>function copyDiagnostics(){const field=document.getElementById('diagnostics-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('copy-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}</script>
 <h3>Điều khiển Windows từ Mac để sửa máy in</h3>
 <p>Bản portable v3 (sửa quyền khóa SSH): tải OpenSSH chính thức của Microsoft từ GitHub (khoảng 6 MB), kiểm tra SHA256 trước khi chạy. Không cần Windows Update và không thay đổi thiết lập chặn cập nhật. Nếu script cũ đang chờ cài Windows Update, nhấn Ctrl+C trước.</p>
 <p>Bật SSH riêng trên cổng 22222, chỉ nhận khóa công khai và IP máy hỗ trợ do bạn nhập. Không dùng mật khẩu SSH, không mở cổng router. Quyền quản trị cho phép kiểm tra và sửa máy Windows; kết nối vẫn bật sau khi khởi động lại cho đến khi tắt.</p>
 <p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-remote-v3.ps1" download="esp32-printer-remote-v3.ps1">Tải script bật điều khiển</a> . Mở PowerShell quản trị rồi chạy lệnh; hộp chọn file sẽ mở, chọn script bật điều khiển vừa tải:</p>
-<textarea id="remote-command" aria-label="Lệnh bật điều khiển Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-remote-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
+<textarea id="remote-command" aria-label="Lệnh bật điều khiển Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-remote-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea>
 <button type="button" onclick="copyRemote('remote-command')">Sao chép lệnh bật</button>
 <p>Tắt quyền điều khiển bất cứ lúc nào bằng PowerShell quản trị:</p>
 <textarea id="remote-stop" aria-label="Lệnh tắt điều khiển Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Stop-ScheduledTask -TaskName ESP32PrinterSupport; Disable-ScheduledTask -TaskName ESP32PrinterSupport; Remove-NetFirewallRule -Name ESP32PrinterSupport</textarea>
@@ -282,7 +282,7 @@ void setup() {
     if (WiFi.status()!=WL_CONNECTED || (uint32_t(server.client().remoteIP())&mask)!=(uint32_t(WiFi.localIP())&mask)) {
       server.send(403,"text/plain","LAN only"); return;
     }
-    server.sendHeader("Cache-Control","no-store"); server.send(200,"application/json",profileJSON());
+    server.sendHeader("Cache-Control","no-store"); server.send(200,"application/json; charset=utf-8",profileJSON());
   });
   server.on("/cloud/resolve", HTTP_POST, [] {
     if(!authorized())return;

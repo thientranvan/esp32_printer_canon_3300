@@ -12,7 +12,7 @@ for kind, filename in [("setup", "esp32-printer-setup-v3.ps1"), ("diagnostics", 
     assert "main/installers/" + filename in source
     assert "windows_" + kind + ".h" not in source
     if kind != "setup":
-        assert script.startswith("param([string]$Token)")
+        assert script.startswith("param([string]$Token, [string]$StationIP)")
         assert "token=$Token" in script and "token='TOKEN'" not in script
 assert "ssh-ed25519 AAAA" not in Path("installers/esp32-printer-remote-v3.ps1").read_text()
 mac = Path("install_mac.sh").read_text()

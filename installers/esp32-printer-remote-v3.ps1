@@ -1,6 +1,10 @@
-param([string]$Token)
+param([string]$Token, [string]$StationIP)
 # Run once in an elevated Windows PowerShell. Dedicated LAN-only support endpoint.
 $ErrorActionPreference = 'Stop'
+if (!$StationIP) { $StationIP=Read-Host 'ESP IPv4 address' }
+$address=$null
+if ($StationIP -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}$' -or ![Net.IPAddress]::TryParse($StationIP,[ref]$address) -or $address.AddressFamily -ne 'InterNetwork') { throw 'Invalid ESP IPv4 address.' }
+$StationIP=$address.ToString()
 if (!$Token) { $Token = Read-Host 'ESP report token (from authenticated ESP web page)' }
 Write-Host 'ESP32 remote support v3 - host key ACL fix'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -113,7 +117,7 @@ $fingerprint = & $keygen -lf "$hostKeyFile.pub"
 $report = @{support=@{user=$login;addresses=$addresses;port=$port;host_key=(Get-Content "$hostKeyFile.pub" -Raw).Trim();fingerprint="$fingerprint"}} | ConvertTo-Json -Depth 5
 $report | Set-Content -Encoding UTF8 "$root\connection.json"
 try {
-  Invoke-WebRequest -UseBasicParsing -Method Post -Uri 'http://192.168.1.199/support/windows' -Body @{token=$Token;data=$report} | Out-Null
+  Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://$StationIP/support/windows" -Body @{token=$Token;data=$report} | Out-Null
   Write-Host 'Remote support ready. Connection details uploaded to ESP.'
 } catch {
   Write-Warning 'SSH is ready but upload failed. Send the connection details below.'
