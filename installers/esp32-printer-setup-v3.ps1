@@ -29,14 +29,14 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Diagnostics;
 
-// ponytail: LBP3300 Windows CAPT wrapper, A4/simplex/cassette 1, 100 pages/20 MiB.
+// ponytail: LBP3300 Windows CAPT wrapper, A4/cassette 1, 100 pages/20 MiB.
 // Extend only after capturing and testing another model/paper/duplex format.
 public static class Esp32CaptBridge {
  const int Limit = 20 * 1024 * 1024;
  static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ESP32Printer");
  static readonly string Pending = Path.Combine(Root, "pending.txt");
  sealed class Page { public byte[] Parameters; public List<byte[]> Bands = new List<byte[]>(); }
- sealed class Job { public List<Page> Pages = new List<Page>(); public int Copies = 1; public bool Collate = true; }
+ sealed class Job { public List<Page> Pages = new List<Page>(); public int Copies = 1; public bool Collate = true; public int Duplex = 1; }
  static ushort U16(byte[] b, int p) { return BitConverter.ToUInt16(b,p); }
  static uint U32(byte[] b, int p) { return BitConverter.ToUInt32(b,p); }
  static void Put16(byte[] b, int p, int n) { Buffer.BlockCopy(BitConverter.GetBytes((ushort)n),0,b,p,2); }
@@ -63,14 +63,13 @@ public static class Esp32CaptBridge {
   Need(op==1 && d.Length==36 && U32(d,0)==0xFADEDACE,"Unsupported Windows Canon wrapper");
   Job job=new Job();
   job.Copies=(int)U32(d,4);Need(job.Copies>=1 && job.Copies<=99,"Copies must be 1..99");
-  Need(U32(d,8)==1,"Only one-sided jobs are supported");
-  Need(U32(d,12)<=1,"Unsupported collation metadata");job.Collate=U32(d,12)==1;
+  Need(U32(d,8)<=1,"Unsupported collation metadata");job.Collate=U32(d,8)==1;
+  job.Duplex=(int)U32(d,12);Need(job.Duplex>=1 && job.Duplex<=3,"Unsupported duplex mode");
   d=Next(b,ref p,out op);
   while(true){
    Need(op==2 && d.Length==108 && U32(d,0)==9,"Only A4 paper is supported");
    Page page=new Page();MemoryStream parameters=new MemoryStream();
    d=Next(b,ref p,out op);Need(op==0xD0A0 && d.Length==40 && U16(d,2)==0x2A94,"LBP3300 parameters required");
-   Need((d[5]&8)==0,"Duplex is not supported yet");
    int shift=d[13];Need((U16(d,30)>>(shift&15))==2480 && (U16(d,32)>>(shift>>4))==3507,"Only A4 600 dpi geometry is supported");
    Need(d[4]==0 || d[4]==2,"Unsupported paper kind");d[4]=2;d[36]=1;
    byte[] packet=Packet(op,d);parameters.Write(packet,0,packet.Length);
@@ -102,6 +101,22 @@ public static class Esp32CaptBridge {
    c.NoDelay=true;c.ReceiveTimeout=70000;c.SendTimeout=70000;return c;
   }catch{c.Close();throw;}
  }
+ static List<Page> Plan(Job job) {
+  List<Page> result=new List<Page>();int step=job.Duplex==1?1:2;
+  for(int group=0;group<(job.Collate?job.Copies:1);group++)
+   for(int i=0;i<job.Pages.Count;i+=step)
+    for(int copy=0;copy<(job.Collate?1:job.Copies);copy++){
+     bool paired=step==2 && i+1<job.Pages.Count;
+     // CAPT duplex engine consumes back image before front image.
+     for(int side=0;side<(paired?2:1);side++){
+      Page original=job.Pages[paired && side==0?i+1:i];
+      Page page=new Page();page.Parameters=(byte[])original.Parameters.Clone();page.Bands=original.Bands;
+      page.Parameters[9]=(byte)((page.Parameters[9]&~6)|(paired?(side==0?4:2):0));
+      result.Add(page);
+     }
+    }
+  return result;
+ }
  // ponytail: two decoded pages ahead of engine start; validate before enlarging window.
  static void PrintJob(Stream s,Job job,Action<int,string> progress) {
   byte[] model=Ack(s,0xA1A1,null);Need(model.Length>=4 && U16(model,2)==0x2A94,"Wrong printer model");
@@ -110,14 +125,13 @@ public static class Esp32CaptBridge {
   Ack(s,0xA3A2,null);byte[] reservation=new byte[8];Put16(reservation,2,30);byte[] r=Ack(s,0xA2A0,reservation);Need(r.Length==4,"Invalid reservation");int id=U16(r,2);
   Ack(s,0xE1A1,Info(id,1,0));Ack(s,0xE0A3,null);Ack(s,0xE0A2,null);Ack(s,0xE0A4,null);
   byte[] init=new byte[16];Put32(init,0,0xADEADBEE);Ack(s,0xE0A5,init);
-  int total=job.Copies*job.Pages.Count;
+  List<Page> plan=Plan(job);int total=plan.Count;
   for(int number=1;number<=total;number++){
    // Bound decoded pages ahead of engine start, not sheets awaiting output.
    Stopwatch timer=Stopwatch.StartNew();
    while(number>2){counters=Status(s);if(counters[1]>=number-2)break;if(timer.Elapsed.TotalSeconds>60)throw new IOException("Page completion uncertain; inspect printer before retry");Thread.Sleep(200);}
-   int pageIndex=job.Collate?(number-1)%job.Pages.Count:(number-1)/job.Copies;
-   Page page=job.Pages[pageIndex];
-   byte[] source=new byte[]{2,1,0xB0,9,0xB3,13,1,0};r=Ack(s,0xE1A9,source);Need(r.Length==2 && r[0]==0 && r[1]==1,"A4 cassette 1 unavailable");
+   Page page=plan[number-1];
+   byte[] source=new byte[]{2,1,0xB0,9,0xB3,13,1,(byte)(page.Parameters[9]&8)};r=Ack(s,0xE1A9,source);Need(r.Length==2 && r[0]==0 && r[1]==1,"A4 cassette 1 unavailable");
    byte[] parameters=(byte[])page.Parameters.Clone();parameters[10]=1;Command(s,0xD0A9,parameters,false);
    foreach(byte[] band in page.Bands)for(int p=0;p<band.Length;p+=4092)Command(s,0xC0A0,Part(band,p,Math.Min(4092,band.Length-p)),false);
    Command(s,0xC0A4,null,false);progress(number,"Raster sent");timer.Restart();
@@ -190,11 +204,11 @@ public static class Esp32CaptBridge {
   byte[] raster=new byte[9];Put16(raster,0,0x8200);Put16(raster,2,256);Put32(raster,4,9);raster[8]=1;f.Write(raster,0,raster.Length);add(0xC0A4,null);add(0xD0A2,null);add(4,new byte[4]);add(3,null);
   byte[] job=f.ToArray();Job parsed=Parse(job);Need(parsed.Pages.Count==1,"Parser self-test failed");
   Need(parsed.Pages[0].Parameters[8]==2 && parsed.Pages[0].Parameters[40]==1,"A4/plain normalization failed");
-  byte[] copies=(byte[])job.Clone();Put32(copies,8,2);Put32(copies,16,0);Job copyJob=Parse(copies);Need(copyJob.Copies==2 && !copyJob.Collate,"Copy metadata failed");
+  byte[] copies=(byte[])job.Clone();Put32(copies,8,2);Put32(copies,12,0);Job copyJob=Parse(copies);Need(copyJob.Copies==2 && !copyJob.Collate,"Copy metadata failed");
   bool rejected=false;try{Parse(Part(job,0,job.Length-1));}catch(InvalidDataException){rejected=true;}Need(rejected,"Truncated job accepted");
   MemoryStream multi=new MemoryStream();multi.Write(job,0,40);multi.Write(job,40,job.Length-44);multi.Write(job,40,job.Length-44);multi.Write(job,job.Length-4,4);
   Need(Parse(multi.ToArray()).Pages.Count==2,"Multipage parser failed");
-  byte[] bad=(byte[])job.Clone();Put32(bad,12,2);rejected=false;try{Parse(bad);}catch(InvalidDataException){rejected=true;}Need(rejected,"Duplex job accepted");
+  byte[] bad=(byte[])job.Clone();Put32(bad,16,4);rejected=false;try{Parse(bad);}catch(InvalidDataException){rejected=true;}Need(rejected,"Invalid duplex mode accepted");
   Job pipeline=Parse(multi.ToArray());pipeline.Pages[0].Bands[0][0]=11;pipeline.Pages[1].Bands[0][0]=22;pipeline.Copies=2;
   foreach(bool collate in new bool[]{true,false}){
    pipeline.Collate=collate;TestPrinter printer=new TestPrinter();
@@ -202,6 +216,12 @@ public static class Esp32CaptBridge {
    Need(printer.Reservations==1 && printer.Releases==1 && printer.Decoded==4 && printer.MaxAhead==3 && printer.MaxWaiting==2,"Job session/pipeline regression");
    Need(String.Join(",",printer.Raster.ToArray())==(collate?"11,22,11,22":"11,11,22,22"),"Copy order regression");
   }
+  pipeline.Duplex=2;pipeline.Collate=true;
+  List<Page> duplexPlan=Plan(pipeline);
+  Need(duplexPlan.Count==4 && duplexPlan[0].Bands[0][0]==22 && duplexPlan[1].Bands[0][0]==11,"Duplex back/front order failed");
+  Need((duplexPlan[0].Parameters[9]&6)==4 && (duplexPlan[1].Parameters[9]&6)==2,"Duplex side flags failed");
+  pipeline.Pages.Add(pipeline.Pages[0]);pipeline.Copies=1;duplexPlan=Plan(pipeline);
+  Need(duplexPlan.Count==3 && (duplexPlan[2].Parameters[9]&6)==0,"Odd final sheet failed");
   Console.WriteLine("PASS: parser, A4, truncation, one job session, two-page pipeline, copy ordering");
  }
  public static int Main(string[] args) {
@@ -277,10 +297,10 @@ if (!$ready) { Get-Content "$root\status.txt" -ErrorAction SilentlyContinue;thro
 if (!$port) { Add-PrinterPort -Name $portName -PrinterHostAddress '127.0.0.1' -PortNumber 19100 }
 if ($existing) { Set-Printer -Name $printerName -DriverName $driverName -PortName $portName }
 else { Add-Printer -Name $printerName -DriverName $driverName -PortName $portName }
-Set-PrintConfiguration -PrinterName $printerName -PaperSize A4 -DuplexingMode OneSided
+if (!$existing) { Set-PrintConfiguration -PrinterName $printerName -PaperSize A4 -DuplexingMode OneSided }
 $created=Get-Printer -Name $printerName
 if ($created.PortName -ne $portName -or $created.DriverName -ne $driverName) { throw 'Printer verification failed.' }
 Write-Host "Ready: $printerName"
-Write-Host 'Use A4, one-sided printing. Cassette 1 is selected by the bridge.'
+Write-Host 'Use A4 and choose portrait/landscape, simplex/duplex and layout in the Canon driver. Cassette 1 is selected by the bridge.'
 Write-Host 'Local bridge starts with Windows. No Mac, remote SSH, or always-on intermediary is required.'
 Write-Host "If printing stops, inspect $root\status.txt and pending.txt. Never resend an uncertain page blindly."

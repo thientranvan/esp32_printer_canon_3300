@@ -31,4 +31,4 @@ install -m 700 "$backend_tmp" /usr/libexec/cups/backend/esp32capt
   -P "$target_dir/Canon_ESP32.ppd" \
   -D 'Canon LBP3300 (ESP32 LAN)' -L 'ESP32 192.168.1.199' \
   -o printer-is-shared=false -o printer-error-policy=stop-printer
-echo 'Installed: Canon LBP3300 (ESP32 LAN). Select A4, Cassette 1, one-sided.'
+echo 'Installed: Canon LBP3300 (ESP32 LAN). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog.'

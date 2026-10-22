@@ -6,7 +6,7 @@ use IO::Select;
 use Fcntl qw(:DEFAULT :flock);
 use POSIX qw(strftime);
 
-# ponytail: A4 simplex/cassette 1 and <=100 pages, <=20 MiB. Extend after hardware tests.
+# ponytail: A4/cassette 1 and <=100 pages, <=20 MiB. Validate other paper sources before extending.
 my $socket;
 my $pending = '/Library/Caches/ESP32Printer/pending.txt';
 sub packet { return pack('vv', $_[0], length($_[1] // '') + 4) . ($_[1] // ''); }
@@ -105,15 +105,33 @@ sub pages {
         fail('Invalid inter-page metadata') unless $op == 2 && length($data) <= 4092;
     }
 }
-sub print_page {
-    my ($parameters, $bands) = @_;
+sub plan_pages {
+    my ($pages, $copies, $duplex, $collate) = @_;
+    my @plan;
+    my $step = $duplex ? 2 : 1;
+    for (1..($collate ? $copies : 1)) {
+        for (my $i = 0; $i < @$pages; $i += $step) {
+            for (1..($collate ? 1 : $copies)) {
+                my $paired = $duplex && $i + 1 < @$pages;
+                for my $side (0..($paired ? 1 : 0)) {
+                    my ($parameters, $bands) = @{$pages->[$paired && !$side ? $i + 1 : $i]};
+                    substr($parameters, 9, 1, chr((ord(substr($parameters, 9, 1)) & ~6) | ($paired ? ($side ? 2 : 4) : 0)));
+                    push @plan, [$parameters, $bands];
+                }
+            }
+        }
+    }
+    return @plan;
+}
+sub print_pages {
+    my (@pages) = @_;
     my $model = command(0xA1A1);
     fail('Printer model mismatch') unless substr($model, 2, 2) eq "\x94\x2a";
     my @c = status();
     fail('Printer has an unresolved page') if grep { $_ != $c[0] } @c;
     sysopen(my $marker, $pending, O_WRONLY | O_CREAT | O_EXCL, 0600)
         or fail('Uncertain previous job; inspect pending.txt before resuming');
-    print $marker "Page submission started; no automatic retry.\n" or fail('Cannot write pending marker');
+    print $marker "Job submission started; no automatic retry.\n" or fail('Cannot write pending marker');
     close($marker) or fail('Cannot save pending marker');
     ack(0xA3A2);
     my $reserved = ack(0xA2A0, pack('vvV', 0, 30, 0));
@@ -122,27 +140,36 @@ sub print_page {
     ack(0xE1A1, info($id, 1, 0));
     ack($_) for (0xE0A3, 0xE0A2, 0xE0A4);
     ack(0xE0A5, pack('VvCCx8', 0xADEADBEE, 0, 0, 0));
-    my ($w, $h) = unpack('vv', substr($parameters, 0x22, 4));
-    my $shift = ord(substr($parameters, 0x11, 1));
-    my $source = ack(0xE1A9, pack('CCvvCC', ord(substr($parameters, 8, 1)),
-        ord(substr($parameters, 0x28, 1)), $w >> ($shift & 15), $h >> ($shift >> 4),
-        1, ord(substr($parameters, 9, 1)) & 8));
-    fail('A4 cassette 1 unavailable') unless $source eq "\0\1";
-    substr($parameters, 0x0A, 1, "\1");
-    command(0xD0A9, $parameters, 0);
-    for my $band (@$bands) {
-        for (my $i = 0; $i < length($band); $i += 4092) {
-            command(0xC0A0, substr($band, $i, 4092), 0);
+    my $page = 0;
+    for my $entry (@pages) {
+        my ($parameters, $bands) = @$entry;
+        ++$page;
+        my $deadline = time + 60;
+        while ($page > 2) { @c = status(); last if $c[1] >= $page - 2; fail('Engine start uncertain') if time > $deadline; select(undef, undef, undef, 0.2); }
+        my ($w, $h) = unpack('vv', substr($parameters, 0x22, 4));
+        my $shift = ord(substr($parameters, 0x11, 1));
+        my $source = ack(0xE1A9, pack('CCvvCC', ord(substr($parameters, 8, 1)),
+            ord(substr($parameters, 0x28, 1)), $w >> ($shift & 15), $h >> ($shift >> 4),
+            1, ord(substr($parameters, 9, 1)) & 8));
+        fail('A4 cassette 1 unavailable') unless $source eq "\0\1";
+        substr($parameters, 0x0A, 1, "\1");
+        command(0xD0A9, $parameters, 0);
+        for my $band (@$bands) {
+            for (my $i = 0; $i < length($band); $i += 4092) {
+                command(0xC0A0, substr($band, $i, 4092), 0);
+            }
         }
+        command(0xC0A4, '', 0);
+        $deadline = time + 20;
+        while (1) { @c = status(); last if $c[0] >= $page; fail('Decode timeout') if time > $deadline; select(undef, undef, undef, 0.5); }
+        fail('Unexpected decoded page count') unless $c[0] == $page;
+        ack(0xE1A1, info($id, 2, $page));
+        ack(0xE0A7, pack('v', $page));
+        ack(0xE1A1, info($id, 6, $page));
+        print STDERR "INFO: Submitted image $page/", scalar(@pages), "\n";
+        print STDERR "PAGE: $page 1\n";
     }
-    command(0xC0A4, '', 0);
-    my $deadline = time + 20;
-    while (1) { @c = status(); last if $c[0] >= 1; fail('Decode timeout') if time > $deadline; select(undef, undef, undef, 0.5); }
-    my $page = $c[0];
-    ack(0xE1A1, info($id, 2, $page));
-    ack(0xE0A7, pack('v', $page));
-    ack(0xE1A1, info($id, 6, $page));
-    $deadline = time + 60;
+    my $deadline = time + 60;
     while (1) { @c = status(); last if $c[3] >= $page; fail('Completion uncertain') if time > $deadline; sleep 1; }
     ack(0xE1A1, info($id, 4, $page));
     ack(0xE0A9, pack('v', $id));
@@ -157,6 +184,12 @@ sub main {
         my @p = pages($job); fail('Parser self-test') unless @p == 2 && $p[1][1][0] eq 'abc';
         for my $bad (substr($job, 0, -1), $job . 'x') { eval { pages($bad) }; fail('Bad input accepted') unless $@; }
         fail('Job info layout') unless length(info(1, 2, 3)) == 72 && unpack('x4V', info(1, 2, 3)) == 3;
+        my @pair = ([packet(0xD0A0, $page), ['front']], [packet(0xD0A0, $page), ['back']]);
+        my @plan = plan_pages(\@pair, 2, 1, 1);
+        fail('Duplex planner') unless @plan == 4 && $plan[0][1][0] eq 'back' && $plan[1][1][0] eq 'front' &&
+            (ord(substr($plan[0][0], 9, 1)) & 6) == 4 && (ord(substr($plan[1][0], 9, 1)) & 6) == 2;
+        push @pair, $pair[0]; @plan = plan_pages(\@pair, 1, 1, 1);
+        fail('Odd duplex page') unless @plan == 3 && !(ord(substr($plan[2][0], 9, 1)) & 6);
         print "PASS: system Perl backend parser, malformed jobs, CAPT job-info layout\n";
         return;
     }
@@ -166,7 +199,9 @@ sub main {
     POSIX::close(3); POSIX::close(4);
     my ($host, $port) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?/?\z};
     fail('Invalid device URI') unless $host;
-    fail('Select one-sided A4') if $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
+    my $duplex = $ARGV[4] =~ /(?:^|\s)CNDuplex=True(?:\s|$)/i;
+    fail('Select Canon Print Style / Binding Location for duplex') if !$duplex && $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
+    my $collate = $ARGV[4] !~ /(?:^|\s)Collate=False(?:\s|$)/i;
     fail('Copies must be 1..99') unless $ARGV[3] =~ /\A[0-9]+\z/ && $ARGV[3] >= 1 && $ARGV[3] <= 99;
     my $input = \*STDIN;
     if (@ARGV == 6) { open($input, '<', $ARGV[5]) or fail('Cannot open spool file'); }
@@ -183,14 +218,8 @@ sub main {
     $socket = IO::Socket::INET->new(PeerAddr => $host, PeerPort => ($port || 9100), Proto => 'tcp', Timeout => 70)
         or fail('Cannot connect to ESP');
     $socket->autoflush(1);
-    for (1..$ARGV[3]) {
-        my $number = 0;
-        for my $page (@pages) {
-            print STDERR 'INFO: Sending page ', ++$number, '/', scalar(@pages), "\n";
-            print_page(@$page);
-            print STDERR "PAGE: $number 1\n";
-        }
-    }
+    my @plan = plan_pages(\@pages, $ARGV[3], $duplex, $collate);
+    print_pages(@plan);
     close($socket);
 }
 eval { main(); 1 } or do { print STDERR 'ERROR: ', ($@ || 'Unknown print failure'); exit 4; };

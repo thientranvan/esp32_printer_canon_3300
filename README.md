@@ -7,15 +7,32 @@ Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 - Windows 10/11 x64: cài driver Canon LBP3300 chính thức trước, tải [bộ cài PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị. Chọn **Canon LBP3300 (ESP32 LAN)** trong ứng dụng.
 - macOS: cài driver Canon CAPT tương thích, tải/clone repo rồi chạy `sudo sh install_mac.sh`. Xem hướng dẫn macOS bên dưới.
 - ESP: mở http://192.168.1.199 để xem trạng thái, tải bộ cài và sao chép lệnh hiện tại. Các đường dẫn `/setup/*.ps1` cũ chuyển hướng sang GitHub; firmware không nhúng bộ cài.
-- Hiện hỗ trợ A4, một mặt, cassette 1. Mỗi máy chạy cầu nối riêng; ESP giữ USB, không cần máy trung gian bật cố định.
+- Hiện hỗ trợ A4, cassette 1, một/hai mặt cạnh dài hoặc ngắn, ngang/dọc và nhiều trang trên một mặt qua driver/ứng dụng. Mỗi máy chạy cầu nối riêng; ESP giữ USB, không cần máy trung gian bật cố định.
 
 Chẩn đoán: [script](installers/esp32-printer-diagnostics.ps1) nhận `-Token` từ trang ESP đã đăng nhập; token đổi khi ESP khởi động lại. Hỗ trợ từ xa: [script](installers/esp32-printer-remote-v3.ps1) hỏi IP và khóa công khai máy hỗ trợ, chỉ dành cho quản trị có chủ đích; không cần cho việc in.
+
+## Tùy chọn in đã triển khai
+
+Windows giữ renderer Canon gốc và các hộp thoại của nó. Chọn **Printing Preferences / Printer Properties** để chọn một/hai mặt, cạnh lật, ngang/dọc; dàn nhiều trang trên một mặt trong Word/Chrome hoặc Page Layout của driver. Không chọn đồng thời N-up ở cả ứng dụng và driver nếu không muốn thu nhỏ hai lần.
+
+Mac: trong mục Canon chọn **Print Style / CNDuplex** và **Binding Location / BindEdge**; Pages per Sheet và Orientation ở hộp thoại in. Ví dụ CUPS: `lp -d Canon_LBP3300_ESP32 -o CNDuplex=True -o BindEdge=Left document.pdf` (cạnh dài), `BindEdge=Top` (cạnh ngắn). Backend từ chối `sides=two-sided-*` đơn lẻ để tránh driver chưa xoay mặt sau; dùng tùy chọn Canon tương ứng. N-up và chiều trang do renderer dựng vào raster, không do ESP bố trí lại.
+
+Kết quả máy thật, 2026-10-22:
+
+- Windows long-edge: ba trang, hai tờ; người dùng xác nhận trang 1–2 trên hai mặt đúng thứ tự/chiều, trang 3 ở tờ riêng.
+- Windows short-edge: ba trang, hai tờ; người dùng xác nhận lật cạnh ngắn đúng chiều.
+- Mac: PDF bốn trang do bộ lọc hệ điều hành dựng, `number-up=2 landscape CNDuplex=True BindEdge=Top`; một tờ hai mặt, mỗi mặt hai trang thu nhỏ, chữ đầy đủ và chiều đúng, người dùng xác nhận. Backend mới đã cài trên Mac này.
+- Một PDF thử viết tay trước đó bị Canon renderer in thành dấu chấm dù xem trước có chữ. Thay bằng PDF do hệ điều hành tạo thì in đầy đủ với cùng backend. Đây chưa phải bằng chứng mọi PDF đầu vào đều tương thích; đường nhận tài liệu trực tiếp từ VPS vẫn cần renderer/chuẩn hóa PDF.
+
+Phát hiện giao thức: header Windows full offset 12 là collation, 16 là duplex (bản cũ đã đọc nhầm). D0A0 full byte 9 bit `0x08` là hướng raster, không phải cờ duplex. Duplex dùng các bit `0x06`: `0x04` cho ảnh mặt sau gửi trước, `0x02` cho ảnh mặt trước; trang lẻ cuối gửi một mặt. Xếp bản không collate lặp theo cặp mặt của từng tờ, không lặp từng ảnh làm hỏng cặp. Raster đã giữ phép xoay cho cạnh dài/ngắn từ driver. Bộ cài cập nhật không ép mặc định của hàng đợi đang có về một mặt nữa.
+
+Giới hạn còn lại: A4/plain/cassette 1, 100 trang nội dung, 20 MiB, 99 bản. Chưa xác minh khổ giấy/khay/media khác, booklet, watermark hoặc mọi mục nâng cao Canon. Không tuyên bố tương đương toàn bộ driver gốc.
 
 ## Build từ repo
 
 Sao chép `station/device_secret.example.h` thành `station/device_secret.h`, đặt mật khẩu riêng (ít nhất 12 ký tự). Không commit file này. Wi-Fi được cấu hình trên thiết bị; không nằm trong repo. Dùng cấu hình Arduino ESP32-S3 và linker flags ghi bên dưới. Không đưa backups, khóa SSH, mật khẩu hoặc firmware chứa mật khẩu lên GitHub.
 
-Bộ cài trên nhánh `main` nhận bản cập nhật mới; có thể dùng URL raw theo commit để cố định phiên bản. In vật lý đã xác nhận trên Mac và Windows qua hàng đợi hệ điều hành. Kiểm tra Word/Chrome bằng hộp thoại in sau bản sửa Windows vẫn cần người dùng xác nhận.
+Bộ cài trên nhánh `main` nhận bản cập nhật mới; có thể dùng URL raw theo commit để cố định phiên bản. In vật lý đã xác nhận trên Mac và Windows qua hàng đợi hệ điều hành. Người dùng đã in ba trang từ Word; các tùy chọn mới được kiểm tra như ghi bên dưới.
 
 ---
 
@@ -395,8 +412,9 @@ sandboxing. Closing unused backend descriptors 3/4 lets the Canon filter fall ba
 to PPD defaults instead of waiting forever for its proprietary backchannel.
 
 Backend validates ALL pages/model/A4/framing before connecting, supports up to
-100 pages / 20 MiB / 99 copies, and selects cassette 1 per page. Duplex is rejected;
-choose one-sided A4. Each page follows the physically validated CAPT sequence.
+100 pages / 20 MiB / 99 copies, and selects cassette 1 per page. Supports A4
+simplex/duplex, keeps one CAPT session for the document and uses the same engine-start
+submission window as Windows. Duplex sheet images are sent back before front.
 A local exclusive lock serializes backend instances. Before printer mutation,
 `/Library/Caches/ESP32Printer/pending.txt` is created; errors keep it and stop the
 CUPS queue (exit 4), preventing automatic retries of uncertain print data.
@@ -425,8 +443,8 @@ Three numbered native Windows queue test pages completed in 17.28 seconds,
 versus 23.65 seconds with the conservative output-based window. User confirmed
 all three final test sheets came out consecutively. These are short-job timings,
 not a rated pages-per-minute benchmark or a measured comparison with direct USB.
-This optimization currently applies to Windows; the Mac backend still uses its
-previous per-page sequence.
+The Mac backend now uses this job session/window too; its physical duplex/N-up
+validation is described below.
 
 Self-test simulates delayed paper exit, requires page three before first output,
 checks one reservation/release and verifies collated/uncollated copy order.
@@ -455,10 +473,10 @@ stdlib .NET bridge with built-in `Add-Type`, validates its self-test, creates ta
 to **127.0.0.1:19100**, not directly to ESP. Listener is loopback-only. The bridge
 sends parsed CAPT to ESP `192.168.1.199:9100`; ESP arbitrates all clients.
 
-Support: A4, simplex, cassette 1, up to 100 pages/20 MiB, 1..99 collated or
+Support: A4, simplex/long-edge duplex/short-edge duplex, cassette 1, up to 100 pages/20 MiB, 1..99 collated or
 uncollated copies. Windows wrapper starts with command 1, 40-byte total length,
 magic `FADEDACE`; copies at full offset 8 (real two-copy capture confirmed),
-simplex mode at 12, collation at 16; command 2 specifies DMPAPER_A4=9. Raster
+collation boolean at 12, duplex mode at 16 (1 simplex, 2 long edge, 3 short edge); command 2 specifies DMPAPER_A4=9. Raster
 uses the same 8200/D0 packets as Mac. Monitorless Windows D0A0 leaves paper/media
 zero; after validating A4 metadata and 2480x3507 raster geometry the bridge sets
 A4=2/plain=1, selects cassette with E1A9 and applies its source to D0A0.
@@ -478,10 +496,11 @@ language-monitor removal. That Windows raster physically printed through ESP
 (user confirmed “ESP32 WINDOWS RENDER TEST”). Then the native Windows queue,
 local bridge and ESP printed **ESP32 WINDOWS LAN BRIDGE TEST**, also physically
 confirmed by user. Native .NET parser self-test covers A4 normalization,
-multipage and malformed/truncated/duplex rejection; real two-copy capture parses
+multipage, malformed/truncated input, invalid duplex modes and duplex sheet ordering; real two-copy capture parses
 as 1 page, 2 copies. Installer rerun succeeded with an empty queue and bridge
-listening again. Real Word/Chrome dialog print after final install remains the
-last application-level check; do not confuse these with earlier failed attempts.
+listening again. User subsequently printed three pages from Word through this queue.
+Automated COM Word layout capture was unavailable in the remote session; do not
+claim that every application/driver finishing option has been verified.
 
 Earlier v1/v2 experiments: invalid `Add-PrinterPort -SNMP 0` prevented port
 creation (0x80070057); omitting it fixed queue creation. But the real Canon
