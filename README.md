@@ -694,3 +694,16 @@ Renderer PDF Ubuntu: [server-renderer/README.md](server-renderer/README.md). Đ�
 Cloud server docs synced 2026-10-22: [server deployment](docs/server-deployment.md).
 Firmware origin corrected to `https://quanly.lophocbinhminh.com`; build/offline checks passed.
 OTA deferred at user request. Real station registration/token and end-to-end cloud print remain pending.
+
+## Trang chủ trạm in — giao diện gọn 22/10/2026
+
+Trang chủ hiển thị tên máy, trạng thái USB/in LAN/in web, tiến độ mặt in, Wi-Fi/IP,
+trạng thái web và ID ESP có nút sao chép. Bộ cài Windows/Mac, cấu hình trạm/cloud,
+đổi Wi-Fi và bảo trì nằm trong các mục thu gọn. CSS nội bộ, không font/CDN/thư viện ngoài.
+Không hiển thị “sẵn sàng in” chỉ dựa vào USB; khi mất kết nối, xóa trạng thái cũ khỏi
+các ô chính. Không ghi đè cấu hình người dùng đang sửa khi cập nhật trạng thái.
+
+Bỏ các khối lệnh hỗ trợ/điều khiển Windows và nội dung chẩn đoán dài khỏi trang chủ;
+các endpoint hỗ trợ cũ vẫn giữ để tương thích công cụ. Chỉ poll `/status` sau khi request
+trước hoàn tất, mỗi 3 giây; không poll `/support/command` nền. Giao diện khoảng 13 KB.
+Kiểm tra offline: `python3 check_home.py` (cần Node), không gửi lệnh in hoặc đổi cấu hình.
