@@ -16,9 +16,9 @@ script = re.search(r'<script>(.*?)</script>', html, re.S)[1].replace('}refresh()
 check = r'''
 const assert=require('assert');
 const input=JSON.parse(require('fs').readFileSync(0,'utf8'));
-const nodes=Object.fromEntries(input.ids.map(id=>[id,{textContent:'',value:'',hidden:false,dataset:{},removeAttribute(k){delete this[k]},addEventListener(){},focus(){},select(){}}]));
+const nodes=Object.fromEntries(input.ids.map(id=>[id,{textContent:'',value:'',hidden:false,dataset:{},removeAttribute(k){delete this[k]},addEventListener(){},focus(){},select(){},children:[],replaceChildren(){this.children=[]},append(item){this.children.push(item)}}]));
 const button={disabled:true},link={addEventListener(){}};
-const document={getElementById(id){assert(nodes[id],'Unknown ID '+id);return nodes[id]},querySelector(s){return s==='[data-config]'?button:link},execCommand(){return false}};
+const document={createElement(){return {textContent:'',children:[],append(item){this.children.push(item)},addEventListener(){}}},getElementById(id){assert(nodes[id],'Unknown ID '+id);return nodes[id]},querySelector(s){return s==='[data-config]'?button:link},execCommand(){return false}};
 let status={support_command:'Start-Service sshd',capt:{fresh:true,age_ms:1000},healthy:true,station:{name:'Máy 1'},connected:true,ssid:'Wi-Fi',ip:'192.168.1.199',rssi:-50,network:{ip:'192.168.1.199',gateway:'192.168.1.1',mask:'255.255.255.0',dns:'192.168.1.1'},usb:{installed:true,connected:true,responsive:true,error:0,details:'Canon LBP3300'},cloud:{enabled:false,state:'disabled',error:'',total:0,completed:0},tcp:{state:0,error:0,total:0,completed:0},uptime:100,flash:16777216,psram:8388608};
 let offline=false;
 const refresh=new Function('document','fetch','setTimeout',input.script+';return refresh;')(document,async()=>{if(offline)throw Error();return {ok:true,json:async()=>status}},()=>{});
@@ -28,6 +28,9 @@ const refresh=new Function('document','fetch','setTimeout',input.script+';return
  status.tcp.state=0;status.cloud={enabled:true,state:'printing',total:4,completed:2,progress_known:true};await refresh();assert.equal(nodes.printer.textContent,'Đang in từ web');assert.equal(nodes.progress.value,2);
  status.cloud.state='uncertain';await refresh();assert.equal(nodes.resolve.hidden,false);
  status.capt={fresh:true,service_error:true,service_code:'E100 0000',age_ms:100};await refresh();assert.equal(nodes.printer.textContent,'E100 0000');
+ status.server_queue={supported:true,age_ms:100,revision:'rev-1',items:[{id:'web-1',title:'<script>test</script>',state:'queued'}]};status.queue_command={id:'cmd-1',result:'pending'};
+ await refresh();assert.equal(nodes['server-jobs'].children[0].children[0].textContent,'<script>test</script> · web-1 · queued');assert.equal(nodes['server-jobs'].children[0].children[1].disabled,true);
+ await refresh({job_control:{id:'lan-1',state:'paused',source:'lan',active:true,controllable:true,total:3,completed:1},capt:{fresh:true,age_ms:5}});assert.equal(nodes['job-resume'].disabled,false);assert(nodes['control-state'].textContent.includes('Đã dừng'));assert.equal(nodes.wifi.textContent,'Wi-Fi');
  status.capt.fresh=false;await refresh();assert.equal(nodes.printer.textContent,'Đang đọc trạng thái máy in');
  status.usb.connected=false;status.usb.responsive=false;await refresh();assert.equal(nodes.printer.textContent,'Chưa kết nối máy in');
  offline=true;await refresh();assert.equal(nodes.connection.dataset.tone,'error');assert.equal(nodes.job.hidden,true);assert.equal(nodes.resolve.hidden,true);assert.equal(nodes.printer.textContent,'Chưa có trạng thái mới');

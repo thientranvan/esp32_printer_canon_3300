@@ -70,6 +70,7 @@ String profileJSON() {
 }
 
 #include "cloud_print.h"
+#include "realtime.h"
 
 void connectSaved() {
   WiFiConfig config = {};
@@ -177,7 +178,9 @@ void home() {
 </style></head><body><main>
 <header><div><span class="eyebrow">TRẠM IN WI-FI</span><h1 id="name">Canon LBP3300</h1><span class="meta">Canon LBP3300 · A4 · Khay cassette 1</span></div><span id="connection" class="badge" role="status">Đang kết nối trạm…</span></header>
 <div class="grid">
-<section class="card" aria-labelledby="printer-title"><h2 id="printer-title">Máy in</h2><div id="printer" class="big">Đang đọc trạng thái…</div><p id="printer-note">Tự cập nhật mỗi 3 giây.</p><div id="job" hidden><p id="job-progress"></p><progress id="progress" aria-label="Tiến độ mặt in"></progress></div></section>
+<section class="card" aria-labelledby="printer-title"><h2 id="printer-title">Máy in</h2><div id="printer" class="big">Đang đọc trạng thái…</div><p id="printer-note">Cập nhật trực tiếp theo thay đổi.</p><div id="job" hidden><p id="job-progress"></p><progress id="progress" aria-label="Tiến độ mặt in"></progress></div></section>
+<section class="card wide" aria-labelledby="jobs-title"><h2 id="jobs-title">Lệnh in trên trạm</h2><p id="control-job">Chưa có lệnh in.</p><p id="control-state" role="status"></p><div class="row"><button id="job-pause" onclick="controlJob('pause')" disabled>Dừng sau mặt đang gửi</button><button id="job-resume" onclick="controlJob('resume')" disabled>Tiếp tục gửi</button><button id="job-cancel" onclick="controlJob('cancel')" disabled>Hủy gửi tiếp</button><button id="job-resolve" onclick="resolveJob()" disabled>Đối soát kết quả</button><button id="job-delete" onclick="controlJob('delete')" disabled>Xóa lịch sử trên trạm</button></div><p class="meta">Trang đã vào bộ nhớ máy in vẫn có thể được in. Lệnh chờ chưa gửi từ Windows/Mac nằm trong hàng đợi của máy đó; lệnh web chờ nằm trên server.</p></section>
+<section class="card wide"><h2>Hàng đợi web</h2><p id="queue-note">Chờ dữ liệu server.</p><div id="server-jobs" class="stack"></div></section>
 <section class="card" aria-labelledby="network-title"><h2 id="network-title">Kết nối</h2><p class="meta">Wi-Fi</p><div id="wifi" class="big">Đang đọc…</div><p id="network"></p><p id="cloud">Web: đang đọc…</p></section>
 <section class="card wide"><h2>Đăng ký máy in trên web</h2><label for="station-id">ID ESP</label><div class="row"><input id="station-id" value="__STATION_ID__" readonly><button type="button" onclick="copyField('station-id')">Sao chép ID</button></div><p class="meta">Thêm ID này trên <a href="https://quanly.lophocbinhminh.com/index.php?page=printers" target="_blank" rel="noopener">trang quản lý máy in</a>, lấy token rồi dán vào <a href="#settings">cấu hình trạm</a>.</p></section>
 </div>
@@ -201,9 +204,42 @@ void home() {
 <script>
 const el=id=>document.getElementById(id);let loaded=false;
 function copyField(id){const field=el(id);field.focus();field.select();let ok=false;try{ok=document.execCommand('copy');}catch{}el('feedback').textContent=ok?'Đã sao chép.':'Đã chọn nội dung. Nhấn Ctrl+C hoặc Command+C để sao chép.';}
-const cloudNames={disabled:'Chưa bật',connecting:'Đang kết nối',idle:'Đã kết nối',server_error:'Lỗi kết nối server',downloading:'Đang tải lệnh in',waiting_printer:'Đang chờ máy in',printing:'Đang in',completed:'Đã hoàn tất',failed:'Lệnh in lỗi',uncertain:'Cần kiểm tra kết quả in',resolved:'Đã đối soát',blocked:'Đang bị khóa'};
-async function refresh(){try{
- const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();const s=await r.json(),u=s.usb,c=s.cloud,t=s.tcp;
+const cloudNames={disabled:'Chưa bật',connecting:'Đang kết nối',idle:'Đã kết nối',server_error:'Lỗi kết nối server',downloading:'Đang tải lệnh in',waiting_printer:'Đang chờ máy in',printing:'Đang in',completed:'Đã hoàn tất',failed:'Lệnh in lỗi',uncertain:'Cần kiểm tra kết quả in',resolved:'Đã đối soát',blocked:'Đang bị khóa',paused:'Đã dừng gửi mặt tiếp theo'};
+let cached=null,currentJobId='';
+async function resolveJob(){
+ if(!confirm('Chỉ xác nhận sau khi đã kiểm tra giấy và xử lý công việc dở trên máy in. Không gửi lại job cũ. Tiếp tục?'))return;
+ try{const r=await fetch('/jobs/resolve',{method:'POST',body:new URLSearchParams({token:'__CSRF__',job_id:currentJobId})});el('feedback').textContent=await r.text();refresh();}catch{el('feedback').textContent='Chưa xác nhận đối soát.';}
+}
+async function controlQueuedJob(id,action){
+ if((action==='delete'||action==='cancel')&&!confirm('Gửi yêu cầu '+action+' cho job '+id+'? Server sẽ kiểm tra trạng thái trước khi thực hiện.'))return;
+ try{const r=await fetch('/jobs/queue/control',{method:'POST',body:new URLSearchParams({token:'__CSRF__',job_id:id,action})});el('feedback').textContent=await r.text();}catch{el('feedback').textContent='Chưa gửi được yêu cầu tới trạm.';}
+}
+let queueVersion='';
+function renderQueue(q,cmd){
+ if(!q)return;
+ el('queue-note').textContent=!q.supported?'Server chưa cung cấp API hàng đợi trực tiếp.':q.age_ms>5000?'Dữ liệu hàng đợi đã cũ; không xác nhận trạng thái hiện tại.':(q.truncated?'Chỉ hiện 16 job gần nhất. ':'')+'Cập nhật từ server.';
+ if(cmd&&cmd.id)el('queue-note').textContent+=' Yêu cầu '+cmd.id+': '+cmd.result;
+ const version=JSON.stringify([q.revision,cmd]);if(version===queueVersion)return;queueVersion=version;
+ const container=el('server-jobs');container.replaceChildren();
+ for(const item of q.items||[]){const row=document.createElement('div'),label=document.createElement('p');label.textContent=(item.title||item.id)+' · '+item.id+' · '+item.state;row.append(label);
+  for(const action of ['pause','resume','cancel','delete']){const button=document.createElement('button');button.textContent=({pause:'Dừng',resume:'Tiếp tục',cancel:'Hủy',delete:'Xóa'})[action];button.disabled=q.age_ms>5000||(cmd&&cmd.result==='pending');button.addEventListener('click',()=>controlQueuedJob(item.id,action));row.append(button);}container.append(row);
+ }
+}
+async function controlJob(action){
+ if(!currentJobId)return;
+ if(action==='cancel'&&!confirm('Hủy gửi dữ liệu tiếp theo? Các trang đã vào máy in vẫn có thể ra giấy. Công việc sẽ cần kiểm tra kết quả, không tự in lại.'))return;
+ try{const r=await fetch('/jobs/control',{method:'POST',body:new URLSearchParams({token:'__CSRF__',job_id:currentJobId,action})});el('feedback').textContent=await r.text();if(r.ok)refresh();}catch{el('feedback').textContent='Chưa gửi được yêu cầu; không xác nhận đã thực hiện.';}
+}
+async function refresh(patch=null){try{
+ let s;if(patch&&cached){s={...cached,...patch,usb:{...cached.usb,...patch.usb},tcp:{...cached.tcp,...patch.tcp}};}else{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();s=await r.json();}cached=s;const u=s.usb,c=s.cloud,t=s.tcp;renderQueue(s.server_queue,s.queue_command);
+ const j=s.job_control||{};currentJobId=j.id||'';
+ el('control-job').textContent=j.id?(j.source==='cloud'?'Web':'LAN')+' · '+j.id+' · '+j.completed+' / '+(j.total||'?')+' mặt in':'Chưa có lệnh in trên trạm.';
+ const states={failed:'Chưa gửi dữ liệu in — lỗi trước khi in',printing:'Đang gửi/in',paused:'Đã dừng trước mặt tiếp theo',completed:'Đã hoàn tất',uncertain:'Chưa rõ kết quả — cần kiểm tra máy và giấy',resolved:'Đã đối soát'};
+ const requests={pause_requested:'Đã yêu cầu dừng, chờ bộ gửi xác nhận',resume_requested:'Đã yêu cầu tiếp tục, chờ xác nhận',cancel_requested:'Đã yêu cầu hủy gửi tiếp, chờ xác nhận'};
+ el('control-state').textContent=(states[j.state]||j.state||'')+(j.request?' · '+(requests[j.request]||j.request):'');
+ for(const action of ['pause','resume','cancel'])el('job-'+action).disabled=!(j.active&&j.controllable)||j.request==='cancel_requested';
+ el('job-resolve').disabled=!j.id||j.active||j.state!=='uncertain';
+ el('job-delete').disabled=!j.id||j.active||j.state==='uncertain';
  el('support').hidden=!s.support_command||s.support_command.startsWith('#');el('support-command').value=s.support_command||'';
  el('name').textContent=s.station.name;el('connection').textContent=s.healthy?'Trạm hoạt động':'Trạm cần kiểm tra';el('connection').dataset.tone=s.healthy?'ok':'error';
  el('wifi').textContent=s.connected?s.ssid:s.connecting?'Đang kết nối…':'Chưa kết nối Wi-Fi';el('network').textContent=s.connected?'IP '+s.ip+' · '+s.rssi+' dBm':'Kết nối Wi-Fi để in qua LAN và web.';
@@ -222,7 +258,7 @@ async function refresh(){try{
   }
  }
  el('printer').textContent=title;el('printer-note').textContent=note;
- const active=c.state==='printing'||c.state==='waiting_printer'||c.state==='downloading',lan=t.state===1||t.state===2;
+ const active=c.state==='paused'||c.state==='printing'||c.state==='waiting_printer'||c.state==='downloading',lan=t.state===1||t.state===2;
  el('job').hidden=!(active||lan);const total=active?c.total:t.total,done=active?c.completed:t.completed,known=active?c.progress_known:total>0;
  el('job-progress').textContent=(active?'Web':'LAN')+' · '+(known?done+' / '+total+' mặt in hoàn tất':'Đang xử lý · chưa biết tổng số mặt in');
  el('progress').max=total||1;if(known)el('progress').value=done;else el('progress').removeAttribute('value');
@@ -231,8 +267,13 @@ async function refresh(){try{
  el('diagnostics').textContent=(u.details||'Chưa có thiết bị USB.')+'\nUSB error: '+u.error+' · LAN error: '+t.error;
  el('usb-start').hidden=u.installed;el('resolve').hidden=c.state!=='uncertain';
  }catch{el('connection').textContent='Mất kết nối trạm';el('connection').dataset.tone='error';el('printer').textContent='Chưa có trạng thái mới';el('printer-note').textContent='Đang thử kết nối lại…';el('wifi').textContent='Chưa có trạng thái mới';el('network').textContent='';el('cloud').textContent='Web: chưa có trạng thái mới';el('job').hidden=true;el('resolve').hidden=true;}
- setTimeout(refresh,3000);
+ if(!patch)setTimeout(refresh,1000);
 }refresh();
+if(typeof EventSource!=='undefined'){
+ const events=new EventSource('http://__STATION_IP__:81/events?token=__CSRF__');
+ events.onmessage=e=>{try{refresh(JSON.parse(e.data));}catch{}};
+ events.onerror=()=>{el('feedback').textContent='Luồng trực tiếp đang nối lại; tạm đọc trạng thái mỗi giây.';};
+}
 document.querySelector('a[href="#settings"]').addEventListener('click',()=>{el('settings').open=true;});
 </script></body></html>)HTML";
   page.replace("__CSRF__", csrf);
@@ -367,11 +408,28 @@ void setup() {
     server.sendHeader("Cache-Control", "no-store");
     server.send(windowsReport.length() ? 200 : 404, "text/plain; charset=utf-8", windowsReport);
   });
+  server.on("/jobs/resolve",HTTP_POST,[]{
+    if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    auto j=jobSnapshot();if(j.active||captInUse()||cloudBusy()||!j.matches(server.arg("job_id").c_str())||strcmp(j.state,"uncertain")){server.send(409,"text/plain","Job changed or still busy");return;}
+    if(!strcmp(j.source,"cloud"))cloudResolve.store(true);else jobFinish("resolved");
+    server.send(202,"text/plain; charset=utf-8","Đã nhận xác nhận đối soát; không gửi lại job. Hàng đợi máy gửi vẫn giữ các lệnh chưa xác nhận.");
+  });
+  server.on("/jobs/queue/control",HTTP_POST,[]{
+    if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    if(!submitQueueCommand(server.arg("job_id"),server.arg("action"))){server.send(409,"text/plain; charset=utf-8","Hàng đợi chưa hỗ trợ, dữ liệu đã cũ, ID không hợp lệ hoặc có yêu cầu đang chờ.");return;}
+    server.send(202,"text/plain; charset=utf-8","Đã xếp yêu cầu gửi server; chưa xác nhận đã thực hiện.");
+  });
+  server.on("/jobs/control",HTTP_POST,[]{
+    if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    String id=server.arg("job_id"),action=server.arg("action");
+    if(!cloudIdentifier(id)||!jobCommand(id,action)){server.send(409,"text/plain; charset=utf-8","Không thực hiện: ID đã đổi, lệnh đã kết thúc, cần đối soát hoặc bộ gửi chưa hỗ trợ điều khiển.");return;}
+    server.send(202,"text/plain; charset=utf-8",action=="delete"?"Đã xóa lịch sử trên trạm; không xóa tài liệu ở máy gửi/server.":"Đã nhận yêu cầu; chờ bộ gửi xác nhận. Trang đã vào máy in vẫn có thể được in.");
+  });
   server.on("/printer/status", HTTP_GET, [] {
     IPAddress remote=server.client().remoteIP(),local=WiFi.localIP(),mask=WiFi.subnetMask();
     if(!WiFi.isConnected() || (uint32_t(remote)&uint32_t(mask))!=(uint32_t(local)&uint32_t(mask))){server.send(403,"text/plain","LAN only");return;}
     auto u=readUSB();auto c=cloudSnapshot();bool web=cloudBusy();server.sendHeader("Cache-Control","no-store");
-    server.send(200,"application/json",String("{\"schema\":1,\"connected\":")+(u.connected?"true":"false")+
+    server.send(200,"application/json",String("{\"schema\":1,\"job_control\":")+jobStatusJSON()+",\"connected\":"+(u.connected?"true":"false")+
       ",\"responsive\":"+(u.responsive?"true":"false")+",\"capt\":"+captTelemetryJSON()+
       ",\"active\":"+((captTCPState.load()==2||web)?"true":"false")+",\"total\":"+(web?c.total:captTCPTotal.load())+",\"completed\":"+(web?c.completed:captTCPCompleted.load())+"}");
   });
@@ -433,7 +491,7 @@ void setup() {
   server.on("/status", HTTP_GET, [] {
     if (!authorized()) return;
     USBStatus usb = readUSB();
-    String json = String("{\"station\":") + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
+    String json = String("{\"server_queue\":")+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
       ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
       ",\"connecting\":" + (connecting ? "true" : "false") +
       ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +
@@ -505,6 +563,7 @@ void setup() {
   });
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
+  if(xTaskCreate(realtimeTask,"dashboard-events",12288,nullptr,1,nullptr)!=pdPASS)Serial.println("Dashboard SSE task failed");
   startCloud();
   const esp_reset_reason_t resetReason = esp_reset_reason();
   if (resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||

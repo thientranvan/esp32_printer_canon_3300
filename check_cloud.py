@@ -28,6 +28,7 @@ static int cloudLock=0;
 static struct { unsigned submitted; } cloudView;
 static std::vector<int> flags;
 static void cloudHeartbeat(){}
+static bool cloudCheckpoint(){return true;}
 static void cloudPut16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
 static void cloudPut32(uint8_t *p,uint32_t n){cloudPut16(p,n);cloudPut16(p+2,n>>16);}
 static bool cloudCounters(unsigned *c){c[0]=decoded;c[1]=started;c[2]=completed;c[3]=completed;return true;}
@@ -74,6 +75,9 @@ with tempfile.TemporaryDirectory() as folder:
     binary = str(Path(folder, 'engine'))
     subprocess.run([compiler, *flags, str(cpp), '-o', binary], check=True)
     subprocess.run([binary], check=True)
+    control = str(Path(folder, 'control'))
+    subprocess.run([compiler, *flags, 'check_job_control.cpp', '-o', control], check=True)
+    subprocess.run([control], check=True)
     binary = str(Path(folder, 'parser'))
     subprocess.run([compiler, *flags, 'check_prepared.cpp', '-o', binary], check=True)
     subprocess.run([binary], check=True)

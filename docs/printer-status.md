@@ -161,3 +161,8 @@ Kiểm tra: `powershell -NoProfile -File .\check_windows_status.ps1` trên Windo
 Đã chạy test chọn queue/đổi tên/xung đột và handler UI E100/offline/unknown-total
 trên Windows thật; task UI đang chạy. Chưa kiểm chứng trực quan cửa sổ trên
 màn hình người dùng, chưa in lại vì lỗi E100 và job chưa xác nhận.
+
+Cập nhật tiếp 23/10: [luồng trực tiếp, hàng đợi và điều khiển](realtime-control.md).
+Firmware có SSE local, telemetry HTTPS riêng, job ID và checkpoint control. Server
+production đã nhận E100 cụ thể nhưng còn cần triển khai adapter/push UI trong tài
+liệu bàn giao; không coi giao diện server đã sửa chỉ vì heartbeat đã có dữ liệu.

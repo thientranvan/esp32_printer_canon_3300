@@ -285,7 +285,22 @@ public static class Esp32CaptBridge {
   return result;
  }
  // ponytail: two decoded pages ahead of engine start; validate before enlarging window.
- static void PrintJob(Stream s,Job job,Action<int,string> progress) {
+ static void CheckControl(Stream s,string jobId) {
+  if(jobId==null)return;
+  bool paused=false;
+  while(true){
+   HttpWebRequest request=(HttpWebRequest)WebRequest.Create("http://__STATION_IP__/printer/status");request.Proxy=null;request.Timeout=1200;request.ReadWriteTimeout=1200;
+   string json;using(WebResponse response=request.GetResponse())using(StreamReader reader=new StreamReader(response.GetResponseStream())){char[] data=new char[8193];int n=0,k;while(n<data.Length && (k=reader.Read(data,n,data.Length-n))>0)n+=k;Need(n<=8192,"Job control response too large");json=new string(data,0,n);}
+   Need(json.Contains("\"id\":\""+jobId+"\""),"Active job identity changed; result uncertain");
+   if(json.Contains("\"request\":\"cancel_requested\""))throw new IOException("Operator cancelled submission; buffered pages may still print. Inspect before retry.");
+   if(json.Contains("\"request\":\"resume_requested\"")){Ack(s,0xF003,new byte[]{2});return;}
+   if(!json.Contains("\"request\":\"pause_requested\""))return;
+   if(!paused){Ack(s,0xF003,new byte[]{1});paused=true;}
+   Status(s);Thread.Sleep(250);
+  }
+ }
+ static void PrintJob(Stream s,Job job,Action<int,string> progress,string jobId=null) {
+  if(jobId!=null)Ack(s,0xF002,System.Text.Encoding.UTF8.GetBytes(jobId));
   Ack(s,0xF001,BitConverter.GetBytes(job.Pages.Count*job.Copies));
   byte[] model=Ack(s,0xA1A1,null);Need(model.Length>=4 && U16(model,2)==0x2A94,"Wrong printer model");
   ushort[] counters=Status(s);Need(counters[0]==counters[1] && counters[0]==counters[2] && counters[0]==counters[3],"Printer has an unresolved page");
@@ -295,6 +310,7 @@ public static class Esp32CaptBridge {
   byte[] init=new byte[16];Put32(init,0,0xADEADBEE);Ack(s,0xE0A5,init);
   List<Page> plan=Plan(job);int total=plan.Count;
   for(int number=1;number<=total;number++){
+   CheckControl(s,jobId);
    // Bound decoded pages ahead of engine start, not sheets awaiting output.
    Stopwatch timer=Stopwatch.StartNew();
    while(number>2){counters=Status(s);if(counters[1]>=number-2)break;if(timer.Elapsed.TotalSeconds>60)throw new IOException("Page completion uncertain; inspect printer before retry");Thread.Sleep(200);}
@@ -365,7 +381,7 @@ public static class Esp32CaptBridge {
      }}
      string message=state+" page "+number+" at "+elapsed.Elapsed.TotalSeconds.ToString("F2")+"s";
      File.AppendAllText(file+".progress",message+"\r\n");Note(message);
-    });
+    },Path.GetFileNameWithoutExtension(file));
     File.Delete(Pending);break;
    }catch(Exception e){if(File.Exists(Pending) || e is InvalidDataException)throw;Note("Waiting for ESP: "+e.Message);Thread.Sleep(3000);}
   }

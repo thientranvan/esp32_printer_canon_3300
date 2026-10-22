@@ -1,5 +1,6 @@
 #pragma once
 #include <WiFi.h>
+#include "job_runtime.h"
 
 // ponytail: direct CAPT TCP, one active connection, OS spoolers hold queued jobs.
 // Add a durable ESP spool for independently submitted prepared jobs (VPS path).
@@ -65,6 +66,8 @@ static void captTCPTask(void *) {
     }
     client.setNoDelay(true);
     captTCPTotal.store(0); captTCPCompleted.store(0);
+    bool printJob=false,released=false,cooperative=false,mayPrint=false;char jobId[65]={};
+    snprintf(jobId,sizeof(jobId),"lan-%08lx-%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
     captTCPState.store(1);
     uint32_t waiting = millis();
     bool acquired = false;
@@ -79,12 +82,31 @@ static void captTCPTask(void *) {
         uint16_t opcode = uint16_t(buffer[0]) | (uint16_t(buffer[1]) << 8);
         unsigned length = unsigned(buffer[2]) | (unsigned(buffer[3]) << 8);
         captTCPHeader.store(uint32_t(opcode) | (uint32_t(length) << 16));
+        if(opcode==0xF003) {
+          if(!printJob || !cooperative || length!=5 || !tcpRead(client,buffer+4,1))break;
+          auto j=jobSnapshot();unsigned phase=buffer[4];
+          if(phase==1 && !strcmp(j.request,"pause_requested")){
+            portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"paused");portEXIT_CRITICAL(&jobLock);
+          }else if(phase==2 && !strcmp(j.request,"resume_requested")){
+            portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"printing");currentJob.request[0]=0;portEXIT_CRITICAL(&jobLock);
+          }else break;
+          const uint8_t ack[6]={3,0xF0,6,0,0,1};if(client.write(ack,6)!=6)break;continue;
+        }
+        if(opcode==0xF002) {
+          if(length<5 || length>68 || !tcpRead(client,buffer+4,length-4)){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
+          bool valid=true;for(unsigned i=4;i<length;++i)if(!isalnum(buffer[i]) && buffer[i]!='-' && buffer[i]!='_')valid=false;
+          if(!valid || printJob){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
+          cooperative=true;memcpy(jobId,buffer+4,length-4);jobId[length-4]=0;
+          const uint8_t ack[6]={2,0xF0,6,0,0,1};if(client.write(ack,6)!=6)break;continue;
+        }
         // Optional LAN progress metadata; consumed here, never forwarded to USB.
         if(opcode==0xF001) {
           if(length!=8 || !tcpRead(client,buffer+4,4)) { captTCPError.store(ESP_ERR_INVALID_ARG);break; }
           unsigned total=uint32_t(buffer[4])|(uint32_t(buffer[5])<<8)|(uint32_t(buffer[6])<<16)|(uint32_t(buffer[7])<<24);
           if(!total || total>9900){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
           captTCPTotal.store(total);
+          if(!printJob){if(!strcmp(jobSnapshot().state,"uncertain"))break;jobBegin(jobId,"lan",cooperative);printJob=true;}
+          jobProgress(total,0);
           const uint8_t ack[6]={1,0xF0,6,0,0,1};
           if(client.write(ack,6)!=6)break;
           continue;
@@ -95,6 +117,7 @@ static void captTCPTask(void *) {
             group == 0xD0 || group == 0xE0 || group == 0xE1)) {
           captTCPError.store(ESP_ERR_INVALID_ARG); break;
         }
+        if(printJob && (opcode==0xA3A2 || group==0xC0 || group==0xD0))mayPrint=true;
         unsigned remaining = length - 4;
         int first = min(remaining, 4092U);
         int received = 0;
@@ -123,9 +146,11 @@ static void captTCPTask(void *) {
               captRecordFrame(service,CaptStatus::word(service+2));
           }
         }
-        if(opcode==0xA0A8 && replyLength>=40)captTCPCompleted.store(CaptStatus::decode(buffer).completed);
+        if(opcode==0xA0A8 && replyLength>=40){captTCPCompleted.store(CaptStatus::decode(buffer).completed);if(printJob)jobProgress(captTCPTotal.load(),captTCPCompleted.load());}
+        if(opcode==0xE0A9 && replyLength>=6 && !(buffer[4]&128))released=true;
         if(client.write(buffer,replyLength)!=replyLength)break;
       }
+      if(printJob)jobFinish(released && captTCPCompleted.load()>=captTCPTotal.load()?"completed":mayPrint?"uncertain":"failed");
       releaseCapt(1);
     }
     client.stop();

@@ -32,11 +32,12 @@ static bool cloudIdentifier(const String &s,size_t minimum=1,size_t maximum=64) 
   for(char c:s) if(!isalnum(uint8_t(c)) && c!='-' && c!='_') return false;
   return true;
 }
+#include "server_queue.h"
 static String cloudPath(const String &suffix) { return "/api/print/v1/stations/"+stationID+suffix; }
 static esp_http_client_handle_t cloudClient(const String &path,const String &lease="") {
   String url=String(cloudOrigin)+cloudPath(path);
   esp_http_client_config_t cfg={}; cfg.url=url.c_str(); cfg.crt_bundle_attach=esp_crt_bundle_attach;
-  cfg.timeout_ms=10000; cfg.disable_auto_redirect=true; cfg.buffer_size=2048;
+  cfg.keep_alive_enable=true; cfg.timeout_ms=10000; cfg.disable_auto_redirect=true; cfg.buffer_size=2048;
   auto h=esp_http_client_init(&cfg);
   if(h) {
     String auth="Bearer "+String(stationSettings.cloudToken);
@@ -47,8 +48,8 @@ static esp_http_client_handle_t cloudClient(const String &path,const String &lea
   return h;
 }
 // Bounded bodies, no redirects: a server response never chooses another host/path.
-static int cloudPost(const String &path,const String &body,String &response,const String &lease="") {
-  auto h=cloudClient(path,lease); if(!h)return -1;
+static int cloudPost(const String &path,const String &body,String &response,const String &lease="",esp_http_client_handle_t reusable=nullptr) {
+  auto h=reusable?reusable:cloudClient(path,lease); if(!h)return -1;
   esp_http_client_set_method(h,HTTP_METHOD_POST); esp_http_client_set_header(h,"Content-Type","application/json");
   int status=-1;
   if(esp_http_client_open(h,body.length())==ESP_OK) {
@@ -56,27 +57,61 @@ static int cloudPost(const String &path,const String &body,String &response,cons
     while(offset<body.length()) { int n=esp_http_client_write(h,body.c_str()+offset,body.length()-offset); if(n<=0)break; offset+=n; }
     if(offset==body.length() && esp_http_client_fetch_headers(h)>=0) {
       status=esp_http_client_get_status_code(h); response=""; char b[512];
-      while(response.length()<=4096) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){status=-1;break;} if(!n)break; response.concat(b,n); }
-      if(response.length()>4096)status=-1;
+      while(response.length()<=8192) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){status=-1;break;} if(!n)break; response.concat(b,n); }
+      if(response.length()>8192)status=-1;
     }
   }
-  esp_http_client_close(h);esp_http_client_cleanup(h);
+  if(!reusable){esp_http_client_close(h);esp_http_client_cleanup(h);}else if(status<0)esp_http_client_close(h);
   portENTER_CRITICAL(&cloudLock);cloudView.http=status;portEXIT_CRITICAL(&cloudLock);
   return status;
 }
 static String cloudBoot;
-static uint32_t cloudLastHeartbeat=0;
-static bool cloudHeartbeat(bool force=false) {
-  if(!force && uint32_t(millis()-cloudLastHeartbeat)<5000)return true;
-  cloudLastHeartbeat=millis();auto u=readUSB();
+static std::atomic<bool> cloudOnline{false};
+static std::atomic<uint32_t> cloudCommandSeq{0};
+static std::atomic<int> cloudCommandResult{0};
+static bool cloudHeartbeat(bool force=false) {return cloudOnline.load();}
+static String jobStatusJSON() {
+  auto j=jobSnapshot();
+  return String("{\"id\":")+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
+    ",\"request\":"+jsonString(j.request)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
+    ",\"total\":"+j.total+",\"completed\":"+j.completed+"}";
+}
+static String cloudHeartbeatBody() {
+  auto u=readUSB();
   String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":captTCPState.load()==2?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
   String body="{\"schema\":1,\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
     ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(captTCPState.load()==2?"true":"false")+
-    ",\"total\":"+String(captTCPTotal.load())+",\"completed\":"+String(captTCPCompleted.load())+"},\"cloud\":"+cloudStatusJSON()+"}";
-  String ignored;int code=cloudPost("/heartbeat",body,ignored);
-  return code==204;
+    ",\"total\":"+String(captTCPTotal.load())+",\"completed\":"+String(captTCPCompleted.load())+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON()+",\"queue_command\":"+queueCommandJSON()+"}";
+  return body;
+}
+// Dedicated network task: HTTPS cannot block USB engine/status or local controls.
+static void cloudTelemetryTask(void *) {
+  String previous;uint32_t sent=0,sequence=0;auto h=cloudClient("/heartbeat");
+  if(!h){vTaskDelete(nullptr);return;}
+  esp_http_client_set_timeout_ms(h,1500);
+  while(true) {
+    if(stationSettings.cloudEnabled && WiFi.isConnected() && time(nullptr)>1700000000) {
+      String body=cloudHeartbeatBody();
+      auto *j=cJSON_Parse(body.c_str());
+      if(j){cJSON_DeleteItemFromObject(j,"uptime_s");auto *printer=cJSON_GetObjectItem(j,"printer");auto *capt=cJSON_GetObjectItem(printer,"capt");
+        cJSON_DeleteItemFromObject(capt,"age_ms");auto *cloud=cJSON_GetObjectItem(j,"cloud");cJSON_DeleteItemFromObject(cloud,"http");}
+      char *encoded=j?cJSON_PrintUnformatted(j):nullptr;String key=encoded?String(encoded):String("");free(encoded);cJSON_Delete(j);
+      if(key!=previous || uint32_t(millis()-sent)>=1000) {
+        body.remove(body.length()-1);body+=",\"telemetry_seq\":"+String(++sequence)+",\"command_ack\":{\"seq\":"+String(cloudCommandSeq.load())+",\"result\":"+jsonString(cloudCommandResult.load()==1?"accepted":cloudCommandResult.load()==2?"rejected":"none")+"}}";
+        sent=millis();String response;int code=cloudPost("/heartbeat",body,response,"",h);cloudOnline.store(code==200||code==204);
+        if(code==200){auto *r=cJSON_Parse(response.c_str());updateServerQueue(r);auto *cmd=cJSON_GetObjectItemCaseSensitive(r,"command");
+          String target=cloudText(cmd,"job_id"),action=cloudText(cmd,"action");
+          auto *n=cJSON_GetObjectItemCaseSensitive(cmd,"seq");double seq=cJSON_IsNumber(n)?n->valuedouble:0;
+          if(cloudText(cmd,"boot_id")==cloudBoot && seq>=1 && seq<=2147483647 && seq==uint32_t(seq) && uint32_t(seq)>cloudCommandSeq.load()){
+            bool ok=cloudIdentifier(target)&&jobCommand(target,action);cloudCommandResult.store(ok?1:2);cloudCommandSeq.store(uint32_t(seq));
+          }cJSON_Delete(r);}
+        if(code==200||code==204)previous=key;
+      }
+    }else cloudOnline.store(false);
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
 }
 static bool cloudDownload(const String &id,const String &lease,uint8_t *data,size_t size,const String &expected) {
   auto h=cloudClient("/jobs/"+id+"/data",lease);if(!h)return false;
@@ -130,6 +165,7 @@ static bool cloudCounters(unsigned *c) {
   if(!cloudCommand(0xA0A8) || Prepared::u16(cloudBuffer+2)<40)return false;
   for(int i=0;i<4;++i)c[i]=Prepared::u16(cloudBuffer+18+i*2);
   portENTER_CRITICAL(&cloudLock);cloudView.completed=c[3];portEXIT_CRITICAL(&cloudLock);
+  auto j=jobSnapshot();if(j.active && !strcmp(j.source,"cloud"))jobProgress(j.total,c[3]);
   if(CaptStatus::decode(cloudBuffer).service){cloudCommand(0xA2A2);return false;}
   return true;
 }
@@ -146,6 +182,21 @@ static bool cloudInfo(unsigned id,unsigned stage,unsigned page) {
   b[26]=t.tm_mon;b[27]=t.tm_mday;b[28]=t.tm_hour;b[29]=t.tm_min;b[30]=t.tm_sec;b[31]=1;
   return cloudCommand(0xE1A1,b,sizeof(b));
 }
+// Pause only before the next page. Already buffered pages can still exit.
+static bool cloudCheckpoint() {
+  while(true){
+    auto j=jobSnapshot();
+    if(!strcmp(j.request,"cancel_requested"))return false;
+    if(!strcmp(j.request,"resume_requested")) {
+      portENTER_CRITICAL(&jobLock);if(currentJob.matches(j.id)){currentJob.request[0]=0;strcpy(currentJob.state,"printing");}portEXIT_CRITICAL(&jobLock);
+      cloudState("printing");return true;
+    }
+    if(strcmp(j.request,"pause_requested"))return true;
+    portENTER_CRITICAL(&jobLock);if(currentJob.matches(j.id))strcpy(currentJob.state,"paused");portEXIT_CRITICAL(&jobLock);
+    cloudState("paused");unsigned c[4];if(!cloudCounters(c))return false;
+    jobProgress(j.total,c[3]);vTaskDelay(pdMS_TO_TICKS(250));
+  }
+}
 static bool cloudPrint(const Prepared::Job &job) {
   if(!cloudCommand(0xA1A1) || Prepared::u16(cloudBuffer+2)<8 || Prepared::u16(cloudBuffer+6)!=0x2A94)return false;
   unsigned c[4];if(!cloudCounters(c)||c[0]!=c[1]||c[0]!=c[2]||c[0]!=c[3])return false;
@@ -156,6 +207,7 @@ static bool cloudPrint(const Prepared::Job &job) {
   if(!cloudInfo(id,1,0)||!cloudCommand(0xE0A3)||!cloudCommand(0xE0A2)||!cloudCommand(0xE0A4)||!cloudCommand(0xE0A5,init,16))return false;
   unsigned number=0;
   for(auto side:job.plan) {
+    if(!cloudCheckpoint())return false;
     ++number;if(number>2 && !cloudWait(1,number-2,60000))return false;
     const auto &page=job.pages[side.page];uint8_t params[64];memcpy(params,page.parameters,64);
     params[8]=2;params[9]=(params[9]&~6)|side.flag;params[10]=1;params[40]=1;
@@ -190,9 +242,9 @@ static void cloudTask(void *) {
     auto total=cJSON_GetObjectItem(j,"total"),completed=cJSON_GetObjectItem(j,"completed");
     portENTER_CRITICAL(&cloudLock);strlcpy(cloudView.job,id.c_str(),sizeof(cloudView.job));
     cloudView.progressKnown=state=="completed";cloudView.total=cJSON_IsNumber(total)?total->valueint:0;cloudView.completed=cJSON_IsNumber(completed)?completed->valueint:0;portEXIT_CRITICAL(&cloudLock);
-    cloudNeedsInspection.store(state=="uncertain");cJSON_Delete(j);
+    cloudNeedsInspection.store(state=="uncertain");jobBegin(id.c_str(),"cloud");jobFinish(state.c_str());cJSON_Delete(j);
   }
-  cloudBoot=String(esp_random(),HEX)+String(esp_random(),HEX);configTime(0,0,"pool.ntp.org","time.google.com");
+
   unsigned failures=0;
   while(true) {
     if(!stationSettings.cloudEnabled){vTaskDelay(pdMS_TO_TICKS(1500));continue;}
@@ -203,7 +255,7 @@ static void cloudTask(void *) {
     failures=0;
     if(id.length()) {
       if(state=="uncertain" && cloudResolve.exchange(false)) {
-        cloudNeedsInspection.store(false);state="resolved";error="Operator inspected printer; no automatic reprint";
+        cloudNeedsInspection.store(false);jobFinish("resolved");state="resolved";error="Operator inspected printer; no automatic reprint";
         if(!persist()){cloudState("blocked","Cannot persist resolution");vTaskDelete(nullptr);return;}
       }
       auto v=cloudSnapshot();String response;
@@ -214,7 +266,7 @@ static void cloudTask(void *) {
         id="";lease="";state="";error="";
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
-    }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load()) {
+    }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain")) {
       String response;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256");
@@ -238,8 +290,10 @@ static void cloudTask(void *) {
           portENTER_CRITICAL(&cloudLock);cloudView.total=job.plan.size();cloudView.progressKnown=true;portEXIT_CRITICAL(&cloudLock);
           cloudNeedsInspection.store(true);state="uncertain";error="USB submission may have started; inspect before reprinting";
           if(!persist()){free(data);releaseCapt(CloudOwner);cloudState("blocked","Cannot persist before USB");vTaskDelete(nullptr);return;}
+          jobBegin(id.c_str(),"cloud",true);jobProgress(job.plan.size(),0);
           cloudState("printing");bool done=cloudPrint(job);
           if(done){cloudNeedsInspection.store(false);state="completed";error="";}
+          jobFinish(done?"completed":"uncertain");
           releaseCapt(CloudOwner);
         }else {state="failed";error="Download, checksum, memory or format validation failed; no pages sent";}
         free(data);
@@ -247,7 +301,7 @@ static void cloudTask(void *) {
         cloudWorking.store(false);
       }else if(code!=204)cloudState("server_error","Claim failed; see HTTP code");
     }
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
 static constexpr uint32_t CaptStatusOwner=0xFFFFFFFD;
@@ -265,12 +319,15 @@ static void captStatusTask(void *) {
       }
       releaseCapt(CaptStatusOwner);
     }
-    vTaskDelay(pdMS_TO_TICKS(1500));
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
 static void startCloud() {
+  restoreQueueCommand();
   if(healthy && xTaskCreate(captStatusTask,"printer-status",8192,nullptr,1,nullptr)!=pdPASS)Serial.println("CAPT status task failed");
   if(!stationSettings.cloudEnabled)return;
   if(!healthy){cloudState("blocked","Station self-test failed");return;}
+  cloudBoot=String(esp_random(),HEX)+String(esp_random(),HEX);configTime(0,0,"pool.ntp.org","time.google.com");
+  if(xTaskCreate(cloudTelemetryTask,"print-telemetry",12288,nullptr,1,nullptr)!=pdPASS){cloudState("blocked","Cannot start telemetry");return;}
   if(xTaskCreate(cloudTask,"print-cloud",16384,nullptr,1,nullptr)!=pdPASS)cloudState("blocked","Cannot start cloud task");
 }

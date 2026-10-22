@@ -259,3 +259,11 @@ C0A4/trailer Windows không nằm trong phần bands. Bộ chuyển mẫu và va
 Kiểm tra offline repo: `python3 check_cloud.py`, `python3 check_installers.py`.
 Chưa thử ba bo thật đồng thời hoặc server cloud thật; không đánh dấu nghiệm thu trước
 khi đủ renderer, API và lượt in vật lý từ mạng bên ngoài.
+
+## Bổ sung ngày 23/10/2026
+
+Xem [trạng thái trực tiếp và điều khiển job](realtime-control.md) cho telemetry task
+độc lập, SSE, job ID/ACK, điều khiển tại checkpoint và adapter hàng đợi VPS.
+Phần bổ sung thay giới hạn hủy trước claim của v1 đối với **client mới có capability**;
+không biến cancel thành cam kết đã xóa trang trong bộ nhớ máy in. Giữ nguyên journal,
+lease, kết quả uncertain và quy tắc không tự phát lại.
