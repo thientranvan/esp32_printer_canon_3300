@@ -22,6 +22,12 @@ assert "/opt/homebrew" not in mac and "Canon_LBP3300_1.ppd" not in mac, "Fresh M
 subprocess.run(["/bin/sh", "-n", "install_mac.sh"], check=True)
 windows = Path("installers/esp32-printer-setup-v3.ps1").read_text()
 assert windows.index("Resolve existing jobs") < windows.index("$source=Get-CimInstance"), "Check active queue before installing drivers"
+assert '"ESP32Printer\\Stations\\$stationId"' in windows
+assert '$taskName="ESP32CaptBridge-$stationId"' in windows
+assert 'IPAddress.Loopback,__LOCAL_PORT__' in windows and 'c.BeginConnect("__STATION_IP__",9100' in windows
+assert '-StationIP __STATION_IP__' in source and '"$capt_installer" __STATION_IP__' in source
+assert '/setup/profile.json' in windows and '/setup/profile.json' in mac
+assert 'cache_dir="$cache_dir/$id"' in mac and '-v "$uri"' in mac
 assert "Add-PrinterDriver -Name 'Canon LBP3300' -InfPath $package.OriginalFileName" in windows
 if len(sys.argv) == 2:
     folder = Path(sys.argv[1])

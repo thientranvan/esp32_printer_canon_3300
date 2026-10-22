@@ -32,12 +32,12 @@ else:
 assert isinstance(status["usb"]["physical_link"], bool), status
 assert isinstance(status["usb"]["connected"], bool) and isinstance(status["usb"]["details"], str), status
 if status["connected"]:
-    assert status["ssid"] and status["ip"] == "192.168.1.199", status
+    assert status["ssid"] and status["ip"] == status["network"]["ip"], status
 with client.open(base + "/", timeout=10) as response:
     assert 'name="token"' in response.read().decode()
 with client.open(base + "/support/command", timeout=10) as response:
     assert isinstance(json.load(response)["command"], str)
-for path in ("/wifi", "/usb/start", "/printer/command", "/printer/release", "/support/command"):
+for path in ("/station", "/cloud/resolve", "/wifi", "/usb/start", "/printer/command", "/printer/release", "/support/command"):
     try:
         client.open(urllib.request.Request(base + path, data=b"ssid=test&password=12345678&token=wrong"), timeout=10)
         raise AssertionError("Invalid CSRF token accepted: " + path)

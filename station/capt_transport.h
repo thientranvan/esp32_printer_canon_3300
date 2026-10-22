@@ -15,14 +15,31 @@ struct CaptCommand {
   usb_transfer_t *transfer = nullptr;
 };
 static CaptCommand captCommand;
+static portMUX_TYPE captTelemetryLock=portMUX_INITIALIZER_UNLOCKED;
+static uint8_t captRawStatus[64]={};
+static size_t captRawSize=0;
+static uint32_t captRawAt=0;
+static String captTelemetryJSON() {
+  uint8_t data[64];size_t size;uint32_t at;
+  portENTER_CRITICAL(&captTelemetryLock);size=captRawSize;at=captRawAt;memcpy(data,captRawStatus,size);portEXIT_CRITICAL(&captTelemetryLock);
+  String hex;const char *digits="0123456789abcdef";
+  for(size_t i=0;i<size;++i){hex+=digits[data[i]>>4];hex+=digits[data[i]&15];}
+  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+"}";
+}
+
 static portMUX_TYPE captOwnerLock = portMUX_INITIALIZER_UNLOCKED;
+static constexpr uint32_t CaptCloudOwner=0xFFFFFFFE;
 static uint32_t captOwner = 0; // 1 = TCP session; >=2 = authenticated HTTP client
 static uint32_t captOwnerAt = 0;
+
+static bool captInUse() {
+  portENTER_CRITICAL(&captOwnerLock); bool used=captOwner!=0; portEXIT_CRITICAL(&captOwnerLock); return used;
+}
 
 static bool claimCapt(uint32_t owner) {
   portENTER_CRITICAL(&captOwnerLock);
   int state = captCommand.state.load();
-  if (captOwner >= 2 && uint32_t(millis() - captOwnerAt) >= 30000 && (state == 0 || state == 3))
+  if (captOwner >= 2 && captOwner != CaptCloudOwner && uint32_t(millis() - captOwnerAt) >= 30000 && (state == 0 || state == 3))
     captOwner = 0;
   bool acquired = owner && (!captOwner || captOwner == owner);
   if (acquired) { captOwner = owner; captOwnerAt = millis(); }
@@ -84,6 +101,10 @@ static void serviceCapt(USBContext &context) {
         if (command.input) {
           command.received = transfer->actual_num_bytes;
           memcpy(command.data, transfer->data_buffer, command.received);
+          if(command.received>=40 && command.data[0]==0xA8 && command.data[1]==0xA0) {
+            portENTER_CRITICAL(&captTelemetryLock);captRawSize=min(size_t(command.received),sizeof(captRawStatus));
+            memcpy(captRawStatus,command.data,captRawSize);captRawAt=millis();portEXIT_CRITICAL(&captTelemetryLock);
+          }
         } else if (transfer->actual_num_bytes != command.size) command.error = ESP_ERR_INVALID_SIZE;
       }
     }

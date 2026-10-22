@@ -4,12 +4,60 @@ Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
 ## Cài đặt nhanh
 
-- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn **Canon LBP3300 (ESP32 LAN)** trong ứng dụng.
+- Windows 10/11 x64, kể cả máy trắng: tải [bộ cài đầy đủ PowerShell](installers/esp32-printer-setup-v3.ps1), chạy bằng PowerShell quản trị và dùng IP/tên trạm như mục nhiều trạm bên dưới. Nếu chưa có CAPT, bộ cài tự tải gói Canon chính thức 3.30 x64, xác minh rồi cài driver trước khi tạo máy in LAN. Chọn **Canon LBP3300 (ESP32 LAN)** trong ứng dụng.
 - macOS: tải riêng [install_mac.sh](install_mac.sh), chạy `sudo sh install_mac.sh`. Không cần Python, clone repo hay có sẵn hàng đợi USB. Thiếu driver sẽ tự tải và cài gói Canon CAPT 10.0.10; thiếu backend sẽ tải bản đã cố định SHA-256 từ GitHub.
 - ESP: mở http://192.168.1.199 để xem trạng thái, tải bộ cài và sao chép lệnh hiện tại. Các đường dẫn `/setup/*.ps1` cũ chuyển hướng sang GitHub; firmware không nhúng bộ cài.
 - Hiện hỗ trợ A4, cassette 1, một/hai mặt cạnh dài hoặc ngắn, ngang/dọc và nhiều trang trên một mặt qua driver/ứng dụng. Mỗi máy chạy cầu nối riêng; ESP giữ USB, không cần máy trung gian bật cố định.
 
 Chẩn đoán: [script](installers/esp32-printer-diagnostics.ps1) nhận `-Token` từ trang ESP đã đăng nhập; token đổi khi ESP khởi động lại. Hỗ trợ từ xa: [script](installers/esp32-printer-remote-v3.ps1) hỏi IP và khóa công khai máy hỗ trợ, chỉ dành cho quản trị có chủ đích; không cần cho việc in.
+
+## Nhiều trạm và in từ web
+
+Mở trang quản trị của từng ESP, mục **Cấu hình trạm in**, đặt tên/IP riêng:
+
+| Tên | IP |
+| --- | --- |
+| Phòng 1 | 192.168.1.199 |
+| Phòng 2 | 192.168.1.200 |
+| Phòng 3 | 192.168.1.201 |
+
+ID tự lấy từ MAC, không đổi theo tên/IP. Cấu hình lưu NVS, áp dụng sau reboot.
+Mỗi bo mới cần cấu hình riêng qua Wi-Fi AP `ESP32-Printer-<6 ký tự MAC cuối>`
+tại `http://192.168.4.1`; đừng đưa cả ba bo mặc định .199 vào cùng LAN trước khi đổi IP.
+Gateway/subnet/DNS sửa được; cần dành địa chỉ trên router để tránh trùng DHCP.
+
+Trên từng PC/Mac, mở đúng trang IP của phòng, tải bộ cài và sao chép lệnh ngay trên
+trang. Lệnh đã chứa đúng IP; bộ cài đọc ID/tên từ `/setup/profile.json` của ESP đó
+trước khi thay đổi máy tính. Có thể chỉ định tên khác khi cài:
+
+```powershell
+.\esp32-printer-setup-v3.ps1 -StationIP 192.168.1.200 -PrinterName "Phòng 2"
+```
+
+```sh
+sudo sh install_mac.sh 192.168.1.200 'Phòng 2'
+```
+
+Không truyền tham số: hỏi IP rồi lấy tên từ trạm. Một máy cài được cả ba phòng.
+Windows dùng thư mục/task/mutex/port riêng theo station ID, port loopback 19101..19200;
+Mac dùng queue và cache/pending/lock riêng theo ID. Driver Canon dùng chung.
+Đổi IP: cài lại cùng ID để cập nhật địa chỉ, không cần sửa firmware/code.
+Đổi tên Windows bằng bộ cài sẽ tạo hàng đợi mang tên mới, hàng đợi cũ được giữ nguyên;
+Mac giữ queue ID và cập nhật tên hiển thị. Hàng đợi legacy “Canon LBP3300 (ESP32 LAN)”
+không tự xóa; vẫn dùng .199, cache/task cũ và cần dọn thủ công sau khi hết việc nếu không dùng nữa.
+
+Firmware đã có client HTTPS chủ động tới `quanly.lophochinhminh.com`, heartbeat,
+claim, tải prepared CAPT <=4 MiB, kiểm tra checksum, gửi USB và journal chống tự in lặp.
+Cloud mặc định tắt, cần token riêng mỗi trạm từ server. In LAN vẫn độc lập server.
+**Chưa có endpoint/dashboard/worker render trên server; chưa thể in tài liệu từ web thật.**
+Dev server triển khai theo [contract đầy đủ](docs/server-contract.md), không cần mở
+port router. ESP không chuyển PDF/Word sang CAPT; renderer phía server là bắt buộc.
+Không sửa server trong phiên này (SSH `binhminh` chưa xác thực được).
+
+Kiểm tra mới: `python3 check_cloud.py` kiểm tra parser, chuẩn hóa capture và mô phỏng
+engine C++ thực tế; `python3 check_installers.py` kiểm tra bộ cài. Chưa nghiệm thu
+ba bo đồng thời hay cloud đầu-cuối. Trạng thái hỗ trợ USB/phản hồi/phiên LAN/cloud,
+ảnh in đã hoàn tất/tổng; chưa giải mã đầy đủ cảm biến kẹt giấy/toner của CAPT.
 
 ## Bộ cài đầy đủ, kể cả máy chưa có driver
 
@@ -504,7 +552,7 @@ CNAB5 Monitor**. The official USB driver/queues remain intact. It compiles the
 stdlib .NET bridge with built-in `Add-Type`, validates its self-test, creates task
 `ESP32CaptBridge` (SYSTEM, starts with Windows), and adds/updates queue
 **Canon LBP3300 (ESP32 LAN)** on Standard TCP/IP port `ESP32_LOCAL_19100` pointing
-to **127.0.0.1:19100**, not directly to ESP. Listener is loopback-only. The bridge
+to **127.0.0.1:19100**, not directly to ESP. (Legacy layout; new per-station installers use ports 19101..19200.) Listener is loopback-only. The bridge
 sends parsed CAPT to ESP `192.168.1.199:9100`; ESP arbitrates all clients.
 
 Support: A4, simplex/long-edge duplex/short-edge duplex, cassette 1, up to 100 pages/20 MiB, 1..99 collated or

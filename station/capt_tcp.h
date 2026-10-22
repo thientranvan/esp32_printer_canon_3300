@@ -4,6 +4,7 @@
 // ponytail: direct CAPT TCP, one active connection, OS spoolers hold queued jobs.
 // Add a durable ESP spool for independently submitted prepared jobs (VPS path).
 static WiFiServer captServer(9100);
+static std::atomic<unsigned> captTCPTotal{0}, captTCPCompleted{0};
 static std::atomic<int> captTCPState{0}; // 0 idle, 1 waiting for USB owner, 2 active
 static std::atomic<int> captTCPError{0};
 static std::atomic<uint32_t> captTCPHeader{0};
@@ -63,6 +64,7 @@ static void captTCPTask(void *) {
       client.stop(); continue;
     }
     client.setNoDelay(true);
+    captTCPTotal.store(0); captTCPCompleted.store(0);
     captTCPState.store(1);
     uint32_t waiting = millis();
     bool acquired = false;
@@ -77,6 +79,16 @@ static void captTCPTask(void *) {
         uint16_t opcode = uint16_t(buffer[0]) | (uint16_t(buffer[1]) << 8);
         unsigned length = unsigned(buffer[2]) | (unsigned(buffer[3]) << 8);
         captTCPHeader.store(uint32_t(opcode) | (uint32_t(length) << 16));
+        // Optional LAN progress metadata; consumed here, never forwarded to USB.
+        if(opcode==0xF001) {
+          if(length!=8 || !tcpRead(client,buffer+4,4)) { captTCPError.store(ESP_ERR_INVALID_ARG);break; }
+          unsigned total=uint32_t(buffer[4])|(uint32_t(buffer[5])<<8)|(uint32_t(buffer[6])<<16)|(uint32_t(buffer[7])<<24);
+          if(!total || total>9900){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
+          captTCPTotal.store(total);
+          const uint8_t ack[6]={1,0xF0,6,0,0,1};
+          if(client.write(ack,6)!=6)break;
+          continue;
+        }
         // CAPT commands occupy A0/A1/A2/A3, C0/D0 and E0/E1 namespaces.
         unsigned group = opcode >> 8;
         if (length < 4 || !((group >= 0xA0 && group <= 0xA3) || group == 0xC0 ||
@@ -103,6 +115,7 @@ static void captTCPTask(void *) {
         if (replyOpcode != opcode || replyLength < unsigned(received) || replyLength > 4096) {
           captTCPError.store(ESP_ERR_INVALID_RESPONSE); break;
         }
+        if(opcode==0xA0A8 && received>=26)captTCPCompleted.store(unsigned(buffer[24])|(unsigned(buffer[25])<<8));
         if (client.write(buffer, received) != size_t(received)) break;
         unsigned sent = received;
         while (sent < replyLength) {

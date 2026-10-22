@@ -8,19 +8,37 @@ fi
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 target_dir=/Library/Printers/ESP32Printer
 cache_dir=/Library/Caches/ESP32Printer
+host=${1:-}
+if [ -z "$host" ]; then printf 'ESP IPv4 address: '; IFS= read -r host; fi
+/usr/bin/perl -e 'exit !($ARGV[0] =~ /\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/ && !grep { $_ > 255 } split /\./, $ARGV[0])' "$host" || { echo 'Invalid IPv4 address.' >&2; exit 1; }
+profile=$(/usr/bin/mktemp)
+trap '/bin/rm -f "$profile"' EXIT
+/usr/bin/curl --fail --silent --show-error --noproxy '*' --connect-timeout 10 --max-time 15 "http://$host/setup/profile.json" -o "$profile"
+id=$(/usr/bin/plutil -extract id raw -o - "$profile")
+name=${2:-$(/usr/bin/plutil -extract name raw -o - "$profile")}
+/usr/bin/perl -e 'exit !($ARGV[0] =~ /\Aesp32-[0-9a-f]{12}\z/ && length($ARGV[1]) && length($ARGV[1]) <= 192 && $ARGV[1] !~ /[\x00-\x1f\x7f\\\/";]/)' "$id" "$name" || { echo 'Invalid station ID/name.' >&2; exit 1; }
+[ "$(/usr/bin/plutil -extract schema raw -o - "$profile")" = 1 ]
+[ "$(/usr/bin/plutil -extract model raw -o - "$profile")" = LBP3300 ]
+[ "$(/usr/bin/plutil -extract ip raw -o - "$profile")" = "$host" ]
+/bin/rm -f "$profile"
+trap - EXIT
+queue=ESP32_$(printf '%s' "$id" | /usr/bin/tr -d '-')
+cache_dir="$cache_dir/$id"
+uri="esp32capt://$host:9100/$id"
+printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=46abdfc67f578dc630ae1a63ae8ee7258434a46f0173cd700542ba7dc8634870
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/db841d759aafb762096b5630f5d4c4bb8d054840/mac_backend.pl
-jobs=$(/usr/bin/lpstat -W not-completed -o Canon_LBP3300_ESP32 2>/dev/null || true)
+backend_sha=dc4005e054e78c33e6d7e1cc966171454ff787a27482236f4d7fde49e06b4ad8
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/548e52dbba96c3061620f3bbe4f4db6bdae9bd27/mac_backend.pl
+jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
   exit 1
 fi
-current_uri=$(/usr/bin/lpstat -v Canon_LBP3300_ESP32 2>/dev/null || true)
+current_uri=$(/usr/bin/lpstat -v "$queue" 2>/dev/null || true)
 if [ -n "$current_uri" ]; then
   case "$current_uri" in
-    *'esp32capt://192.168.1.199:9100') ;;
+    *"esp32capt://"*":9100/$id") ;;
     *) echo 'Existing printer name has a different device URI; installation stopped.' >&2; exit 1 ;;
   esac
 fi
@@ -86,9 +104,11 @@ fi
 printf '#!/bin/sh\nexec /usr/bin/perl %s/mac_backend.pl "$@"\n' "$target_dir" > "$work/esp32capt"
 /usr/bin/install -m 700 "$work/esp32capt" /usr/libexec/cups/backend/esp32capt
 if [ -z "$current_uri" ]; then
-  /usr/sbin/lpadmin -p Canon_LBP3300_ESP32 -E \
-    -v esp32capt://192.168.1.199:9100 -P "$target_dir/Canon_ESP32.ppd" \
-    -D 'Canon LBP3300 (ESP32 LAN)' -L 'ESP32 192.168.1.199' \
+  /usr/sbin/lpadmin -p "$queue" -E \
+    -v "$uri" -P "$target_dir/Canon_ESP32.ppd" \
+    -D "$name" -L "ESP32 $host" \
     -o printer-is-shared=false -o printer-error-policy=stop-printer
+else
+  /usr/sbin/lpadmin -p "$queue" -v "$uri" -D "$name"
 fi
-echo 'Installed: Canon LBP3300 (ESP32 LAN). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog.'
+echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."

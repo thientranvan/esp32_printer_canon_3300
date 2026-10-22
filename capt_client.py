@@ -15,7 +15,7 @@ import urllib.request
 class CaptClient:
     def __init__(self, base="http://192.168.1.199"):
         self.base = base.rstrip("/")
-        self.session = secrets.randbelow(0xFFFFFFFD) + 2
+        self.session = secrets.randbelow(0xFFFFFFFC) + 2
         password = re.search(r'"([0-9a-f]+)"', Path(__file__).with_name("station").joinpath("device_secret.h").read_text())[1]
         self.headers = {"Authorization": "Basic " + base64.b64encode(("admin:" + password).encode()).decode()}
         page = self.request("/").decode()

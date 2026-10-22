@@ -14,6 +14,15 @@
 WebServer server(80);
 Preferences prefs;
 String csrf;
+String stationID, stationName = "Phòng 1";
+IPAddress stationIP(192,168,1,199), stationGateway(192,168,1,1), stationMask(255,255,255,0), stationDNS(192,168,1,1);
+struct StationSettings {
+  uint32_t version;
+  char name[193], ip[16], gateway[16], mask[16], dns[16], cloudToken[97];
+  bool cloudEnabled;
+};
+StationSettings stationSettings = {};
+
 bool healthy = false;
 bool uploadOK = false;
 uint32_t rebootAt = 0;
@@ -37,6 +46,29 @@ String jsonString(const String &value) {
   }
   return result + "\"";
 }
+
+bool validStationName(const String &name) {
+  if (!name.length() || name.length() > 192) return false;
+  for (uint8_t c : name) if (c < 32 || c == 127 || c == '\\' || c == '/' || c == '"' || c == ';') return false;
+  return true;
+}
+bool validNetwork(const String &ipText, const String &gatewayText, const String &maskText, const String &dnsText) {
+  IPAddress ip, gateway, mask, dns;
+  if (!ip.fromString(ipText) || !gateway.fromString(gatewayText) || !mask.fromString(maskText) || !dns.fromString(dnsText)) return false;
+  if(ip.toString()!=ipText || gateway.toString()!=gatewayText || mask.toString()!=maskText || dns.toString()!=dnsText)return false;
+  uint32_t m = 0, a = 0, g = 0;
+  for (int i=0; i<4; ++i) { m=(m<<8)|mask[i]; a=(a<<8)|ip[i]; g=(g<<8)|gateway[i]; }
+  uint32_t host = ~m;
+  return host >= 3 && (host & (host+1)) == 0 && m && ip[0] > 0 && ip[0] < 224 &&
+    gateway[0] > 0 && gateway[0] < 224 && dns[0] > 0 && dns[0] < 224 &&
+    (a&m)==(g&m) && (a&host) && (a&host)!=host && (g&host) && (g&host)!=host && a != g;
+}
+String profileJSON() {
+  return "{\"schema\":1,\"model\":\"LBP3300\",\"id\":" + jsonString(stationID) +
+    ",\"name\":" + jsonString(stationName) + ",\"ip\":" + jsonString(WiFi.localIP().toString()) + "}";
+}
+
+#include "cloud_print.h"
 
 void connectSaved() {
   WiFiConfig config = {};
@@ -71,7 +103,7 @@ uint32_t captSession() {
     if (c < '0' || c > '9') return 0;
     result = result * 10 + c - '0';
   }
-  return result >= 2 && result <= UINT32_MAX ? uint32_t(result) : 0;
+  return result >= 2 && result <= UINT32_MAX-2 ? uint32_t(result) : 0;
 }
 
 void captResult() {
@@ -148,14 +180,14 @@ async function refreshCommand(){try{const r=await fetch('/support/command',{cach
 function copyLiveCommand(){const field=document.getElementById('live-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('live-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}
 refreshCommand();setInterval(refreshCommand,3000);
 </script>
-<h2>Cài máy in trên Windows</h2><p>Đã xác nhận in qua hàng đợi Windows. Chạy bộ cài này trên từng máy Windows 10/11 x64, kể cả máy chưa từng cài máy in. Bộ cài tự tải CAPT chính thức từ Canon (12 MB), kiểm tra SHA-256 và chữ ký rồi cài driver cùng cầu nối LAN. Máy đã có driver sẽ bỏ qua bước tải; không cần cắm USB máy in vào máy tính. Chọn máy in <strong>Canon LBP3300 (ESP32 LAN)</strong> trong Word, Chrome hoặc trình đọc PDF.</p>
+<h2>Cài máy in trên Windows</h2><p>Đã xác nhận in qua hàng đợi Windows. Chạy bộ cài này trên từng máy Windows 10/11 x64, kể cả máy chưa từng cài máy in. Bộ cài tự tải CAPT chính thức từ Canon (12 MB), kiểm tra SHA-256 và chữ ký rồi cài driver cùng cầu nối LAN. Máy đã có driver sẽ bỏ qua bước tải; không cần cắm USB máy in vào máy tính. Bộ cài lấy tên và IP từ trạm này; chọn tên phòng tương ứng trong danh sách máy in của Word, Chrome hoặc trình đọc PDF.</p>
 <p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1" download="esp32-printer-setup-v3.ps1">Tải bộ cài Windows v3</a>. Mở PowerShell quản trị, dán lệnh rồi chọn file bộ cài vừa tải:</p>
-<textarea id="setup-command" aria-label="Lệnh chạy bộ cài Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-setup-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
+<textarea id="setup-command" aria-label="Lệnh chạy bộ cài Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-setup-v3.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea>
 <button type="button" onclick="copyRemote('setup-command')">Sao chép lệnh cài Windows</button><p id="setup-copy-result" role="status"></p>
 <p>Hỗ trợ A4, khay cassette 1: một mặt, hai mặt cạnh dài/cạnh ngắn, ngang/dọc và nhiều trang trên một mặt. Cầu nối tự chạy cùng Windows; mỗi máy tự gửi tới ESP, không cần máy trung gian bật thường trực.</p><p>Windows: mở Thuộc tính máy in / Printing Preferences của driver Canon để chọn kiểu in và cạnh lật; chọn số trang trên một mặt trong Word, Chrome hoặc mục Page Layout của driver. Mac: chọn Print Style (1-sided/2-sided), Binding Location (Long Edge/Short Edge) trong mục Canon; chọn Pages per Sheet và Orientation trong hộp thoại in. Với khổ giấy hoặc nguồn giấy khác, chưa xác minh đầy đủ.</p><p id="tcp" aria-live="polite"></p>
 <h2>Cài máy in trên Mac</h2><p><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_mac.sh" download="install_mac.sh">Tải bộ cài macOS</a>. Không cần Python, không cần máy in USB có sẵn. Máy chưa có CAPT sẽ tự tải gói Canon 10.0.10 (43 MB), kiểm tra SHA-256 và chữ ký. Cần mạng Internet và mật khẩu quản trị. Cài driver mới tự động dành cho macOS 11.7.11–27 theo tương thích Canon.</p>
 <p>Mở Terminal, dán lệnh và chọn file install_mac.sh vừa tải:</p>
-<textarea id="mac-command" aria-label="Lệnh cài máy in trên Mac" readonly rows="3" style="width:100%;box-sizing:border-box">capt_installer=$(osascript -e 'POSIX path of (choose file with prompt "Chon install_mac.sh")') &amp;&amp; sudo /bin/sh "$capt_installer"</textarea>
+<textarea id="mac-command" aria-label="Lệnh cài máy in trên Mac" readonly rows="3" style="width:100%;box-sizing:border-box">capt_installer=$(osascript -e 'POSIX path of (choose file with prompt "Chon install_mac.sh")') &amp;&amp; sudo /bin/sh "$capt_installer" __STATION_IP__</textarea>
 <button type="button" onclick="copyRemote('mac-command')">Sao chép lệnh cài Mac</button><p id="mac-copy-result" role="status"></p>
 <p><a href="https://github.com/thientranvan/esp32_printer_canon_3300">Mã nguồn và hướng dẫn</a>. Bộ cài nằm trên GitHub, driver tải từ Canon; không nhúng vào ESP.</p><details><summary>Chẩn đoán và điều khiển Windows</summary><p>Token gửi báo cáo (chỉ dùng cho phiên ESP hiện tại): <code>)HTML";
   page += csrf;
@@ -163,7 +195,7 @@ refreshCommand();setInterval(refreshCommand,3000);
 <p>Tải tệp chẩn đoán, mở PowerShell bằng quyền quản trị rồi dán lệnh. Trong hộp chọn file, chọn script chẩn đoán vừa tải:</p>
 <textarea id="diagnostics-command" aria-label="Lệnh chạy chẩn đoán Windows" readonly rows="4" style="width:100%;box-sizing:border-box">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; $f.Title = 'Chon esp32-printer-diagnostics.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName }</textarea>
 <button type="button" onclick="copyDiagnostics()">Sao chép lệnh</button><p id="copy-result" role="status"></p>
-<script>function copyDiagnostics(){const field=document.getElementById('diagnostics-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('copy-result').textContent=copied?(id==='mac-command'?'Đã sao chép. Dán vào Terminal.':'Đã sao chép. Dán vào PowerShell quản trị.'):(id==='mac-command'?'Đã chọn lệnh. Nhấn Command+C để sao chép.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.');}</script>
+<script>function copyDiagnostics(){const field=document.getElementById('diagnostics-command');field.focus();field.select();let copied=false;try{copied=document.execCommand('copy');}catch{}document.getElementById('copy-result').textContent=copied?'Đã sao chép. Dán vào PowerShell quản trị.':'Đã chọn lệnh. Nhấn Ctrl+C để sao chép.';}</script>
 <h3>Điều khiển Windows từ Mac để sửa máy in</h3>
 <p>Bản portable v3 (sửa quyền khóa SSH): tải OpenSSH chính thức của Microsoft từ GitHub (khoảng 6 MB), kiểm tra SHA256 trước khi chạy. Không cần Windows Update và không thay đổi thiết lập chặn cập nhật. Nếu script cũ đang chờ cài Windows Update, nhấn Ctrl+C trước.</p>
 <p>Bật SSH riêng trên cổng 22222, chỉ nhận khóa công khai và IP máy hỗ trợ do bạn nhập. Không dùng mật khẩu SSH, không mở cổng router. Quyền quản trị cho phép kiểm tra và sửa máy Windows; kết nối vẫn bật sau khi khởi động lại cho đến khi tắt.</p>
@@ -178,14 +210,27 @@ refreshCommand();setInterval(refreshCommand,3000);
 <form method="post" action="/usb/start"><input type="hidden" name="token" value=")HTML";
   page += csrf;
   page += R"HTML("><button>Bật USB Host</button><p>Nếu lỗi USB tái diễn, mạch có thể khởi động lại và vào chế độ phục hồi.</p></form>
-<h2>Kết nối Wi-Fi</h2><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><p>IP tĩnh: 192.168.1.199 · Subnet: 255.255.255.0 · Gateway/DNS: 192.168.1.1. Cấu hình dành cho LAN hiện tại.</p>
+<h2>Kết nối Wi-Fi</h2><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><p>Tên trạm và IP được cấu hình riêng bên dưới. Tránh trùng IP với thiết bị khác; nên dành địa chỉ trên router.</p>
 <form method="post" action="/wifi"><input type="hidden" name="token" value=")HTML";
   page += csrf;
   page += R"HTML("><label>Tên mạng (SSID) <input name="ssid" maxlength="32" required autocomplete="off"></label><label>Mật khẩu Wi-Fi <input name="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Kết nối</button></form>
+<h2>Cấu hình trạm in</h2><p>Mỗi ESP có ID riêng. Ví dụ: Phòng 1 / .199, Phòng 2 / .200, Phòng 3 / .201. Khi đổi IP, cài lại hàng đợi trên máy tính. Lưu sẽ khởi động lại trạm.</p>
+<form method="post" action="/station"><input type="hidden" name="token" value="__CSRF__">
+<label>Tên máy in <input id="station-name" name="name" maxlength="64" required></label>
+<label>IP tĩnh <input id="station-ip" name="ip" required></label>
+<label>Gateway <input id="station-gateway" name="gateway" required></label>
+<label>Subnet <input id="station-mask" name="mask" required></label>
+<label>DNS <input id="station-dns" name="dns" required></label>
+<label><input type="checkbox" id="cloud-enabled" name="cloud_enabled"> Kết nối quanly.lophochinhminh.com</label>
+<label>Token riêng của trạm do server cấp <input name="cloud_token" type="password" maxlength="96" autocomplete="new-password" placeholder="Để trống để giữ token đã lưu"></label>
+<p id="cloud-status" role="status"></p><button>Lưu cấu hình và khởi động lại</button></form>
+<form method="post" action="/cloud/resolve" onsubmit="return confirm('Chỉ bỏ khóa khi đã kiểm tra giấy đã in và xử lý công việc dở trên máy in. Không tự in lại. Tiếp tục?')"><input type="hidden" name="token" value="__CSRF__"><button>Đã kiểm tra máy in: bỏ khóa công việc web không rõ kết quả</button></form>
 <h2>Cập nhật firmware</h2><p>Chọn tệp ứng dụng .bin dành cho bo này. Giữ nguồn ổn định khi cập nhật.</p><form method="post" enctype="multipart/form-data" action="/update?token=)HTML";
   page += csrf;
   page += R"HTML("><label>Firmware <input name="firmware" type="file" accept=".bin" required></label><button>Cập nhật và khởi động lại</button></form>
-<script>async function refresh(){try{let r=await fetch('/status');if(!r.ok)return;let s=await r.json();document.getElementById('tcp').textContent='TCP 9100: '+(s.tcp.state===2?'Đang có phiên in':s.tcp.state===1?'Đang chờ lượt':'Đang chờ máy gửi')+' · Lệnh đã chuyển: '+s.tcp.commands+(s.tcp.error?' · Lỗi: '+s.tcp.error:'');document.getElementById('status').textContent=`Kiểm tra: ${s.healthy?'Đạt':'Lỗi'} | Thời gian chạy: ${s.uptime}s | Wi-Fi: ${s.connected?s.ssid+' · '+s.rssi+' dBm · IP tĩnh '+s.ip:s.connecting?'Đang kết nối':'Chưa kết nối'} | Flash: ${s.flash} | PSRAM: ${s.psram}`;document.getElementById('usb-link').textContent='Chế độ Host: '+(s.usb.host_mode?'Có':'Không')+' · Tín hiệu kết nối USB: '+(s.usb.physical_link?'Có':'Chưa có')+' · Thiết bị đã nhận: '+s.usb.devices;document.getElementById('usb').textContent=(s.usb.recovering?'Đang tự phục hồi kết nối USB':s.usb.responsive?'Máy in phản hồi USB; chưa xác nhận sẵn sàng in':s.usb.connected?'Đã nhận USB Canon nhưng máy in chưa phản hồi / mất liên lạc':s.usb.installed?'Chưa kết nối được máy in; tự dò và phục hồi':'USB Host chưa sẵn sàng')+'\n'+s.usb.details+(s.usb.error?'\nMã lỗi: '+s.usb.error:'');}catch{document.getElementById('status').textContent='Mất kết nối với ESP. Đang thử lại...';}}refresh();setInterval(refresh,3000);</script></html>)HTML";
+<script>async function refresh(){try{let r=await fetch('/status');if(!r.ok)return;let s=await r.json();if(!window.stationLoaded){document.getElementById('station-name').value=s.station.name;for(const k of ['ip','gateway','mask','dns'])document.getElementById('station-'+k).value=s.network[k];document.getElementById('cloud-enabled').checked=s.cloud.enabled;window.stationLoaded=true;}document.getElementById('cloud-status').textContent='Web server: '+s.cloud.state+(s.cloud.error?' · '+s.cloud.error:'');document.querySelector('h1').textContent=s.station.name+' · Trạm in ESP32';document.getElementById('tcp').textContent='TCP 9100: '+(s.tcp.state===2?'Đang có phiên in':s.tcp.state===1?'Đang chờ lượt':'Đang chờ máy gửi')+' · Tiến độ ảnh in: '+s.tcp.completed+'/'+(s.tcp.total||'?')+' · Lệnh đã chuyển: '+s.tcp.commands+(s.tcp.error?' · Lỗi: '+s.tcp.error:'');document.getElementById('status').textContent=`Kiểm tra: ${s.healthy?'Đạt':'Lỗi'} | Thời gian chạy: ${s.uptime}s | Wi-Fi: ${s.connected?s.ssid+' · '+s.rssi+' dBm · IP tĩnh '+s.ip:s.connecting?'Đang kết nối':'Chưa kết nối'} | Flash: ${s.flash} | PSRAM: ${s.psram}`;document.getElementById('usb-link').textContent='Chế độ Host: '+(s.usb.host_mode?'Có':'Không')+' · Tín hiệu kết nối USB: '+(s.usb.physical_link?'Có':'Chưa có')+' · Thiết bị đã nhận: '+s.usb.devices;document.getElementById('usb').textContent=(s.usb.recovering?'Đang tự phục hồi kết nối USB':s.usb.responsive?'Máy in phản hồi USB; chưa xác nhận sẵn sàng in':s.usb.connected?'Đã nhận USB Canon nhưng máy in chưa phản hồi / mất liên lạc':s.usb.installed?'Chưa kết nối được máy in; tự dò và phục hồi':'USB Host chưa sẵn sàng')+'\n'+s.usb.details+(s.usb.error?'\nMã lỗi: '+s.usb.error:'');}catch{document.getElementById('status').textContent='Mất kết nối với ESP. Đang thử lại...';}}refresh();setInterval(refresh,3000);</script></html>)HTML";
+  page.replace("__CSRF__", csrf);
+  page.replace("__STATION_IP__", stationIP.toString());
   server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -206,22 +251,67 @@ void setup() {
   bool storageOK = prefs.begin("printer", false);
   if (storageOK) supportCommand = prefs.getString("supportcmd", supportCommand);
   bool wifiOK = WiFi.mode(WIFI_AP_STA);
-  // ponytail: fixed current LAN; add editable network settings when moving to another subnet.
-  bool staticOK = WiFi.config(IPAddress(192,168,1,199), IPAddress(192,168,1,1),
-                              IPAddress(255,255,255,0), IPAddress(192,168,1,1));
-  WiFi.setHostname("esp32-printer");
+  stationID = "esp32-" + WiFi.macAddress(); stationID.replace(":", ""); stationID.toLowerCase();
+  StationSettings saved = {};
+  if (prefs.getBytes("station", &saved, sizeof(saved)) == sizeof(saved) && saved.version == 1 &&
+      memchr(saved.name,0,sizeof(saved.name)) && memchr(saved.ip,0,sizeof(saved.ip)) &&
+      memchr(saved.gateway,0,sizeof(saved.gateway)) && memchr(saved.mask,0,sizeof(saved.mask)) &&
+      memchr(saved.dns,0,sizeof(saved.dns)) && memchr(saved.cloudToken,0,sizeof(saved.cloudToken)) &&
+      validStationName(saved.name) && validNetwork(saved.ip,saved.gateway,saved.mask,saved.dns)) {
+    stationSettings = saved; stationName = saved.name;
+    stationIP.fromString(saved.ip); stationGateway.fromString(saved.gateway);
+    stationMask.fromString(saved.mask); stationDNS.fromString(saved.dns);
+  }
+  bool staticOK = WiFi.config(stationIP, stationGateway, stationMask, stationDNS);
+  String hostname = "esp32-" + stationID.substring(12);
+  WiFi.setHostname(hostname.c_str());
   WiFi.setAutoReconnect(true);
-  bool apOK = WiFi.softAP("ESP32-Printer-36B0", DEVICE_PASSWORD);
+  bool apOK = WiFi.softAP(("ESP32-Printer-" + stationID.substring(12)).c_str(), DEVICE_PASSWORD);
   healthy = storageOK && wifiOK && staticOK && apOK && memoryOK &&
             ESP.getFlashChipSize() == 16777216 && ESP.getPsramSize() == 8388608;
   csrf = String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX);
   if (storageOK) connectSaved();
-  MDNS.begin("esp32-printer");
+  MDNS.begin(hostname.c_str());
   MDNS.addService("http", "tcp", 80);
   MDNS.addService("pdl-datastream", "tcp", 9100);
   MDNS.addServiceTxt("pdl-datastream", "tcp", "ty", "Canon LBP3300 CAPT");
   startCaptTCP();
   server.on("/", HTTP_GET, home);
+  server.on("/setup/profile.json", HTTP_GET, [] {
+    uint32_t mask=uint32_t(WiFi.subnetMask());
+    if (WiFi.status()!=WL_CONNECTED || (uint32_t(server.client().remoteIP())&mask)!=(uint32_t(WiFi.localIP())&mask)) {
+      server.send(403,"text/plain","LAN only"); return;
+    }
+    server.sendHeader("Cache-Control","no-store"); server.send(200,"application/json",profileJSON());
+  });
+  server.on("/cloud/resolve", HTTP_POST, [] {
+    if(!authorized())return;
+    if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    if(cloudBusy() || !cloudNeedsInspection.load()){server.send(409,"text/plain","No uncertain idle cloud job");return;}
+    cloudResolve.store(true);server.send(202,"text/plain; charset=utf-8","Đã yêu cầu bỏ khóa sau kiểm tra; không in lại công việc cũ.");
+  });
+  server.on("/station", HTTP_POST, [] {
+    if (!authorized()) return;
+    if (!validPost()) { server.send(403,"text/plain","Invalid token"); return; }
+    if (captInUse() || captTCPState.load() || captCommand.state.load()==1 || captCommand.state.load()==2 || cloudBusy()) {
+      server.send(409,"text/plain","Printer busy; settings unchanged"); return;
+    }
+    String name=server.arg("name"), ip=server.arg("ip"), gateway=server.arg("gateway"), mask=server.arg("mask"), dns=server.arg("dns");
+    String token=server.arg("cloud_token");
+    if (!token.length()) token=stationSettings.cloudToken;
+    bool enabled=server.arg("cloud_enabled")=="on";
+    bool validToken=token.length()>=32 && token.length()<=96;
+    for (char c : token) if (!isalnum(uint8_t(c)) && c!='-' && c!='_') validToken=false;
+    if (!validStationName(name) || !validNetwork(ip,gateway,mask,dns) || (enabled && !validToken)) {
+      server.send(400,"text/plain","Invalid name/network/token; nothing saved"); return;
+    }
+    StationSettings next = {}; next.version=1; next.cloudEnabled=enabled;
+    name.toCharArray(next.name,sizeof(next.name)); ip.toCharArray(next.ip,sizeof(next.ip));
+    gateway.toCharArray(next.gateway,sizeof(next.gateway)); mask.toCharArray(next.mask,sizeof(next.mask)); dns.toCharArray(next.dns,sizeof(next.dns));
+    token.toCharArray(next.cloudToken,sizeof(next.cloudToken));
+    if (prefs.putBytes("station",&next,sizeof(next))!=sizeof(next)) { server.send(500,"text/plain","Save failed"); return; }
+    server.send(200,"text/plain; charset=utf-8","Đã lưu. Trạm khởi động lại; mở http://"+ip+". Cài lại máy in nếu đổi IP."); rebootAt=millis()+1500;
+  });
   server.on("/support/command", HTTP_GET, [] {
     if (!authorized()) return;
     server.sendHeader("Cache-Control", "no-store");
@@ -325,7 +415,7 @@ void setup() {
   server.on("/status", HTTP_GET, [] {
     if (!authorized()) return;
     USBStatus usb = readUSB();
-    String json = String("{\"healthy\":") + (healthy ? "true" : "false") +
+    String json = String("{\"station\":") + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
       ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
       ",\"connecting\":" + (connecting ? "true" : "false") +
       ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +
@@ -346,9 +436,9 @@ void setup() {
       ",\"port_register\":" + usb.portRegister + ",\"devices\":" + usb.devices +
       ",\"descriptor_id\":" + usb.descriptorID + ",\"descriptor_class\":" + usb.descriptorClass + ",\"descriptor_count\":" + usb.descriptorCount +
       ",\"error\":" + usb.error + ",\"details\":" + jsonString(usb.details) + "}" +
-      ",\"tcp\":{\"port\":9100,\"state\":" + captTCPState.load() +
+      ",\"capt\":" + captTelemetryJSON() + ",\"tcp\":{\"port\":9100,\"state\":" + captTCPState.load() +
       ",\"error\":" + captTCPError.load() + ",\"last_header\":" + captTCPHeader.load() +
-      ",\"commands\":" + captTCPCommands.load() + "}}";
+      ",\"commands\":" + captTCPCommands.load() + ",\"total\":" + captTCPTotal.load() + ",\"completed\":" + captTCPCompleted.load() + "}}";
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", json);
   });
@@ -397,6 +487,7 @@ void setup() {
   });
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
+  startCloud();
   const esp_reset_reason_t resetReason = esp_reset_reason();
   if (resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||
       resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT) {

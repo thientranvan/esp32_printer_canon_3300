@@ -1,19 +1,39 @@
 #requires -RunAsAdministrator
+param([string]$StationIP, [string]$PrinterName)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-$root=Join-Path $env:ProgramData 'ESP32Printer'
-$printerName='Canon LBP3300 (ESP32 LAN)'
+if (!$StationIP) { $StationIP=Read-Host 'ESP IP (for example 192.168.1.199)' }
+$address=$null
+if ($StationIP -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}$' -or ![Net.IPAddress]::TryParse($StationIP,[ref]$address) -or $address.AddressFamily -ne 'InterNetwork') { throw 'Invalid ESP IPv4 address.' }
+$StationIP=$address.ToString()
+$profile=Invoke-RestMethod -Uri "http://$StationIP/setup/profile.json" -TimeoutSec 10
+if ($profile.schema -ne 1 -or $profile.model -ne 'LBP3300' -or $profile.id -notmatch '^esp32-[0-9a-f]{12}$' -or $profile.ip -ne $StationIP) { throw 'Target is not a supported ESP32 printer station, or its IP differs.' }
+$stationId=[string]$profile.id
+if (!$PrinterName) { $PrinterName=[string]$profile.name }
+if (!$PrinterName -or $PrinterName.Length -gt 64 -or $PrinterName -match '[\x00-\x1f\x7f\\/";]') { throw 'Printer name must contain 1..64 characters, without control characters, slash, quote or semicolon.' }
+Write-Host "Station: $PrinterName / $stationId / $StationIP"
+$root=Join-Path $env:ProgramData "ESP32Printer\Stations\$stationId"
+$taskName="ESP32CaptBridge-$stationId"
 $driverName='Canon LBP3300 ESP32 Render'
-$portName='ESP32_LOCAL_19100'
+$portName="ESP32_LOCAL_$stationId"
+$port=Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue
+if ($port) { $localPort=[int]$port.PortNumber }
+else {
+ $used=@(Get-PrinterPort | ForEach-Object { $_.PortNumber }) + @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalPort })
+ $localPort=19101..19200 | Where-Object { $_ -notin $used } | Select-Object -First 1
+ if (!$localPort) { throw 'No free local bridge port in 19101..19200.' }
+}
+if ($localPort -lt 19101 -or $localPort -gt 19200) { throw 'Invalid existing station bridge port.' }
 if (![Environment]::Is64BitProcess -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Requires Windows 10/11 x64 and 64-bit Windows PowerShell as administrator. Windows ARM64 is not supported.' }
 $existing=Get-Printer -Name $printerName -ErrorAction SilentlyContinue
-if ($existing -and $existing.JobCount -ne 0) { throw 'Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
+if ($existing -and $existing.PortName -ne $portName) { throw 'Printer name belongs to another station. Choose a different name; no queue was changed.' }
+if (@(Get-Printer | Where-Object { $_.PortName -eq $portName -and $_.JobCount -ne 0 }).Count) { throw 'Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
 if ((Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count) { throw 'Unresolved bridge job found. Inspect pending.txt/status.txt before reinstalling; nothing was resent.' }
 $port=Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue
-if ($port -and ($port.PrinterHostAddress -ne '127.0.0.1' -or $port.PortNumber -ne 19100)) { throw 'Existing bridge port has conflicting settings.' }
-$listener=Get-NetTCPConnection -LocalPort 19100 -State Listen -ErrorAction SilentlyContinue
+if ($port -and ($port.PrinterHostAddress -ne '127.0.0.1' -or $port.PortNumber -ne $localPort)) { throw 'Existing bridge port has conflicting settings.' }
+$listener=Get-NetTCPConnection -LocalPort $localPort -State Listen -ErrorAction SilentlyContinue
 foreach ($connection in $listener) {
- if ((Get-Process -Id $connection.OwningProcess).Path -ne "$root\bridge.exe") { throw 'Local port 19100 is used by another program.' }
+ if ((Get-Process -Id $connection.OwningProcess).Path -ne "$root\bridge.exe") { throw 'Selected local port is used by another program.' }
 }
 New-Item -ItemType Directory -Force $root | Out-Null
 & icacls.exe $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
@@ -74,7 +94,7 @@ using System.Diagnostics;
 // Extend only after capturing and testing another model/paper/duplex format.
 public static class Esp32CaptBridge {
  const int Limit = 20 * 1024 * 1024;
- static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ESP32Printer");
+ static readonly string Root = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
  static readonly string Pending = Path.Combine(Root, "pending.txt");
  sealed class Page { public byte[] Parameters; public List<byte[]> Bands = new List<byte[]>(); }
  sealed class Job { public List<Page> Pages = new List<Page>(); public int Copies = 1; public bool Collate = true; public int Duplex = 1; }
@@ -137,7 +157,7 @@ public static class Esp32CaptBridge {
  }
  static TcpClient Connect() {
   TcpClient c=new TcpClient();try{
-   IAsyncResult a=c.BeginConnect("192.168.1.199",9100,null,null);
+   IAsyncResult a=c.BeginConnect("__STATION_IP__",9100,null,null);
    using(a.AsyncWaitHandle){if(!a.AsyncWaitHandle.WaitOne(5000))throw new TimeoutException("ESP not reachable");c.EndConnect(a);}
    c.NoDelay=true;c.ReceiveTimeout=70000;c.SendTimeout=70000;return c;
   }catch{c.Close();throw;}
@@ -160,6 +180,7 @@ public static class Esp32CaptBridge {
  }
  // ponytail: two decoded pages ahead of engine start; validate before enlarging window.
  static void PrintJob(Stream s,Job job,Action<int,string> progress) {
+  Ack(s,0xF001,BitConverter.GetBytes(job.Pages.Count*job.Copies));
   byte[] model=Ack(s,0xA1A1,null);Need(model.Length>=4 && U16(model,2)==0x2A94,"Wrong printer model");
   ushort[] counters=Status(s);Need(counters[0]==counters[1] && counters[0]==counters[2] && counters[0]==counters[3],"Printer has an unresolved page");
   progress(0,"Starting job");
@@ -270,11 +291,11 @@ public static class Esp32CaptBridge {
    if(args.Length==1 && args[0]=="--self-test"){SelfTest();return 0;}
    if(args.Length==2 && args[0]=="--check"){Job j=Parse(File.ReadAllBytes(args[1]));Console.WriteLine(j.Pages.Count+" page(s), "+j.Copies+" copies");return 0;}
    Directory.CreateDirectory(Root);bool created;
-   using(Mutex mutex=new Mutex(true,"Global\\ESP32CaptBridge",out created)){
+   using(Mutex mutex=new Mutex(true,"Global\\ESP32CaptBridge-__STATION_ID__",out created)){
     Need(created,"Another bridge is running");Need(!File.Exists(Pending),"Uncertain previous page; inspect pending.txt");
     if(args.Length==2 && args[0]=="--send"){Send(args[1]);return 0;}
     Need(args.Length==0,"Unsupported arguments");Need(Directory.GetFiles(Root,"*.capt").Length==0,"Unresolved captured job; inspect bridge folder");
-    TcpListener listener=new TcpListener(IPAddress.Loopback,19100);listener.Start(1);Note("Ready on localhost:19100");
+    TcpListener listener=new TcpListener(IPAddress.Loopback,__LOCAL_PORT__);listener.Start(1);Note("Ready on localhost:__LOCAL_PORT__");
     while(true){string file=Path.Combine(Root,DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff")+".capt");
      bool empty=false;
      using(TcpClient client=listener.AcceptTcpClient()){
@@ -289,6 +310,7 @@ public static class Esp32CaptBridge {
  }
 }
 '@
+$sourceCode=$sourceCode.Replace('__STATION_IP__',$StationIP).Replace('__STATION_ID__',$stationId).Replace('__LOCAL_PORT__',[string]$localPort)
 [IO.File]::WriteAllText("$root\bridge.cs",$sourceCode)
 $staged=Join-Path $root 'bridge.new.exe'
 if (Test-Path $staged) { Remove-Item $staged }
@@ -319,23 +341,23 @@ $info.pHelpFile=$source.HelpFile
 $info.pDependentFiles=($source.DependentFiles -join "`0")+"`0`0"
 $info.pMonitorName=$null
 $info.pDefaultDataType='RAW'
-if (![EspRenderDriver]::Add($null,3,[ref]$info,0x18)) { throw (New-Object ComponentModel.Win32Exception([Runtime.InteropServices.Marshal]::GetLastWin32Error())) }
-$task=Get-ScheduledTask -TaskName ESP32CaptBridge -ErrorAction SilentlyContinue
-if ($task) { Stop-ScheduledTask -TaskName ESP32CaptBridge; Start-Sleep -Seconds 1 }
+if (!(Get-PrinterDriver -Name $driverName -ErrorAction SilentlyContinue) -and ![EspRenderDriver]::Add($null,3,[ref]$info,0x18)) { throw (New-Object ComponentModel.Win32Exception([Runtime.InteropServices.Marshal]::GetLastWin32Error())) }
+$task=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($task) { Stop-ScheduledTask -TaskName $taskName; Start-Sleep -Seconds 1 }
 Move-Item -Force $staged "$root\bridge.exe"
 & icacls.exe "$root\*" /reset /T /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Cannot secure bridge files.' }
 $a=New-ScheduledTaskAction -Execute "$root\bridge.exe"
 $s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName ESP32CaptBridge -Action $a -Trigger (New-ScheduledTaskTrigger -AtStartup) -Settings $s -User SYSTEM -RunLevel Highest -Force | Out-Null
-Start-ScheduledTask -TaskName ESP32CaptBridge
+Register-ScheduledTask -TaskName $taskName -Action $a -Trigger (New-ScheduledTaskTrigger -AtStartup) -Settings $s -User SYSTEM -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask -TaskName $taskName
 $ready=$false
 for($i=0;$i -lt 10;$i++) {
  Start-Sleep -Seconds 1
- if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 19100 -State Listen -ErrorAction SilentlyContinue) { $ready=$true;break }
+ if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $localPort -State Listen -ErrorAction SilentlyContinue) { $ready=$true;break }
 }
 if (!$ready) { Get-Content "$root\status.txt" -ErrorAction SilentlyContinue;throw 'Bridge did not start.' }
-if (!$port) { Add-PrinterPort -Name $portName -PrinterHostAddress '127.0.0.1' -PortNumber 19100 }
+if (!$port) { Add-PrinterPort -Name $portName -PrinterHostAddress '127.0.0.1' -PortNumber $localPort }
 if ($existing) { Set-Printer -Name $printerName -DriverName $driverName -PortName $portName }
 else { Add-Printer -Name $printerName -DriverName $driverName -PortName $portName }
 if (!$existing) { Set-PrintConfiguration -PrinterName $printerName -PaperSize A4 -DuplexingMode OneSided }
