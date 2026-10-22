@@ -52,7 +52,8 @@ Cloud mặc định tắt, cần token riêng mỗi trạm từ server. In LAN v
 **Chưa có endpoint/dashboard/worker render trên server; chưa thể in tài liệu từ web thật.**
 Dev server triển khai theo [contract đầy đủ](docs/server-contract.md), không cần mở
 port router. ESP không chuyển PDF/Word sang CAPT; renderer phía server là bắt buộc.
-Không sửa server trong phiên này (SSH `binhminh` chưa xác thực được).
+Đã bàn giao contract tại `/var/www/lop1/docs/esp32-printer-contract.md` qua SSH
+`binhminh`; chỉ thêm tài liệu, không sửa ứng dụng/database/dịch vụ server.
 
 Kiểm tra mới: `python3 check_cloud.py` kiểm tra parser, chuẩn hóa capture và mô phỏng
 engine C++ thực tế; `python3 check_installers.py` kiểm tra bộ cài. Chưa nghiệm thu

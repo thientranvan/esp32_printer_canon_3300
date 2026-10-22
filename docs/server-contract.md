@@ -5,8 +5,14 @@
 Firmware đã có HTTPS heartbeat, claim/download, kiểm tra SHA-256, chạy CAPT chuẩn hóa,
 USB arbiter chung với LAN, journal NVS chống tự in lặp. Mặc định cloud **tắt**.
 Chưa triển khai endpoint/dashboard/renderer trên server, chưa có kiểm thử cloud đầu-cuối.
-SSH `binhminh` bị từ chối xác thực trong phiên triển khai; không đọc được ứng dụng,
-không sửa file, database, dịch vụ hoặc cấu hình server. Contract dưới đây độc lập framework.
+Đã truy cập SSH `binhminh` và bàn giao tài liệu tại
+`/var/www/lop1/docs/esp32-printer-contract.md`. Chỉ thêm tài liệu; không sửa mã ứng dụng,
+database, dịch vụ, cấu hình hoặc thay đổi chưa commit của dev server.
+Contract độc lập framework.
+
+Source ESP: https://github.com/thientranvan/esp32_printer_canon_3300
+Các đường dẫn `station/*`, `prepare_cloud_job.py`, `check_cloud.py` trong tài liệu
+thuộc repo ESP này, không phải repo ứng dụng `/var/www/lop1`.
 
 Ba bo dùng cùng source, cấu hình riêng qua trang quản trị:
 
