@@ -8,9 +8,9 @@ $mutex=New-Object Threading.Mutex($true,"Local\ESP32PrinterStatus-$($settings.id
 if (!$created) {exit}
 function Get-DeviceView($s) {
  $title='Sẵn sàng';$detail='Máy in đang rảnh.';$kind='ready'
- if (!$s) {$title='Mất kết nối trạm in';$detail='Kiểm tra nguồn ESP và mạng LAN.';$kind='error'}
- elseif (!$s.connected -or !$s.responsive) {$title='Máy in chưa kết nối';$detail='Kiểm tra nguồn máy in và dây USB.';$kind='error'}
- elseif (!$s.capt.fresh) {$title='Chưa có trạng thái mới';$detail='Không thể xác nhận tiến trình máy in.';$kind='warning'}
+ if (!$s) {$title='Mất kết nối trạm in';$detail='Kiểm tra nguồn ESP và mạng LAN.';$kind='offline'}
+ elseif (!$s.connected) {$title='Máy in chưa kết nối';$detail='Kiểm tra nguồn máy in và dây USB.';$kind='offline'}
+ elseif (!$s.responsive -or !$s.capt.fresh) {$title='Chưa có trạng thái mới';$detail='Không thể xác nhận tiến trình máy in.';$kind='warning'}
  else {
   $errors=@()
   if ($s.capt.service_error) {$errors+="Canon $($s.capt.service_code) — lỗi máy in, cần kiểm tra / bảo dưỡng."}
@@ -18,8 +18,10 @@ function Get-DeviceView($s) {
   if ($s.capt.cover_open) {$errors+='Nắp máy in đang mở.'}
   if ($s.capt.paper_required) {$errors+='Kiểm tra giấy, khổ giấy và khay giấy đã chọn.'}
   if ($s.capt.toner_warning) {$errors+='Cảnh báo mực.'}
-  if ($errors.Count) {$title=if ($s.capt.service_error) {"Canon $($s.capt.service_code)"} else {'Máy in cần xử lý'};$detail=$errors -join "`r`n";$kind='error'}
-  elseif ($s.active) {$title='Đang in';$detail='Máy in đang xử lý lệnh.';$kind='printing'}
+  if ($errors.Count) {$title=if ($s.capt.service_error) {"Canon $($s.capt.service_code)"} else {'Máy in cần xử lý'};$detail=$errors -join "`r`n";$kind=if ($s.capt.service_error -or $s.capt.paper_jam) {'error'} else {'warning'}}
+  elseif ($s.job_control.state -eq 'uncertain') {$title='Lệnh cần đối soát';$detail='Chưa rõ kết quả lệnh trước; không tự in lại.';$kind='warning'}
+  elseif ($s.job_control.state -eq 'paused') {$title='Đã tạm dừng';$detail='Lệnh đang tạm dừng gửi.';$kind='warning'}
+  elseif ($s.active) {$title='Đang in';$detail='Máy in đang xử lý lệnh.';$kind='busy'}
  }
  $j=$s.job_control
  $phases=@{printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
@@ -39,7 +41,7 @@ function Add-Label($value,$x,$y,$w,$h,$size=10) {
 $heading=Add-Label $settings.name 26 18 720 34 20
 $identity=Add-Label "Canon LBP3300  |  $($settings.ip)" 28 57 720 24
 $card=New-Object Windows.Forms.Panel;$card.SetBounds(26,94,728,132);$card.BackColor=[Drawing.Color]::White;$form.Controls.Add($card)
-$icon=New-Object Windows.Forms.PictureBox;$icon.SetBounds(20,23,48,48);$icon.SizeMode='StretchImage';$card.Controls.Add($icon)
+$icon=New-Object Windows.Forms.Label;$icon.SetBounds(20,23,54,54);$icon.Font=New-Object Drawing.Font('Segoe UI Symbol',30);$icon.TextAlign='MiddleCenter';$icon.AccessibleName='Trạng thái máy in';$card.Controls.Add($icon)
 $state=New-Object Windows.Forms.Label;$state.SetBounds(86,15,620,35);$state.Font=New-Object Drawing.Font('Segoe UI',17,[Drawing.FontStyle]::Bold);$card.Controls.Add($state)
 $message=New-Object Windows.Forms.Label;$message.SetBounds(88,56,610,70);$card.Controls.Add($message)
 $progressText=Add-Label '' 28 240 720 24
@@ -94,14 +96,13 @@ $timer.add_Tick({
    $script:client.CancelAsync();$script:client.Dispose();$script:download=$null
    $view=Get-DeviceView $s
    $state.Text=$view.Title;$message.Text=$view.Detail;$progressText.Text=$view.Progress
-   $state.ForeColor=switch ($view.Kind) {'error' {[Drawing.Color]::FromArgb(185,45,45)} 'warning' {[Drawing.Color]::DarkGoldenrod} default {[Drawing.Color]::FromArgb(26,110,85)}}
-   $oldImage=$icon.Image
-   $icon.Image=if ($view.Kind -eq 'error') {[Drawing.SystemIcons]::Error.ToBitmap()} elseif ($view.Kind -eq 'warning') {[Drawing.SystemIcons]::Warning.ToBitmap()} else {[Drawing.SystemIcons]::Information.ToBitmap()}
-   if ($oldImage) {$oldImage.Dispose()}
+   $state.ForeColor=switch ($view.Kind) {'error' {[Drawing.Color]::FromArgb(185,45,45)} 'warning' {[Drawing.Color]::FromArgb(133,84,0)} 'offline' {[Drawing.Color]::DimGray} 'busy' {[Drawing.Color]::FromArgb(23,84,161)} default {[Drawing.Color]::FromArgb(26,110,85)}}
+   $icon.ForeColor=$state.ForeColor
+   $icon.Text=switch ($view.Kind) {'ready' {[string][char]0x2713} 'busy' {[string][char]0x21BB} 'warning' {[string][char]0x26A0} 'error' {[string][char]0x2715} default {[string][char]0x2298}}
    $bar.Style='Continuous';$bar.Value=0
    if ($s.job_control.active -and $s.job_control.total -gt 0) {$bar.Value=[int][Math]::Max(0,[Math]::Min(100,100.0*$s.job_control.completed/$s.job_control.total))}
    elseif ($s.job_control.active) {$bar.Style='Marquee'}
-   $signal=if ($view.Kind -in @('error','warning')) {$view.Title+$view.Detail} else {''}
+   $signal=if ($view.Kind -in @('error','warning','offline')) {$view.Title+$view.Detail} else {''}
    if ($signal -and $signal -ne $script:lastSignal) {Show-Monitor};$script:lastSignal=$signal
    $footer.Text="Cập nhật $(Get-Date -Format HH:mm:ss) | Bộ đếm tính theo mặt in; spool không xác nhận giấy đã ra."
   }

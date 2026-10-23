@@ -58,3 +58,17 @@ Sau khi người dùng tắt/bật máy in: crash dump xác nhận abort tại S
 `root_port_recycle()` trong usb-daemon. Bỏ vòng tự tắt/bật root-port khi missing
 hoặc probe timeout: thao tác đó tranh chấp với SDK đang thu hồi thiết bị.
 Giữ discovery/đóng thiết bị/re-enumeration SDK; không che lỗi bulk bằng reset.
+
+## Biểu thị trực quan trạng thái
+
+Web ESP và cửa sổ Windows/Mac dùng icon kèm chữ, không chỉ dùng màu:
+- Xanh lá + dấu tích: USB phản hồi, CAPT fresh, không có cờ lỗi đã giải mã.
+- Xanh dương + biểu tượng đang xử lý: lệnh đang in.
+- Vàng + cảnh báo: dữ liệu cũ/chưa phản hồi, thiếu giấy, mở nắp, cảnh báo mực,
+  tạm dừng hoặc cần đối soát.
+- Đỏ + dấu lỗi: service code, kẹt giấy hoặc lỗi USB.
+- Xám + mất kết nối: mất ESP hoặc máy in ngắt USB.
+
+Dev web server áp dụng cùng quy tắc, giữ nguyên mã lỗi và chữ mô tả. Không dùng
+màu xanh khi CAPT stale; không hiểu dấu tích là mọi cảm biến đã được kiểm chứng.
+Thay đổi chỉ là UI; không thêm báo cáo nền hay phụ thuộc máy tính.

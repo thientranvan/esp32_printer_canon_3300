@@ -30,18 +30,18 @@ let status={support_command:'Start-Service sshd',capt:{fresh:true,age_ms:1000},h
 let offline=false;
 const refresh=new Function('document','fetch','setTimeout',input.script+';return refresh;')(document,async()=>{if(offline)throw Error();return {ok:true,json:async()=>status}},()=>{});
 (async()=>{
- await refresh();assert.equal(nodes['support-command'].value,'Start-Service sshd');assert.equal(nodes.support.hidden,false);assert.equal(nodes.printer.textContent,'Máy in đã kết nối');assert.equal(nodes['cloud'].textContent,'Web: Chưa bật');assert.equal(button.disabled,false);
+ await refresh();assert.equal(nodes['printer-status'].dataset.tone,'ok');assert.equal(nodes['printer-icon'].textContent,'✓');assert.equal(nodes['support-command'].value,'Start-Service sshd');assert.equal(nodes.support.hidden,false);assert.equal(nodes.printer.textContent,'Máy in đã kết nối');assert.equal(nodes['cloud'].textContent,'Web: Chưa bật');assert.equal(button.disabled,false);
  nodes['station-name'].value='Tên đang sửa';status.tcp={state:2,error:0,total:3,completed:1};status.job_control={id:'lan-1',source:'lan',state:'printing',active:true,total:3,completed:1};await refresh();assert.equal(nodes['station-name'].value,'Tên đang sửa');assert.equal(nodes.printer.textContent,'Đang in qua LAN');assert.equal(nodes.progress.value,1);assert.equal(nodes.progress.max,3);
  status.tcp.state=0;status.cloud={enabled:true,state:'printing',total:4,completed:2,progress_known:true};status.job_control={id:'web-1',source:'cloud',state:'printing',active:true,total:4,completed:2};await refresh();assert.equal(nodes.printer.textContent,'Đang in từ web');assert.equal(nodes.progress.value,2);
  status.job_control={id:'lan-old',source:'lan',state:'failed',active:false,total:2,completed:0};status.tcp={state:2,total:0,completed:0};await refresh();const stable=nodes['job-progress'].textContent;assert(stable.includes('0 / 2'));status.tcp={state:0,total:2,completed:0};await refresh();assert.equal(nodes['job-progress'].textContent,stable);assert.equal(nodes.job.hidden,true);assert(nodes['jobs-title'].textContent.includes('Lịch sử'));
  status.cloud.state='uncertain';await refresh();assert.equal(nodes.resolve.hidden,false);
- status.capt={fresh:true,service_error:true,service_code:'E100 0000',age_ms:100};await refresh();assert.equal(nodes.printer.textContent,'E100 0000');
+ status.capt={fresh:true,service_error:true,service_code:'E100 0000',age_ms:100};await refresh();assert.equal(nodes.printer.textContent,'E100 0000');assert.equal(nodes['printer-status'].dataset.tone,'error');
  status.server_queue={supported:true,age_ms:100,revision:'rev-1',items:[{id:'web-1',title:'<script>test</script>',state:'queued'}]};status.queue_command={id:'cmd-1',result:'pending'};
  await refresh();assert.equal(nodes['server-jobs'].children[0].children[0].textContent,'<script>test</script> · web-1 · queued');assert.equal(nodes['server-jobs'].children[0].children[1].disabled,true);
  await refresh({job_control:{id:'lan-1',state:'paused',source:'lan',active:true,controllable:true,total:3,completed:1},capt:{fresh:true,age_ms:5}});assert.equal(nodes['job-resume'].disabled,false);assert(nodes['control-state'].textContent.includes('Đã dừng'));assert.equal(nodes.wifi.textContent,'Wi-Fi');
- status.capt.fresh=false;await refresh();assert.equal(nodes.printer.textContent,'Đang đọc trạng thái máy in');
+ status.capt.fresh=false;await refresh();assert.equal(nodes.printer.textContent,'Đang đọc trạng thái máy in');assert.equal(nodes['printer-status'].dataset.tone,'warn');
  status.usb.connected=false;status.usb.responsive=false;await refresh();assert.equal(nodes.printer.textContent,'Chưa kết nối máy in');
- offline=true;await refresh();assert.equal(nodes.connection.dataset.tone,'error');assert.equal(nodes.job.hidden,true);assert.equal(nodes.resolve.hidden,true);assert.equal(nodes.printer.textContent,'Chưa có trạng thái mới');
+ offline=true;await refresh();assert.equal(nodes.connection.dataset.tone,'error');assert.equal(nodes['printer-status'].dataset.tone,'offline');assert.equal(nodes.job.hidden,true);assert.equal(nodes.resolve.hidden,true);assert.equal(nodes.printer.textContent,'Chưa có trạng thái mới');
  console.log('PASS: IDs, CSRF forms, LAN/cloud progress, edit preservation, USB disconnect, stale status');
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''

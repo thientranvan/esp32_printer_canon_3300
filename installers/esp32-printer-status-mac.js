@@ -1,15 +1,21 @@
 // Native macOS status window. Run: osascript -l JavaScript FILE IP QUEUE NAME
+function statusView(title,detail,kind) {
+    return {title:title,detail:detail,kind:kind,error:kind!=='ready'&&kind!=='busy'};
+}
 function deviceView(s) {
-    if (!s) return {title:'Mất kết nối trạm in', detail:'Kiểm tra nguồn ESP và mạng LAN.', error:true};
-    if (!s.connected || !s.responsive) return {title:'Máy in chưa kết nối', detail:'Kiểm tra nguồn máy in và dây USB.', error:true};
-    if (!s.capt || !s.capt.fresh) return {title:'Chưa có trạng thái mới', detail:'Chưa thể xác nhận tiến trình máy in.', error:true};
-    var c=s.capt, errors=[];
-    if(c.service_error) errors.push('Canon '+c.service_code+' — cần kiểm tra / bảo dưỡng máy in.');
-    if(c.paper_jam) errors.push('Kẹt giấy. Kiểm tra đường giấy.');
-    if(c.cover_open) errors.push('Nắp máy in đang mở.');
-    if(c.paper_required) errors.push('Kiểm tra giấy, khổ giấy và khay giấy đã chọn.');
-    if(c.toner_warning) errors.push('Cảnh báo mực.');
-    return {title:errors.length ? (c.service_error ? 'Canon '+c.service_code : 'Máy in cần xử lý') : (s.active?'Đang in':'Sẵn sàng'), detail:errors.join('\n') || (s.active?'Máy in đang xử lý lệnh.':'Máy in đang rảnh.'), error:errors.length>0};
+    if(!s)return statusView('Mất kết nối trạm in','Kiểm tra nguồn ESP và mạng LAN.','offline');
+    if(!s.connected)return statusView('Máy in chưa kết nối','Kiểm tra nguồn máy in và dây USB.','offline');
+    if(!s.responsive||!s.capt||!s.capt.fresh)return statusView('Chưa có trạng thái mới','Chưa thể xác nhận tiến trình máy in.','warning');
+    var c=s.capt,errors=[];
+    if(c.service_error)errors.push('Canon '+c.service_code+' — cần kiểm tra / bảo dưỡng máy in.');
+    if(c.paper_jam)errors.push('Kẹt giấy. Kiểm tra đường giấy.');
+    if(c.cover_open)errors.push('Nắp máy in đang mở.');
+    if(c.paper_required)errors.push('Kiểm tra giấy, khổ giấy và khay giấy đã chọn.');
+    if(c.toner_warning)errors.push('Cảnh báo mực.');
+    if(errors.length)return statusView(c.service_error?'Canon '+c.service_code:'Máy in cần xử lý',errors.join('\n'),c.service_error||c.paper_jam?'error':'warning');
+    if(s.job_control&&s.job_control.state==='uncertain')return statusView('Lệnh cần đối soát','Chưa rõ kết quả lệnh trước; không tự in lại.','warning');
+    if(s.job_control&&s.job_control.state==='paused')return statusView('Đã tạm dừng','Lệnh đang tạm dừng gửi.','warning');
+    return statusView(s.active?'Đang in':'Sẵn sàng',s.active?'Máy in đang xử lý lệnh.':'CAPT phản hồi, không có cờ lỗi đã giải mã.',s.active?'busy':'ready');
 }
 function jobView(s) {
     var j=s&&s.job_control, states={printing:'Đang in',paused:'Đã tạm dừng',failed:'Lệnh lỗi',uncertain:'Chưa rõ kết quả',completed:'Đã hoàn tất',resolved:'Đã đối soát'};
@@ -31,7 +37,8 @@ function run(argv) {
         l.font=bold?$.NSFont.boldSystemFontOfSize(size):$.NSFont.systemFontOfSize(size);content.addSubview(l);return l;
     }
     label(name,24,20,710,32,23,true);label('Canon LBP3300  |  '+host,24,58,710,23,13,false);
-    var state=label('Đang kết nối…',24,106,710,36,23,true);
+    var statusIcon=$.NSImageView.alloc.initWithFrame($.NSMakeRect(24,398,34,34));content.addSubview(statusIcon);
+    var state=label('Đang kết nối…',70,106,664,36,23,true);
     var message=label('',24,151,710,66,14,false);
     var progressText=label('Chưa có tổng số mặt in được xác nhận',24,226,710,25,13,false);
     var progress=$.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(24,270,712,12));progress.indeterminate=false;progress.minValue=0;progress.maxValue=100;content.addSubview(progress);
@@ -50,7 +57,8 @@ function run(argv) {
     }
     function read(t) {return ObjC.unwrap($.NSString.alloc.initWithDataEncoding(t.pipe.fileHandleForReading.readDataToEndOfFile,$.NSUTF8StringEncoding)) || '';}
     function apply(s) {
-        var v=deviceView(s);state.stringValue=$(v.title);message.stringValue=$(v.detail);state.textColor=v.error?$.NSColor.systemRedColor:$.NSColor.systemGreenColor;
+        var v=deviceView(s);state.stringValue=$(v.title);message.stringValue=$(v.detail);var color={ready:$.NSColor.systemGreenColor,busy:$.NSColor.systemBlueColor,warning:$.NSColor.colorWithSRGBRedGreenBlueAlpha(0.52,0.33,0,1),error:$.NSColor.systemRedColor,offline:$.NSColor.secondaryLabelColor}[v.kind];state.textColor=color;
+        var symbol={ready:'checkmark.circle.fill',busy:'printer.fill',warning:'exclamationmark.triangle.fill',error:'xmark.octagon.fill',offline:'wifi.slash'}[v.kind];statusIcon.image=$.NSImage.imageWithSystemSymbolNameAccessibilityDescription($(symbol),$(v.title));statusIcon.contentTintColor=color;
         var view=jobView(s);progress.doubleValue=view.value;progressText.stringValue=$(view.text);
         var error=v.error?v.title+v.detail:'';if(s&&s.job_control&&s.job_control.state==='uncertain')error+='uncertain:'+s.job_control.id;if(error && error!==lastError)show();lastError=error;
         if(Date.now()>actionUntil)footer.stringValue=$('Cập nhật '+new Date().toLocaleTimeString()+' | Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.');

@@ -24,3 +24,12 @@ assert(source.includes("control('pause')") && source.includes("control('resume')
 s.job_control.state='uncertain';assert(context.jobView(s).text.includes('đối soát'));
 
 assert(context.jobView(s).text.includes('0 / 2'));
+
+assert.equal(context.deviceView(null).kind,'offline');
+s={connected:true,responsive:true,capt:{fresh:true}};
+assert.equal(context.deviceView(s).kind,'ready');
+s.active=true;assert.equal(context.deviceView(s).kind,'busy');
+s.capt.paper_required=true;assert.equal(context.deviceView(s).kind,'warning');
+s.capt.paper_jam=true;assert.equal(context.deviceView(s).kind,'error');
+s.capt.fresh=false;assert.equal(context.deviceView(s).kind,'warning');
+s.connected=false;assert.equal(context.deviceView(s).kind,'offline');
