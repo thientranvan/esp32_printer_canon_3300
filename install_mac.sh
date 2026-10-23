@@ -29,7 +29,7 @@ printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
 backend_sha=45a06419a32f3b39bcb116ef735fd427e68f5fda2bfdfc368913abb6bb497661
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/cc58f136bff20c4fe102453dc4e173c9ccfb1042/mac_backend.pl
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/508d1acae655b02092425d17fefd7e3a605eaa77/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
@@ -128,11 +128,11 @@ EOF
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."
 # Desktop monitor runs as the logged-in user, never as the CUPS/root daemon.
 status_script="$source_dir/installers/esp32-printer-status-mac.js"
-status_sha=e67f9aaca89c9a2c60211e06c799ae72c5d81b0250fb02067919b25753a8c896
+status_sha=0f8779a4ec7f5456364121b504a6cd89d4bd0abb2abd9e8d2efe9ecdf3356c98
 if [ ! -f "$status_script" ]; then
   status_script="$work/esp32-printer-status-mac.js"
   /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
-    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/cc58f136bff20c4fe102453dc4e173c9ccfb1042/installers/esp32-printer-status-mac.js -o "$status_script"
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/508d1acae655b02092425d17fefd7e3a605eaa77/installers/esp32-printer-status-mac.js -o "$status_script"
 fi
 [ "$(/usr/bin/shasum -a 256 "$status_script" | /usr/bin/cut -d' ' -f1)" = "$status_sha" ] || { echo 'Status monitor checksum mismatch.' >&2; exit 1; }
 /usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"
