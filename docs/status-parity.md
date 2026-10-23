@@ -42,3 +42,14 @@ ESP điều khiển qua contract realtime-control, không quản lý job chưa g
 Kiểm thử: `python3 check_telemetry.py` kiểm tra nguồn ESP, endpoint cũ 404,
 capability unknown và đọc status liên tiếp không reset; không gửi lệnh in.
 Buffer snapshot queue 4097 byte giữ trên heap để tránh tràn stack WebServer.
+
+## Sự cố Mac 23/10, lệnh 28 mặt
+
+ESP ghi nhận 9/28 mặt, lỗi TCP 263 (ESP_ERR_TIMEOUT) khi ghi C0A0; USB control
+vẫn phản hồi nhưng CAPT bulk không còn trạng thái mới. Không suy diễn là hết giấy
+hoặc máy đã rảnh. Không tự phát lại phần còn lại vì máy có thể còn mặt đang đệm.
+
+CUPS job 241 lưu CNDuplex boolean true, BindEdge Top, sides one-sided. Backend
+phải nhận cả tùy chọn bare CNDuplex và CNDuplex=True, ưu tiên tùy chọn Canon.
+Đã bổ sung kiểm thử hai dạng boolean; cửa sổ giữ số mặt cuối và tự mở khi uncertain.
+Lỗi timeout bulk của lượt này chưa xác định nguyên nhân vật lý/giao thức.

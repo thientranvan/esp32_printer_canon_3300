@@ -130,6 +130,8 @@ sub pages {
         fail('Invalid inter-page metadata') unless $op == 2 && length($data) <= 4092;
     }
 }
+# CUPS serializes boolean true as bare CNDuplex as well as CNDuplex=True.
+sub canon_duplex { return $_[0] =~ /(?:^|\s)CNDuplex(?:=True)?(?:\s|$)/i; }
 sub plan_pages {
     my ($pages, $copies, $duplex, $collate) = @_;
     my @plan;
@@ -297,6 +299,12 @@ sub main {
         my @p = pages($job); fail('Parser self-test') unless @p == 2 && $p[1][1][0] eq 'abc';
         for my $bad (substr($job, 0, -1), $job . 'x') { eval { pages($bad) }; fail('Bad input accepted') unless $@; }
         fail('Job info layout') unless length(info(1, 2, 3)) == 72 && unpack('x4V', info(1, 2, 3)) == 3;
+        for my $options ('CNDuplex', 'CNDuplex=True', 'sides=one-sided CNDuplex BindEdge=Top') {
+            fail('CUPS boolean duplex') unless canon_duplex($options);
+        }
+        for my $options ('', 'CNDuplex=False', 'noCNDuplex', 'OtherCNDuplex=True') {
+            fail('CUPS simplex') if canon_duplex($options);
+        }
         my @pair = ([packet(0xD0A0, $page), ['front']], [packet(0xD0A0, $page), ['back']]);
         my @plan = plan_pages(\@pair, 2, 1, 1);
         fail('Duplex planner') unless @plan == 4 && $plan[0][1][0] eq 'back' && $plan[1][1][0] eq 'front' &&
@@ -320,7 +328,7 @@ sub main {
         my $body='';while(length($body)<=4096){my $n=read($info,my $part,1024);last unless $n;$body.=$part;}close($info) or die 'profile';
         my $profile=JSON::PP->new->max_size(4096)->decode($body);$metadataSupported=($profile->{lan_metadata_version}//0)>=1;
     };
-    my $duplex = $ARGV[4] =~ /(?:^|\s)CNDuplex=True(?:\s|$)/i;
+    my $duplex = canon_duplex($ARGV[4]);
     fail('Select Canon Print Style / Binding Location for duplex') if !$duplex && $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
     my $collate = $ARGV[4] !~ /(?:^|\s)Collate=False(?:\s|$)/i;
     fail('Copies must be 1..99') unless $ARGV[3] =~ /\A[0-9]+\z/ && $ARGV[3] >= 1 && $ARGV[3] <= 99;

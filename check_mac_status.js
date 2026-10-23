@@ -22,3 +22,5 @@ s.job_control.active=false;assert(!context.jobView(s).text.includes('0 / 2'));
 assert(source.includes("control('pause')") && source.includes("control('resume')") && source.includes("control('cancel')"));
 
 s.job_control.state='uncertain';assert(context.jobView(s).text.includes('đối soát'));
+
+assert(context.jobView(s).text.includes('0 / 2'));
