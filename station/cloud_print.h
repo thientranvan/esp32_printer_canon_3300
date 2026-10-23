@@ -3,6 +3,8 @@
 #include <esp_crt_bundle.h>
 #include <cJSON.h>
 #include <mbedtls/sha256.h>
+#include <mbedtls/platform.h>
+#include <esp_heap_caps.h>
 #include <time.h>
 #include "prepared_job.h"
 
@@ -48,17 +50,23 @@ static esp_http_client_handle_t cloudClient(const String &path,const String &lea
   return h;
 }
 // Bounded bodies, no redirects: a server response never chooses another host/path.
-static int cloudPost(const String &path,const String &body,String &response,const String &lease="",esp_http_client_handle_t reusable=nullptr) {
+static int cloudPost(const String &path,const String &body,String &response,const String &lease="",esp_http_client_handle_t reusable=nullptr,String *diagnostic=nullptr) {
   response="";int status=-1;auto h=reusable?reusable:cloudClient(path,lease);
+  auto note=[&](const char *stage,int result){if(diagnostic){char text[112];snprintf(text,sizeof(text),"%s=%d errno=%d heap=%u",stage,result,h?esp_http_client_get_errno(h):0,(unsigned)ESP.getFreeHeap());*diagnostic=text;}};
+  if(diagnostic)*diagnostic="";
+  if(!h)note("init",-1);
   if(h){
   esp_http_client_set_method(h,HTTP_METHOD_POST); esp_http_client_set_header(h,"Content-Type","application/json");
-  if(esp_http_client_open(h,body.length())==ESP_OK) {
+  int opened=esp_http_client_open(h,body.length());if(opened!=ESP_OK)note("open",opened);
+  if(opened==ESP_OK) {
     size_t offset=0;
-    while(offset<body.length()) { int n=esp_http_client_write(h,body.c_str()+offset,body.length()-offset); if(n<=0)break; offset+=n; }
-    if(offset==body.length() && esp_http_client_fetch_headers(h)>=0) {
+    while(offset<body.length()) { int n=esp_http_client_write(h,body.c_str()+offset,body.length()-offset); if(n<=0){note("write",n);break;} offset+=n; }
+    int64_t headers=offset==body.length()?esp_http_client_fetch_headers(h):-1;
+    if(headers<0 && offset==body.length())note("headers",int(headers));
+    if(offset==body.length() && headers>=0) {
       status=esp_http_client_get_status_code(h); response=""; char b[512];
       // HTTP 204 has no body. Reading it may wait for nonexistent data and fail.
-      while(status!=204 && response.length()<=8192) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){status=-1;break;} if(!n)break; response.concat(b,n); }
+      while(status!=204 && response.length()<=8192) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){note("read",n);status=-1;break;} if(!n)break; response.concat(b,n); }
       if(response.length()>8192)status=-1;
     }
   }
@@ -270,7 +278,7 @@ static void cloudTask(void *) {
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
     }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain")) {
-      String response;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response);
+      String response,detail;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",nullptr,&detail);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256");
         auto *n=cJSON_GetObjectItem(j,"bytes");double bytes=cJSON_IsNumber(n)?n->valuedouble:0;
@@ -303,7 +311,7 @@ static void cloudTask(void *) {
         if(!persist()){cloudState("blocked","Cannot persist outcome; journal retained");vTaskDelete(nullptr);return;}
         cloudWorking.store(false);
       }else if(code==204)cloudState("idle");
-      else {String message=String("Claim failed (HTTP ")+code+")";cloudState("server_error",message.c_str());}
+      else {String message=String("Claim failed (HTTP ")+code+"; "+detail+")";cloudState("server_error",message.c_str());}
     }
     vTaskDelay(pdMS_TO_TICKS(500));
   }
@@ -331,6 +339,11 @@ static void startCloud() {
   if(healthy && xTaskCreate(captStatusTask,"printer-status",8192,nullptr,1,nullptr)!=pdPASS)Serial.println("CAPT status task failed");
   if(!stationSettings.cloudEnabled)return;
   if(!healthy){cloudState("blocked","Station self-test failed");return;}
+  // TLS contexts overlap for realtime telemetry and job downloads. Keep their
+  // buffers in PSRAM; install allocator before either HTTPS task starts.
+  if(!psramFound() || mbedtls_platform_set_calloc_free(
+      [](size_t count,size_t size)->void * {return heap_caps_calloc(count,size,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);},
+      heap_caps_free)!=0){cloudState("blocked","Cannot initialize TLS PSRAM allocator");return;}
   cloudBoot=String(esp_random(),HEX)+String(esp_random(),HEX);configTime(0,0,"pool.ntp.org","time.google.com");
   if(xTaskCreate(cloudTelemetryTask,"print-telemetry",12288,nullptr,1,nullptr)!=pdPASS){cloudState("blocked","Cannot start telemetry");return;}
   if(xTaskCreate(cloudTask,"print-cloud",16384,nullptr,1,nullptr)!=pdPASS)cloudState("blocked","Cannot start cloud task");

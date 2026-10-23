@@ -45,3 +45,30 @@ all returned to zero. Resolved the exact retained cloud job through the authenti
 cloud reconciliation endpoint without replaying its document. Live requests then
 confirmed claim_http=204, heartbeat_http=200 and cloud.state=idle. This verifies the
 no-content claim path against production, in addition to the deterministic tests.
+
+## Intermittent TLS allocation failure found on COM
+
+Longer observation after reconciliation exposed a separate real transport fault:
+`mbedtls_ssl_setup returned -0x7F00`, followed by `create_ssl_handle failed`.
+The Arduino SDK selects CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC. Persistent heartbeat
+TLS and foreground claim/download TLS overlap; allocation can fail even though
+PSRAM has free space. The free-heap figure after cleanup is not peak TLS usage.
+
+Firmware now installs the supported `mbedtls_platform_set_calloc_free` allocator
+before either HTTPS task starts, allocating TLS memory using
+`heap_caps_calloc(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` and releasing it with
+`heap_caps_free`. This N16R8 station requires working PSRAM for cloud operation;
+allocator setup failure blocks cloud tasks with an explicit error. Certificate
+bundle validation remains enabled. No HTTP downgrade or frontend error masking.
+
+Claim failures now include their local failing HTTP stage, result, socket errno
+and free heap (never credentials). Deterministic HTTP tests cover open failure
+and its diagnostic text as well as the earlier response cases.
+
+Post-fix live verification: firmware built and flashed via COM, correct station
+MAC confirmed and flash hash verified. Native HTTP/cloud checks pass. Over two
+minutes of concurrent heartbeat/claim operation remained idle (200 heartbeat,
+204 empty claim), with internal free heap approximately 106–122 KiB instead of
+the earlier TLS allocation trough near 22 KiB. Production database heartbeat
+also reports idle with separate 200/204 codes. No document was submitted in this
+verification; download/printing under the new allocator remains untested.

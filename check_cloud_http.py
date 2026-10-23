@@ -15,6 +15,8 @@ using esp_http_client_handle_t=Fake*;
 static Fake foreground;
 static bool allocationFail=false;
 static auto cloudClient(const String&,const String&)->Fake* {return allocationFail?nullptr:&foreground;}
+static int esp_http_client_get_errno(Fake*){return 0;}
+static struct {unsigned getFreeHeap(){return 123456;}} ESP;
 static int cloudLock;
 static struct {int http=0,heartbeatHttp=0,claimHttp=0,eventHttp=0;} cloudView;
 #define portENTER_CRITICAL(x) (void)(x)
@@ -55,6 +57,7 @@ int main(){
  foreground=Fake();foreground.code=200;foreground.body="partial";foreground.truncated=true;
  assert(cloudPost("/jobs/claim","{}",out)==-1);
  allocationFail=true;assert(cloudPost("/jobs/claim","{}",out)==-1 && cloudView.claimHttp==-1 && out.empty());allocationFail=false;
+ foreground=Fake();foreground.fail=true;String detail;assert(cloudPost("/jobs/claim","{}",out,"",nullptr,&detail)==-1 && detail.find("open=")!=String::npos);
  foreground=Fake();assert(cloudPost("/jobs/test/events","{}",out)==204 && cloudView.eventHttp==204 && foreground.reads==0);
  puts("PASS: no-body 204, independent endpoint codes, 200/503, bounded/truncated bodies and allocation failure");
 }
