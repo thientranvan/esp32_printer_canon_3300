@@ -210,3 +210,21 @@ Verified on the connected Windows machine: upgraded existing Máy 1 without addi
 a queue; parser/bridge self-tests and status model tests passed. Captured the real
 window showing E100 0000, hid it and verified an opaque test event made it visible
 again. This popup test sends no CAPT pages. E100 remains a physical printer fault.
+
+### ESP homepage and support commands (2026-10-23)
+
+Homepage layout is denser: printer and network cards share the first row; web
+registration is collapsed. The Cài máy in shortcut opens current GitHub installers,
+including Windows dashboard commit fc10c49 and later. Installer files stay on GitHub.
+Permanent support commands enable/disable the existing ESP32PrinterSupport task
+and firewall rule; stopping also terminates sshd processes from its exact portable
+installation path. They do not stop the CAPT bridge. Disabling preserves the rule
+for the next support session. First-time SSH setup still requires the separate
+support script, Mac IPv4 and public key; enabling does not expand the whitelist.
+A Mac SSH command template is available beside the live diagnostic command.
+No SSH private key, cloud token or device password is embedded in these commands.
+Deployment verified through COM on station 98:c3:77:a1:36:b0: firmware hash verified,
+live homepage includes installer link and all three support copy fields; Wi-Fi
+192.168.1.199 and printer USB connected. COM reports STATION: PASS after reboot.
+Both Windows support commands were parsed on the Windows host without executing
+them, preserving the active support session.

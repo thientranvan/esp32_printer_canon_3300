@@ -10,6 +10,13 @@ ids = re.findall(r'\bid="([^"]+)"', html)
 assert len(ids) == len(set(ids)), 'Duplicate HTML IDs'
 assert 'fetch(\'/support/command' not in html
 assert 'innerHTML' not in html
+for field in ['support-start','support-stop','support-mac']:
+    assert f"copyField('{field}')" in html
+assert 'Enable-NetFirewallRule -Name ESP32PrinterSupport' in html
+assert 'Disable-NetFirewallRule -Name ESP32PrinterSupport' in html
+assert 'Remove-NetFirewallRule' not in html, 'Stop must preserve rule for restart'
+assert 'ESP32CaptBridge' not in html, 'Support commands must not stop printing'
+
 for action in ['/station', '/wifi', '/usb/start', '/cloud/resolve']:
     assert re.search(r'<form[^>]*action="'+action+r'"[^>]*>.*?name="token"[^>]*value="__CSRF__"', html, re.S)
 script = re.search(r'<script>(.*?)</script>', html, re.S)[1].replace('}refresh();', '}')
