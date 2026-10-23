@@ -1,6 +1,6 @@
 # Contract ESP32–quanly.lophocbinhminh.com, v1
 
-> Bổ sung dữ liệu cửa sổ trạng thái, hàng đợi OS và capability: [status-parity.md](status-parity.md).
+> Quy định nguồn trạng thái độc lập trên ESP, capability và dữ liệu chưa biết: [status-parity.md](status-parity.md).
 
 > Cập nhật 22/10/2026: Máy 1 đã nạp firmware qua COM, cloud bật và heartbeat HTTP 204.
 > Đã xác minh server lưu lỗi máy thật **E100 0000**. Chưa nghiệm thu cloud đầu-cuối

@@ -19,3 +19,8 @@
   vẫn có lần làm bo boot lại (uptime về 3 giây). Không lặp cách này để đọc log,
   nhất là khi có job. Ưu tiên giữ monitor liên tục từ sau lần nạp, giải phóng
   cổng khi flash; kiểm tra uptime để phát hiện reset ngoài ý muốn.
+
+- Yêu cầu 23/10/2026: ESP là nguồn trạng thái duy nhất gửi web server. Không thêm
+  agent/report hàng đợi nền từ Mac/Windows; trạng thái và tiến trình lấy từ USB
+  hoặc lệnh ESP đã nhận. Dữ liệu không biết phải để null/chưa xác định. Máy tính
+  chỉ cần khi chính nó gửi lệnh LAN; cloud không phụ thuộc máy tính nào bật.

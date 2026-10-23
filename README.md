@@ -68,7 +68,7 @@ Firmware đã có client HTTPS chủ động tới `quanly.lophocbinhminh.com`, 
 claim, tải prepared CAPT <=4 MiB, kiểm tra checksum, gửi USB và journal chống tự in lặp.
 Cloud mặc định tắt, cần token riêng mỗi trạm từ server. In LAN vẫn độc lập server.
 **Chưa có endpoint/dashboard/worker render trên server; chưa thể in tài liệu từ web thật.**
-Dữ liệu trạng thái mới: [tên tài liệu, hàng đợi OS/bridge, capability và dữ liệu cũ](docs/status-parity.md).
+Dữ liệu trạng thái mới: [ESP tự đọc USB, báo trạng thái và quản lý lệnh đã nhận](docs/status-parity.md).
 
 Dev server triển khai theo [contract đầy đủ](docs/server-contract.md), không cần mở
 port router. ESP không chuyển PDF/Word sang CAPT; renderer phía server là bắt buộc.

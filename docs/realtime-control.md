@@ -1,6 +1,6 @@
 # ESP32: trạng thái trực tiếp và điều khiển job — bàn giao 23/10/2026
 
-> Bổ sung dữ liệu cửa sổ trạng thái, hàng đợi OS và capability: [status-parity.md](status-parity.md).
+> Quy định nguồn trạng thái độc lập trên ESP, capability và dữ liệu chưa biết: [status-parity.md](status-parity.md).
 
 Origin duy nhất: `https://quanly.lophocbinhminh.com`.
 Tài liệu này bổ sung contract v1, không thay schema dữ liệu in `espjob-v1`.

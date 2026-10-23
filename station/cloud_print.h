@@ -35,7 +35,6 @@ static bool cloudIdentifier(const String &s,size_t minimum=1,size_t maximum=64) 
   return true;
 }
 #include "server_queue.h"
-#include "client_reports.h"
 static String cloudPath(const String &suffix) { return "/api/print/v1/stations/"+stationID+suffix; }
 static esp_http_client_handle_t cloudClient(const String &path,const String &lease="") {
   String url=String(cloudOrigin)+cloudPath(path);
@@ -93,11 +92,11 @@ static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
   auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
   String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
-  String body="{\"schema\":1,\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
+  String body="{\"schema\":1,\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
     ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
-    ",\"total\":"+String(lanJob?j.total:0)+",\"completed\":"+String(lanJob?j.completed:0)+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON(j)+",\"clients\":"+clientReportsJSON()+",\"queue_command\":"+queueCommandJSON()+"}";
+    ",\"total\":"+String(lanJob?j.total:0)+",\"completed\":"+String(lanJob?j.completed:0)+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON(j)+",\"queue_command\":"+queueCommandJSON()+"}";
   return body;
 }
 // Dedicated network task: HTTPS cannot block USB engine/status or local controls.
