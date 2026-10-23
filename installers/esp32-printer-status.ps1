@@ -41,9 +41,9 @@ function Add-Label($value,$x,$y,$w,$h,$size=10) {
 $heading=Add-Label $settings.name 26 18 720 34 20
 $identity=Add-Label "Canon LBP3300  |  $($settings.ip)" 28 57 720 24
 $card=New-Object Windows.Forms.Panel;$card.SetBounds(26,94,728,132);$card.BackColor=[Drawing.Color]::White;$form.Controls.Add($card)
-$icon=New-Object Windows.Forms.Label;$icon.SetBounds(20,23,54,54);$icon.Font=New-Object Drawing.Font('Segoe UI Symbol',30);$icon.TextAlign='MiddleCenter';$icon.AccessibleName='Trạng thái máy in';$card.Controls.Add($icon)
-$state=New-Object Windows.Forms.Label;$state.SetBounds(86,15,620,35);$state.Font=New-Object Drawing.Font('Segoe UI',17,[Drawing.FontStyle]::Bold);$card.Controls.Add($state)
-$message=New-Object Windows.Forms.Label;$message.SetBounds(88,56,610,70);$card.Controls.Add($message)
+$icon=New-Object Windows.Forms.Label;$icon.SetBounds(16,14,68,68);$icon.Font=New-Object Drawing.Font('Segoe UI Symbol',38);$icon.TextAlign='MiddleCenter';$icon.AccessibleName='Trạng thái máy in';$card.Controls.Add($icon)
+$state=New-Object Windows.Forms.Label;$state.SetBounds(100,15,606,35);$state.Font=New-Object Drawing.Font('Segoe UI',17,[Drawing.FontStyle]::Bold);$card.Controls.Add($state)
+$message=New-Object Windows.Forms.Label;$message.SetBounds(102,56,596,70);$card.Controls.Add($message)
 $progressText=Add-Label '' 28 240 720 24
 $bar=New-Object Windows.Forms.ProgressBar;$bar.SetBounds(28,270,724,10);$form.Controls.Add($bar)
 $queueTitle=Add-Label 'Hàng đợi Windows' 28 296 720 26 12
