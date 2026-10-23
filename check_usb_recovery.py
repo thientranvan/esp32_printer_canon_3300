@@ -2,6 +2,7 @@
 import argparse
 import json
 import time
+from pathlib import Path
 from capt_client import CaptClient
 
 
@@ -9,6 +10,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cycle", action="store_true")
     args = parser.parse_args()
+    source = Path(__file__).with_name("station").joinpath("usb_monitor.h").read_text()
+    assert "usb_host_lib_set_root_port_power(" not in source, "Unsafe power cycling races SDK device recycle"
     client = CaptClient()
     previous_uptime = 0
     lost = False

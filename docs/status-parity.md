@@ -53,3 +53,8 @@ CUPS job 241 lưu CNDuplex boolean true, BindEdge Top, sides one-sided. Backend
 phải nhận cả tùy chọn bare CNDuplex và CNDuplex=True, ưu tiên tùy chọn Canon.
 Đã bổ sung kiểm thử hai dạng boolean; cửa sổ giữ số mặt cuối và tự mở khi uncertain.
 Lỗi timeout bulk của lượt này chưa xác định nguyên nhân vật lý/giao thức.
+
+Sau khi người dùng tắt/bật máy in: crash dump xác nhận abort tại SDK
+`root_port_recycle()` trong usb-daemon. Bỏ vòng tự tắt/bật root-port khi missing
+hoặc probe timeout: thao tác đó tranh chấp với SDK đang thu hồi thiết bị.
+Giữ discovery/đóng thiết bị/re-enumeration SDK; không che lỗi bulk bằng reset.

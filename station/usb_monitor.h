@@ -182,8 +182,6 @@ static void usbTask(void *) {
   uint32_t lastScan = 0;
   unsigned scanIndex = 0;
   uint32_t lastHeartbeat = 0;
-  uint32_t lastRecovery = millis();
-  uint32_t recoveryAt = 0;
   while (true) {
     error = usb_host_client_handle_events(client, pdMS_TO_TICKS(10));
     if (error != ESP_OK && error != ESP_ERR_TIMEOUT) {
@@ -228,33 +226,9 @@ static void usbTask(void *) {
       snprintf(status.details, sizeof(status.details), "Thiết bị USB đã ngắt kết nối. Đang thu hồi giao dịch USB.");
       publishUSB(status);
     }
-    // Native root-port reset keeps Wi-Fi/HTTP alive and does not resend job data.
-    // Power command changes controller state; it is not a physical VBUS switch.
-    bool stalledProbe = context.probe && uint32_t(millis() - context.probeAt) >= 5000;
-    bool missing = !context.device || context.gone || (status.heartbeatError != ESP_OK);
-    int idleState = captCommand.state.load();
-    if (!status.recovering && !captCommand.transfer && (idleState == 0 || idleState == 3) &&
-        uint32_t(millis() - lastRecovery) >= 30000 && (missing || stalledProbe) &&
-        captCommand.state.compare_exchange_strong(idleState, 6)) {
-      esp_err_t reset = usb_host_lib_set_root_port_power(false);
-      lastRecovery = millis();
-      status.heartbeatError = reset;
-      if (reset == ESP_OK) {
-        status.recovering = true;
-        status.connected = false;
-        status.responsive = false;
-        ++status.recoveries;
-        recoveryAt = millis();
-      }
-      publishUSB(status);
-      captCommand.state.store(idleState);
-    }
-    if (status.recovering && uint32_t(millis() - recoveryAt) >= 1000) {
-      esp_err_t reset = usb_host_lib_set_root_port_power(true);
-      status.heartbeatError = reset;
-      if (reset == ESP_OK) status.recovering = false;
-      publishUSB(status);
-    }
+    // ponytail: rely on SDK disconnect/re-enumeration, not forced root power cycles.
+    // Power-off while SDK recycles a freed device aborts in root_port_recycle().
+    // Add explicit recovery only with a serialized SDK lifecycle/state handshake.
     if (!status.recovering && context.device && !context.gone && !context.probe &&
         !captCommand.transfer && uint32_t(millis() - lastHeartbeat) >= 3000) {
       lastHeartbeat = millis();
