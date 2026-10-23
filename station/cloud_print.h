@@ -35,6 +35,7 @@ static bool cloudIdentifier(const String &s,size_t minimum=1,size_t maximum=64) 
   return true;
 }
 #include "server_queue.h"
+#include "client_reports.h"
 static String cloudPath(const String &suffix) { return "/api/print/v1/stations/"+stationID+suffix; }
 static esp_http_client_handle_t cloudClient(const String &path,const String &lease="") {
   String url=String(cloudOrigin)+cloudPath(path);
@@ -84,7 +85,7 @@ static std::atomic<uint32_t> cloudCommandSeq{0};
 static std::atomic<int> cloudCommandResult{0};
 static bool cloudHeartbeat(bool force=false) {return cloudOnline.load();}
 static String jobStatusJSON(const PrintControl::Job &j) {
-  return String("{\"id\":")+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
+  return String("{\"title\":")+jsonString(j.title)+",\"client_name\":"+jsonString(j.client)+",\"client_os\":"+jsonString(j.os)+",\"progress_known\":"+(j.total?"true":"false")+",\"progress_unit\":\"impressions\",\"actions\":{\"pause\":"+(j.canPause()?"true":"false")+",\"resume\":"+(j.canResume()?"true":"false")+",\"cancel\":"+(j.canCancel()?"true":"false")+",\"delete\":"+(j.canDelete()?"true":"false")+"},\"id\":"+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
     ",\"request\":"+jsonString(j.request)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
     ",\"total\":"+j.total+",\"completed\":"+j.completed+"}";
 }
@@ -96,7 +97,7 @@ static String cloudHeartbeatBody() {
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
     ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
-    ",\"total\":"+String(lanJob?j.total:0)+",\"completed\":"+String(lanJob?j.completed:0)+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON(j)+",\"queue_command\":"+queueCommandJSON()+"}";
+    ",\"total\":"+String(lanJob?j.total:0)+",\"completed\":"+String(lanJob?j.completed:0)+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON(j)+",\"clients\":"+clientReportsJSON()+",\"queue_command\":"+queueCommandJSON()+"}";
   return body;
 }
 // Dedicated network task: HTTPS cannot block USB engine/status or local controls.
@@ -280,7 +281,7 @@ static void cloudTask(void *) {
     }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain")) {
       String response,detail;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",nullptr,&detail);
       if(code==200) {
-        auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256");
+        auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256"),title=cloudText(j,"title");if(title.length()>128)title="";
         auto *n=cJSON_GetObjectItem(j,"bytes");double bytes=cJSON_IsNumber(n)?n->valuedouble:0;
         bool valid=cloudIdentifier(id)&&cloudIdentifier(lease,16,128)&&cloudText(j,"format")=="espjob-v1"&&hash.length()==64&&bytes>=16&&bytes<=Prepared::Limit&&bytes==size_t(bytes);
         for(char c:hash)if(!isxdigit(uint8_t(c))||isupper(uint8_t(c)))valid=false;
@@ -301,7 +302,7 @@ static void cloudTask(void *) {
           portENTER_CRITICAL(&cloudLock);cloudView.total=job.plan.size();cloudView.progressKnown=true;portEXIT_CRITICAL(&cloudLock);
           cloudNeedsInspection.store(true);state="uncertain";error="USB submission may have started; inspect before reprinting";
           if(!persist()){free(data);releaseCapt(CloudOwner);cloudState("blocked","Cannot persist before USB");vTaskDelete(nullptr);return;}
-          jobBegin(id.c_str(),"cloud",true);jobProgress(job.plan.size(),0);
+          jobBegin(id.c_str(),"cloud",true);jobMetadata(title.c_str(),"Web server","web");jobProgress(job.plan.size(),0);
           cloudState("printing");bool done=cloudPrint(job);
           if(done){cloudNeedsInspection.store(false);state="completed";error="";}
           jobFinish(done?"completed":"uncertain");

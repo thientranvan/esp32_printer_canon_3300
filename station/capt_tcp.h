@@ -1,6 +1,7 @@
 #pragma once
 #include <WiFi.h>
 #include "job_runtime.h"
+#include <cJSON.h>
 
 // ponytail: direct CAPT TCP, one active connection, OS spoolers hold queued jobs.
 // Add a durable ESP spool for independently submitted prepared jobs (VPS path).
@@ -66,7 +67,7 @@ static void captTCPTask(void *) {
     }
     client.setNoDelay(true);
     captTCPTotal.store(0); captTCPCompleted.store(0);
-    bool printJob=false,released=false,cooperative=false,mayPrint=false;char jobId[65]={};
+    bool printJob=false,released=false,cooperative=false,mayPrint=false;char jobId[65]={},jobTitle[129]={},jobClient[97]={},jobOS[9]={};
     snprintf(jobId,sizeof(jobId),"lan-%08lx-%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
     captTCPState.store(1);
     uint32_t waiting = millis();
@@ -82,6 +83,19 @@ static void captTCPTask(void *) {
         uint16_t opcode = uint16_t(buffer[0]) | (uint16_t(buffer[1]) << 8);
         unsigned length = unsigned(buffer[2]) | (unsigned(buffer[3]) << 8);
         captTCPHeader.store(uint32_t(opcode) | (uint32_t(length) << 16));
+        if(opcode==0xF004) {
+          if(!cooperative||printJob||length<6||length>1028||!tcpRead(client,buffer+4,length-4))break;
+          buffer[length]=0;auto *meta=cJSON_Parse((char *)buffer+4);bool valid=cJSON_IsObject(meta);
+          struct Field {const char *key;char *out;size_t size;};
+          for(auto f:{Field{"title",jobTitle,sizeof(jobTitle)},Field{"client_name",jobClient,sizeof(jobClient)},Field{"client_os",jobOS,sizeof(jobOS)}}){
+            auto *v=cJSON_GetObjectItemCaseSensitive(meta,f.key);
+            if(!cJSON_IsString(v)||strlen(v->valuestring)>=f.size){valid=false;break;}
+            for(const unsigned char *p=(const unsigned char *)v->valuestring;*p;++p)if(*p<32||*p==127)valid=false;
+            strlcpy(f.out,v->valuestring,f.size);
+          }
+          cJSON_Delete(meta);if(!valid){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
+          const uint8_t ack[6]={4,0xF0,6,0,0,1};if(client.write(ack,6)!=6)break;continue;
+        }
         if(opcode==0xF003) {
           if(!printJob || !cooperative || length!=5 || !tcpRead(client,buffer+4,1))break;
           auto j=jobSnapshot();unsigned phase=buffer[4];
@@ -105,9 +119,9 @@ static void captTCPTask(void *) {
           unsigned total=uint32_t(buffer[4])|(uint32_t(buffer[5])<<8)|(uint32_t(buffer[6])<<16)|(uint32_t(buffer[7])<<24);
           if(!total || total>9900){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
           // Fault retries must not repeatedly turn the same failed job into printing.
-          if(captFault()){jobRejectBeforeStart(jobId,total,cooperative);captTCPError.store(ESP_FAIL);break;}
+          if(captFault()){jobRejectBeforeStart(jobId,total,cooperative);if(jobSnapshot().matches(jobId))jobMetadata(jobTitle,jobClient,jobOS);captTCPError.store(ESP_FAIL);break;}
           captTCPTotal.store(total);
-          if(!printJob){if(!strcmp(jobSnapshot().state,"uncertain"))break;jobBegin(jobId,"lan",cooperative);printJob=true;}
+          if(!printJob){if(!strcmp(jobSnapshot().state,"uncertain"))break;jobBegin(jobId,"lan",cooperative);jobMetadata(jobTitle,jobClient,jobOS);printJob=true;}
           jobProgress(total,0);
           const uint8_t ack[6]={1,0xF0,6,0,0,1};
           if(client.write(ack,6)!=6)break;

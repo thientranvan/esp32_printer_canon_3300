@@ -9,3 +9,5 @@ static void jobFinish(const char *state) {portENTER_CRITICAL(&jobLock);currentJo
 static void jobProgress(unsigned total,unsigned completed) {portENTER_CRITICAL(&jobLock);currentJob.total=total;currentJob.completed=completed;portEXIT_CRITICAL(&jobLock);}
 
 static void jobRejectBeforeStart(const char *id,unsigned total,bool control) {portENTER_CRITICAL(&jobLock);currentJob.rejectBeforeStart(id,"lan",total,control);portEXIT_CRITICAL(&jobLock);}
+
+static void jobMetadata(const char *title,const char *client,const char *os) {portENTER_CRITICAL(&jobLock);currentJob.metadata(title,client,os);portEXIT_CRITICAL(&jobLock);}

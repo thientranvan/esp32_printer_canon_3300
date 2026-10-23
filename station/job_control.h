@@ -6,6 +6,12 @@ namespace PrintControl {
 // One executing job. Durable waiting queues remain on their source (OS/VPS).
 struct Job {
  char id[65]={}, source[8]={}, state[24]={}, request[24]={};
+ char title[129]={}, client[97]={}, os[9]={};
+ bool canCancel() const {return active&&controllable&&std::strcmp(request,"cancel_requested");}
+ bool canPause() const {return canCancel()&&std::strcmp(state,"paused")&&std::strcmp(request,"pause_requested");}
+ bool canResume() const {return canCancel()&&(!std::strcmp(state,"paused")||!std::strcmp(request,"pause_requested"));}
+ bool canDelete() const {return id[0]&&!active&&std::strcmp(state,"uncertain");}
+ void metadata(const char *name,const char *host,const char *platform){std::strncpy(title,name,128);title[128]=0;std::strncpy(client,host,96);client[96]=0;std::strncpy(os,platform,8);os[8]=0;}
  unsigned total=0, completed=0; bool active=false, controllable=false;
  bool matches(const char *target) const {return id[0] && !std::strcmp(id,target);}
  void begin(const char *target,const char *origin,bool control=false) {

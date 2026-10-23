@@ -53,11 +53,12 @@ static String captTelemetryJSON() {
   bool fresh=size>=40 && uint32_t(millis()-at)<10000 && readUSB().connected;
   CaptStatus::Flags f={};if(size>=40)f=CaptStatus::decode(data);
   char service[24]="";if(fresh&&f.service&&serviceAt&&uint32_t(millis()-serviceAt)<10000)snprintf(service,sizeof(service),"E%03X %04X",code,sub);
+  String capabilities=",\"capabilities\":{\"service_code\":true,\"paper_required\":true,\"paper_jam\":true,\"cover_open\":true,\"toner_warning\":true,\"toner_percent\":false,\"all_faults_verified\":false},\"progress_unit\":\"impressions\",\"data_source\":\"capt\"";
   String decoded=String(",\"fresh\":")+(fresh?"true":"false")+",\"service_error\":"+(f.service?"true":"false")+
     ",\"service_code\":\""+service+"\",\"paper_jam\":"+(f.jam?"true":"false")+",\"cover_open\":"+(f.cover?"true":"false")+
     ",\"toner_warning\":"+(f.toner?"true":"false")+",\"paper_required\":"+(f.paper?"true":"false")+
     ",\"toner_percent\":null,\"decoded\":"+f.decoded+",\"started\":"+f.started+",\"exiting\":"+f.exiting+",\"completed\":"+f.completed;
-  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+decoded+"}";
+  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+decoded+capabilities+"}";
 }
 
 static portMUX_TYPE captOwnerLock = portMUX_INITIALIZER_UNLOCKED;

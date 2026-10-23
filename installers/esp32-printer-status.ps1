@@ -6,6 +6,35 @@ $settings=Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
 $created=$false
 $mutex=New-Object Threading.Mutex($true,"Local\ESP32PrinterStatus-$($settings.id)",[ref]$created)
 if (!$created) {exit}
+function Limit-ReportText([string]$Text,[int]$Bytes) {
+ $Text=$Text -replace '[\x00-\x1f\x7f]',' '
+ while ([Text.Encoding]::UTF8.GetByteCount($Text) -gt $Bytes) {$Text=$Text.Substring(0,$Text.Length-1)}
+ if ($Text.Length -and [char]::IsHighSurrogate($Text[$Text.Length-1])) {$Text=$Text.Substring(0,$Text.Length-1)}
+ return $Text
+}
+function Send-QueueReport($Jobs) {
+ if ($script:reportTask) {
+  if (!$script:reportTask.IsCompleted -and ((Get-Date)-$script:reportStart).TotalSeconds -lt 2) {return}
+  try {if ($script:reportTask.IsCompleted) {[void]$script:reportTask.GetAwaiter().GetResult()}} catch {}
+  $script:reportClient.CancelAsync();$script:reportClient.Dispose();$script:reportTask=$null
+ }
+ $items=@($Jobs | Select-Object -First 4 | ForEach-Object {
+  @{id=[string]$_.ID;title=(Limit-ReportText ([string]$_.DocumentName) 128);state=(Limit-ReportText ([string]$_.JobStatus) 64);stage='spooler';total=$(if ($_.TotalPages -gt 0) {[int]$_.TotalPages} else {$null});completed=[int]$_.PagesPrinted}
+ })
+ $captured=$null;$unresolved=$null;$captures=@()
+ $summary=Join-Path (Split-Path $Config) 'bridge-queue.json'
+ try {
+  if (Test-Path $summary) {
+   $bridge=Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json
+   if (([datetime]::UtcNow-[datetime]::Parse($bridge.updated_utc).ToUniversalTime()).TotalSeconds -lt 15) {$captured=[int]$bridge.captured_jobs_count;$unresolved=[bool]$bridge.unresolved_submission;$captures=@($bridge.jobs | ForEach-Object {@{id=[string]$_.id;title='';state=[string]$_.state;stage='bridge';total=$null;completed=$null}})}
+  }
+ } catch {}
+ $allItems=@($captures)+@($items);$items=@($allItems | Select-Object -First 4)
+ $report=@{captured_jobs_count=$captured;unresolved_submission=$unresolved;id=(('win-'+$env:COMPUTERNAME+'-'+$settings.id) -replace '[^A-Za-z0-9_-]','_');name=(Limit-ReportText $env:COMPUTERNAME 96);os='windows';queue=(Limit-ReportText $settings.name 96);truncated=(($Jobs.Count+[int]$captured) -gt 4);jobs=$items} | ConvertTo-Json -Depth 5 -Compress
+ $script:reportClient=New-Object Net.WebClient;$script:reportClient.Proxy=$null;$script:reportClient.Encoding=[Text.Encoding]::UTF8
+ $script:reportClient.Headers['Content-Type']='application/json';$script:reportStart=Get-Date
+ $script:reportTask=$script:reportClient.UploadStringTaskAsync([uri]"http://$($settings.ip)/printer/client-report",'POST',$report)
+}
 function Get-DeviceView($s) {
  $title='Sẵn sàng';$detail='Máy in đang rảnh.';$kind='ready'
  if (!$s) {$title='Mất kết nối trạm in';$detail='Kiểm tra nguồn ESP và mạng LAN.';$kind='error'}
@@ -108,7 +137,8 @@ $timer.add_Tick({
   if (!$script:download -and (Get-Date) -ge $script:nextPoll) {
    $settings=Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
    $heading.Text=$settings.name;$identity.Text="Canon LBP3300  |  $($settings.ip)"
-   $jobs=@(Get-PrintJob -PrinterName $settings.name -ErrorAction SilentlyContinue)
+   $jobs=@(Get-PrintJob -PrinterName $settings.name -ErrorAction Stop)
+   Send-QueueReport $jobs
    $key=($jobs | ForEach-Object {$_.ID}) -join ','
    if ($key -and $key -ne $script:lastJobs) {Show-Monitor};$script:lastJobs=$key
    $queueTitle.Text="Hàng đợi Windows — $($jobs.Count) lệnh"
@@ -124,7 +154,7 @@ $timer.add_Tick({
    $script:requestStart=Get-Date;$script:download=$script:client.DownloadStringTaskAsync("http://$($settings.ip)/printer/status")
    $script:nextPoll=(Get-Date).AddSeconds(1)
   }
- } catch {$footer.Text="Không đọc được trạng thái: $($_.Exception.Message)"}
+ } catch {$footer.Text="Không đọc được trạng thái: $($_.Exception.Message)";try {[IO.File]::WriteAllText((Join-Path $env:TEMP ('ESP32PrinterStatus-'+$settings.id+'.log')),$_.Exception.Message)} catch {}}
 })
 $timer.Start()
-try {[Windows.Forms.Application]::Run($form)} finally {$timer.Dispose();if ($script:client) {$script:client.CancelAsync();$script:client.Dispose()};$tray.Dispose();$mutex.Dispose()}
+try {[Windows.Forms.Application]::Run($form)} finally {if ($script:reportClient) {$script:reportClient.CancelAsync();$script:reportClient.Dispose()};$timer.Dispose();if ($script:client) {$script:client.CancelAsync();$script:client.Dispose()};$tray.Dispose();$mutex.Dispose()}

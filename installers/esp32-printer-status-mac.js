@@ -42,6 +42,14 @@ function run(argv) {
     [['id','Lệnh',95],['name','Tài liệu',320],['state','Trạng thái',270]].forEach(function(c){var column=$.NSTableColumn.alloc.initWithIdentifier($(c[0]));column.title=$(c[1]);column.width=c[2];table.addTableColumn(column);});
     scroll.documentView=table;content.addSubview(scroll);
     var footer=label('Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.',24,448,710,38,11,false);
+    var report=null;
+    function reportText(text,limit){text=String(text||'').replace(/[\x00-\x1f\x7f]/g,' ');while($(text).lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)>limit)text=text.slice(0,-1);return text.replace(/[\uD800-\uDBFF]$/,'');}
+    function reportQueue(){
+        if(report){if(report.task.running)return;read(report);report=null;}
+        var hostname=reportText(ObjC.unwrap($.NSProcessInfo.processInfo.hostName),96);
+        var data={id:('mac-'+hostname+'-'+queue).replace(/[^A-Za-z0-9_-]/g,'_').slice(0,64),name:hostname,os:'macos',queue:reportText(name,96),truncated:rows.length>4,jobs:rows.slice(0,4).map(function(j){return {id:String(j.id),title:reportText(j.name,128),state:reportText(j.state,64),total:null,completed:null};})};
+        report=task('/usr/bin/curl',['--silent','--fail','--noproxy','*','--connect-timeout','1','--max-time','2','-H','Content-Type: application/json','--data-binary',JSON.stringify(data),'http://'+host+'/printer/client-report']);
+    }
     var request=null, spool=null, lastJobs=null, lastError='', nextPoll=0, target;
     function show() {window.makeKeyAndOrderFront(null);app.activateIgnoringOtherApps(true);console.log('STATUS: opened '+queue);}
     function task(path,args,captureError) {
@@ -94,6 +102,7 @@ function run(argv) {
                     var selected=selectedJob(), selectedId=selected?selected.id:null;
                     var states={3:'Đang chờ',4:'Đang giữ',5:'Đang xử lý',6:'Đã dừng'};
                     rows=result.Tests[0].ResponseAttributes.filter(function(j){return !!j['job-id'];}).map(function(j){return {id:j['job-id'],name:j['job-name']||'(Xem tài liệu trong Print Center)',code:j['job-state'],state:(states[j['job-state']]||j['job-state'])+(j['job-state-reasons']?' · '+j['job-state-reasons']:'')};});
+                    reportQueue();
                     table.reloadData;
                     var index=rows.map(function(j){return j.id;}).indexOf(selectedId);
                     if(index>=0)table.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(index),false);
