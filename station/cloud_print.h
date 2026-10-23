@@ -11,8 +11,8 @@
 static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
-struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http; bool progressKnown; };
-static CloudView cloudView={"disabled","","",0,0,0,0,false};
+struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; };
+static CloudView cloudView={"disabled","","",0,0,0,0,0,0,0,false};
 static bool cloudBusy() { return cloudWorking.load(); }
 static CloudView cloudSnapshot() { portENTER_CRITICAL(&cloudLock); auto v=cloudView; portEXIT_CRITICAL(&cloudLock); return v; }
 static void cloudState(const char *state,const char *error="") {
@@ -21,7 +21,7 @@ static void cloudState(const char *state,const char *error="") {
 static String cloudStatusJSON() {
   auto v=cloudSnapshot();
   return String("{\"enabled\":")+(stationSettings.cloudEnabled?"true":"false")+",\"state\":"+jsonString(v.state)+
-    ",\"error\":"+jsonString(v.error)+",\"http\":"+v.http+",\"job\":"+jsonString(v.job)+
+    ",\"error\":"+jsonString(v.error)+",\"http\":"+v.http+",\"heartbeat_http\":"+v.heartbeatHttp+",\"claim_http\":"+v.claimHttp+",\"event_http\":"+v.eventHttp+",\"job\":"+jsonString(v.job)+
     ",\"progress_known\":"+(v.progressKnown?"true":"false")+",\"total\":"+v.total+",\"submitted\":"+v.submitted+",\"completed\":"+v.completed+"}";
 }
 static String cloudText(cJSON *object,const char *key) {
@@ -49,20 +49,25 @@ static esp_http_client_handle_t cloudClient(const String &path,const String &lea
 }
 // Bounded bodies, no redirects: a server response never chooses another host/path.
 static int cloudPost(const String &path,const String &body,String &response,const String &lease="",esp_http_client_handle_t reusable=nullptr) {
-  auto h=reusable?reusable:cloudClient(path,lease); if(!h)return -1;
+  response="";int status=-1;auto h=reusable?reusable:cloudClient(path,lease);
+  if(h){
   esp_http_client_set_method(h,HTTP_METHOD_POST); esp_http_client_set_header(h,"Content-Type","application/json");
-  int status=-1;
   if(esp_http_client_open(h,body.length())==ESP_OK) {
     size_t offset=0;
     while(offset<body.length()) { int n=esp_http_client_write(h,body.c_str()+offset,body.length()-offset); if(n<=0)break; offset+=n; }
     if(offset==body.length() && esp_http_client_fetch_headers(h)>=0) {
       status=esp_http_client_get_status_code(h); response=""; char b[512];
-      while(response.length()<=8192) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){status=-1;break;} if(!n)break; response.concat(b,n); }
+      // HTTP 204 has no body. Reading it may wait for nonexistent data and fail.
+      while(status!=204 && response.length()<=8192) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){status=-1;break;} if(!n)break; response.concat(b,n); }
       if(response.length()>8192)status=-1;
     }
   }
   if(!reusable){esp_http_client_close(h);esp_http_client_cleanup(h);}else if(status<0)esp_http_client_close(h);
-  portENTER_CRITICAL(&cloudLock);cloudView.http=status;portEXIT_CRITICAL(&cloudLock);
+  }
+  portENTER_CRITICAL(&cloudLock);
+  if(path=="/heartbeat")cloudView.heartbeatHttp=status;
+  else {cloudView.http=status;if(path=="/jobs/claim")cloudView.claimHttp=status;else cloudView.eventHttp=status;}
+  portEXIT_CRITICAL(&cloudLock);
   return status;
 }
 static String cloudBoot;
@@ -248,9 +253,9 @@ static void cloudTask(void *) {
   while(true) {
     if(!stationSettings.cloudEnabled){vTaskDelay(pdMS_TO_TICKS(1500));continue;}
     if(WiFi.status()!=WL_CONNECTED || time(nullptr)<1700000000){cloudState("connecting","Waiting for Wi-Fi / trusted clock");vTaskDelay(pdMS_TO_TICKS(1000));continue;}
-    if(id.length())cloudState(state.c_str(),error.c_str());else cloudState("idle");
+    if(id.length())cloudState(state.c_str(),error.c_str());
     bool online=cloudHeartbeat(true);
-    if(!online){cloudState("server_error","HTTPS heartbeat pending or failed; see HTTP code");vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(!online){auto code=cloudSnapshot().heartbeatHttp;String message=String("Heartbeat failed (HTTP ")+code+")";cloudState(code==0?"connecting":"server_error",code==0?"Waiting for initial heartbeat":message.c_str());vTaskDelay(pdMS_TO_TICKS(250));continue;}
     if(id.length()) {
       if(state=="uncertain" && cloudResolve.exchange(false)) {
         cloudNeedsInspection.store(false);jobFinish("resolved");state="resolved";error="Operator inspected printer; no automatic reprint";
@@ -297,7 +302,8 @@ static void cloudTask(void *) {
         free(data);
         if(!persist()){cloudState("blocked","Cannot persist outcome; journal retained");vTaskDelete(nullptr);return;}
         cloudWorking.store(false);
-      }else if(code!=204)cloudState("server_error","Claim failed; see HTTP code");
+      }else if(code==204)cloudState("idle");
+      else {String message=String("Claim failed (HTTP ")+code+")";cloudState("server_error",message.c_str());}
     }
     vTaskDelay(pdMS_TO_TICKS(500));
   }
