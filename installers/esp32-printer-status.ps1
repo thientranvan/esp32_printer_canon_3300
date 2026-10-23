@@ -23,7 +23,7 @@ function Get-DeviceView($s) {
  }
  $j=$s.job_control
  $phases=@{printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
- $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif (!$j.id) {'Chưa có lệnh in trên trạm'} else {
+ $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif ($j.id -and $j.state -eq 'uncertain') {'Lệnh cần đối soát — chưa rõ kết quả in'} elseif (!$j.id -or !$j.active) {'Trạm hiện không có lệnh đang chạy'} else {
   $phase=if ($phases.ContainsKey([string]$j.state)) {$phases[[string]$j.state]} else {$j.state}
   if ($j.total -gt 0) {"$phase · Đã ghi nhận $($j.completed) / $($j.total) mặt in"} else {"$phase · Chưa có tổng số mặt in"}
  }
@@ -99,7 +99,7 @@ $timer.add_Tick({
    $icon.Image=if ($view.Kind -eq 'error') {[Drawing.SystemIcons]::Error.ToBitmap()} elseif ($view.Kind -eq 'warning') {[Drawing.SystemIcons]::Warning.ToBitmap()} else {[Drawing.SystemIcons]::Information.ToBitmap()}
    if ($oldImage) {$oldImage.Dispose()}
    $bar.Style='Continuous';$bar.Value=0
-   if ($s.job_control.id -and $s.job_control.total -gt 0) {$bar.Value=[int][Math]::Max(0,[Math]::Min(100,100.0*$s.job_control.completed/$s.job_control.total))}
+   if ($s.job_control.active -and $s.job_control.total -gt 0) {$bar.Value=[int][Math]::Max(0,[Math]::Min(100,100.0*$s.job_control.completed/$s.job_control.total))}
    elseif ($s.job_control.active) {$bar.Style='Marquee'}
    $signal=if ($view.Kind -in @('error','warning')) {$view.Title+$view.Detail} else {''}
    if ($signal -and $signal -ne $script:lastSignal) {Show-Monitor};$script:lastSignal=$signal

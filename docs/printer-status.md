@@ -284,3 +284,13 @@ then cancel; no paper was sent and existing job 238 was untouched. Model tests c
 TCP churn with a fixed failed job, and the C++ job tests cover 50 identical fault
 retries plus preservation of uncertain results. Windows model/bridge tests passed;
 its existing captured waiting document was preserved and the GUI updated separately.
+
+### Local deletion versus station history
+
+Confirmed after the user's Mac deletion: CUPS pending queue is empty, while ESP
+retains Windows capture ID `20261023-014536-5756511`, failed 0/2. These are different
+jobs. Local cancel must not erase another client's job record or its captured data.
+Desktop live progress now shows no running station job for inactive terminal records;
+uncertain results retain a separate reconciliation warning. ESP hides inactive
+progress and labels the remaining job-control card as last-job history. Printer
+faults such as E100 remain visible independently of queue deletion.

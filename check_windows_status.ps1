@@ -25,6 +25,8 @@ $s.capt.service_error=$false;$s.active=$true;$s | Add-Member NoteProperty job_co
 if ((Get-DeviceView $s).Progress -match '/') {throw 'Invented page total'}
 $s.job_control.total=3;$s.job_control.completed=1
 if ((Get-DeviceView $s).Progress -notmatch '1 / 3') {throw 'Physical progress missing'}
+$s.job_control.active=$false;$s.job_control.state='failed'
+if ((Get-DeviceView $s).Progress -match '1 / 3') {throw 'Inactive history shown as current progress'}
 $guard=[scriptblock]::Create([regex]::Match($setup,'(?s)\$unresolved=.*?(?=\$port=Get-PrinterPort)').Value)
 function Test-Path {param($Path) $script:hasCapture}
 function Get-ChildItem {param($Path,$ErrorAction) if ($script:hasCapture) {[pscustomobject]@{Name='kept.capt'}}}

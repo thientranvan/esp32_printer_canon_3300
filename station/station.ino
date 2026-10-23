@@ -181,7 +181,7 @@ void home() {
 <div class="grid">
 <section class="card" aria-labelledby="printer-title"><h2 id="printer-title">Máy in</h2><div id="printer" class="big">Đang đọc trạng thái…</div><p id="printer-note">Cập nhật trực tiếp theo thay đổi.</p><div id="job" hidden><p id="job-progress"></p><progress id="progress" aria-label="Tiến độ mặt in"></progress></div></section>
 <section class="card" aria-labelledby="network-title"><h2 id="network-title">Kết nối</h2><p class="meta">Wi-Fi</p><div id="wifi" class="big">Đang đọc…</div><p id="network"></p><p id="cloud">Web: đang đọc…</p></section>
-<section class="card wide" aria-labelledby="jobs-title"><h2 id="jobs-title">Lệnh in trên trạm</h2><p id="control-job">Chưa có lệnh in.</p><p id="control-state" role="status"></p><div class="row"><button id="job-pause" onclick="controlJob('pause')" disabled>Dừng sau mặt đang gửi</button><button id="job-resume" onclick="controlJob('resume')" disabled>Tiếp tục gửi</button><button id="job-cancel" onclick="controlJob('cancel')" disabled>Hủy gửi tiếp</button><button id="job-resolve" onclick="resolveJob()" disabled>Đối soát kết quả</button><button id="job-delete" onclick="controlJob('delete')" disabled>Xóa lịch sử trên trạm</button></div><p class="meta">Trang đã vào bộ nhớ máy in vẫn có thể được in. Lệnh chờ chưa gửi từ Windows/Mac nằm trong hàng đợi của máy đó; lệnh web chờ nằm trên server.</p></section>
+<section class="card wide" aria-labelledby="jobs-title"><h2 id="jobs-title">Lệnh in trên trạm</h2><p id="control-job">Chưa có lệnh in.</p><p id="control-state" role="status"></p><div class="row"><button id="job-pause" onclick="controlJob('pause')" disabled>Dừng sau mặt đang gửi</button><button id="job-resume" onclick="controlJob('resume')" disabled>Tiếp tục gửi</button><button id="job-cancel" onclick="controlJob('cancel')" disabled>Hủy gửi tiếp</button><button id="job-resolve" onclick="resolveJob()" disabled>Đối soát kết quả</button><button id="job-delete" onclick="controlJob('delete')" disabled>Xóa lịch sử trên trạm</button></div><p class="meta">Xóa lệnh ở máy tính không xóa lịch sử trên trạm hoặc lệnh của máy khác. Trang đã gửi vẫn có thể được in.</p></section>
 <section class="card wide"><h2>Hàng đợi web</h2><p id="queue-note">Chờ dữ liệu server.</p><div id="server-jobs" class="stack"></div></section>
 
 <details class="wide"><summary>Đăng ký máy in trên web · ID ESP</summary><label for="station-id">ID ESP</label><div class="row"><input id="station-id" value="__STATION_ID__" readonly><button type="button" onclick="copyField('station-id')">Sao chép ID</button></div><p class="meta">Thêm ID này trên <a href="https://quanly.lophocbinhminh.com/index.php?page=printers" target="_blank" rel="noopener">trang quản lý máy in</a>, lấy token rồi dán vào <a href="#settings">cấu hình trạm</a>.</p></details>
@@ -240,6 +240,7 @@ async function controlJob(action){
 async function refresh(patch=null){try{
  let s;if(patch&&cached){s={...cached,...patch,usb:{...cached.usb,...patch.usb},tcp:{...cached.tcp,...patch.tcp}};}else{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();s=await r.json();}cached=s;const u=s.usb,c=s.cloud,t=s.tcp;renderQueue(s.server_queue,s.queue_command);
  const j=s.job_control||{};currentJobId=j.id||'';
+ el('jobs-title').textContent=j.active?'Lệnh đang chạy trên trạm':'Lịch sử lệnh gần nhất trên trạm';
  el('control-job').textContent=j.id?(j.source==='cloud'?'Web':'LAN')+' · '+j.id+' · '+j.completed+' / '+(j.total||'?')+' mặt in':'Chưa có lệnh in trên trạm.';
  const states={failed:'Chưa gửi dữ liệu in — lỗi trước khi in',printing:'Đang gửi/in',paused:'Đã dừng trước mặt tiếp theo',completed:'Đã hoàn tất',uncertain:'Chưa rõ kết quả — cần kiểm tra máy và giấy',resolved:'Đã đối soát'};
  const requests={pause_requested:'Đã yêu cầu dừng, chờ bộ gửi xác nhận',resume_requested:'Đã yêu cầu tiếp tục, chờ xác nhận',cancel_requested:'Đã yêu cầu hủy gửi tiếp, chờ xác nhận'};
@@ -267,7 +268,7 @@ async function refresh(patch=null){try{
  el('printer').textContent=title;el('printer-note').textContent=note;
  // Progress belongs to the persistent job, never a diagnostic TCP connection.
  const known=!!j.id&&j.total>0,total=known?j.total:0,done=known?j.completed:0;
- el('job').hidden=!j.id;
+ el('job').hidden=!j.active;
  const phase=states[j.state]||j.state||'Đang xử lý';
  el('job-progress').textContent=phase+' · '+(known?'Đã ghi nhận '+done+' / '+total+' mặt in':'Chưa có tổng số mặt in');
  el('progress').max=total||1;if(known)el('progress').value=done;else el('progress').removeAttribute('value');
