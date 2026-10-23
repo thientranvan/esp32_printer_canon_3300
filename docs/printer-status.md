@@ -151,9 +151,11 @@ Không sửa PHP, DB, dịch vụ hoặc thay đổi dở của dev server. Bàn
   danh tính, không phải tên hiển thị/IP. Đổi IP cùng ID cập nhật bridge;
   đổi tên sẽ đổi tên queue đang có, dọn queue trùng cùng cổng khi tất cả rảnh.
   Tên thuộc trạm/cổng khác bị từ chối. Máy USB Canon riêng không bị xóa.
-- Khi có job Windows hoặc capture chưa xác nhận, bộ cài chỉ cập nhật cửa sổ
-  trạng thái rồi dừng trước thay bridge/queue. Không xóa, phát lại hoặc coi
-  job đó thành công. Hiện máy thử còn hai job Windows và capture cũ đang giữ.
+- Khi còn job Windows hoặc capture đang chạy, bộ cài dừng trước thay bridge.
+  Nếu queue đã trống và bridge đã STOPPED vì capture chưa xác nhận, cho phép
+  cập nhật executable/monitor, giữ nguyên capture và khóa listener in. Không xóa
+  hoặc phát lại capture. Đã cập nhật thành công Windows thật, hash capture/marker
+  không đổi, một queue Máy 1. Mac đã hủy job và xóa pending cũ theo yêu cầu.
 - Monitor chỉ chứa IP/ID/tên trạm, file được Users đọc/chạy nhưng không sửa.
   Không nới quyền thư mục CAPT chứa tài liệu. Không token trong UI.
 
@@ -166,3 +168,22 @@ Cập nhật tiếp 23/10: [luồng trực tiếp, hàng đợi và điều khi�
 Firmware có SSE local, telemetry HTTPS riêng, job ID và checkpoint control. Server
 production đã nhận E100 cụ thể nhưng còn cần triển khai adapter/push UI trong tài
 liệu bàn giao; không coi giao diện server đã sửa chỉ vì heartbeat đã có dữ liệu.
+
+### Đối soát capture Windows cũ
+
+Bổ sung `-ResolvePending` cho bộ cài Windows. Chỉ áp dụng khi queue trống và
+bridge đã STOPPED, không áp dụng capture đang in. Chuyển `.capt`, `.capt.progress`
+và `pending.txt` vào `Stations/<ID>/Archived/<timestamp-guid>/`, không phát lại,
+không sửa byte tài liệu; lỗi chuyển file sẽ đưa các file đã chuyển về vị trí cũ.
+Sau đó bridge được cập nhật/khởi động, listener hoạt động lại. Không tự thực hiện
+bước này khi cài thông thường; nếu không có cờ, nâng cấp vẫn giữ khóa uncertain.
+
+Đã thử Windows thật: hash capture trước/sau lưu trữ khớp, pending active hết,
+listener mở lại, chỉ một queue Máy 1. Mac đã hủy job và xóa marker pending root
+cũ theo yêu cầu. Máy in vẫn báo fresh E100 0000; việc gỡ khóa không chữa mã dịch
+vụ trên thiết bị và không được dùng để tự xác nhận máy in đã sẵn sàng.
+Test: `powershell -NoProfile -File .\check_pending_archive.ps1`.
+
+Windows SetPrinter(level6) có thể bỏ cờ ERROR đơn lẻ. Với service_error hoặc status
+stale, bridge đặt thêm USER_INTERVENTION để queue không hiện Ready giả. Mã E100
+cụ thể vẫn ở cửa sổ status/ESP/server; User intervention không phải tên lỗi Canon.

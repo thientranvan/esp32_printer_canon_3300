@@ -174,7 +174,7 @@ Dữ liệu hiển thị stale là dữ liệu cũ, không phải trạng thái 
   không auth. Bridge/status UI hiện tại chưa có agent inventory đó.
 - Lịch sử LAN hiện chỉ bản ghi RAM cuối trên ESP; capture/pending của backend mới
   là khóa phục hồi bền vững. Sau reboot, không coi ESP không có record là máy gửi
-  không còn job. Không tự xóa hàng đợi Windows đang có hai job hoặc capture cũ.
+  không còn job. Không tự xóa hàng đợi/capture chưa được người dùng cho phép bỏ.
 - Chưa xác minh cancel/pause trên giấy thật do máy đang lỗi E100. Các cờ cảm biến
   khác chưa đủ test vật lý. Không báo “hỗ trợ hết lỗi Canon” khi chưa có dữ liệu.
 
@@ -201,8 +201,9 @@ read-only DB cho thấy E100 0000/fresh=true và telemetry_seq94→95 ở hai l�
 Ứng dụng server vẫn trả204 (chưa có queue/command adapter); dashboard ESP ghi rõ
 chưa hỗ trợ hàng đợi server, không hiện các nút giả đã hoạt động.
 
-Bridge C# mới đã biên dịch và chạy self-test trên Windows thật. Bản bridge đang
-cài chưa thay vì còn hai job/capture chưa đối soát; Windows sau đó không còn SSH
-truy cập được. Backend Mac mới đã qua parser/CAPT regression, chưa thay bản root
-đang cài và không resume queue cũ. Cần cập nhật bộ cài sau khi đối soát; không tự
-xóa các job này để ép quá trình cài thành công.
+Bridge C# mới đã biên dịch và chạy self-test trên Windows thật. Windows đã được cập nhật bridge mới sau khi queue trống; bộ cài cho nâng cấp
+bridge STOPPED, giữ nguyên hash capture/marker và giữ khóa in. Capture đang chạy
+vẫn bị chặn nâng cấp. Backend Mac mới đã qua parser/CAPT regression, chưa thay bản root
+đang cài và không resume queue cũ. Mac đã xóa job/pending cũ theo yêu cầu người dùng; Windows đã lưu capture cũ vào Archived theo yêu cầu xử lý khóa, hash giữ nguyên,
+không gửi lại; listener được mở lại nhưng máy in vẫn báo E100 0000. Bộ cài có
+`-ResolvePending` cho thao tác này, chỉ khi queue trống và bridge đã STOPPED.

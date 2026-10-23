@@ -32,4 +32,17 @@ if ($text.Text -notmatch 'E100 0000' -or $text.Text -notmatch 'total unavailable
 $script:offline=$true
 & $poll
 if ($text.Text -notmatch 'ESP offline') {throw 'Offline left stale error visible'}
-'PASS: rename reuses station, conflicts rejected, fresh install, exact E100, unknown total, held queue, offline'
+$guard=[scriptblock]::Create([regex]::Match($setup,'(?s)\$unresolved=.*?(?=\$port=Get-PrinterPort)').Value)
+function Test-Path {param($Path) $script:hasCapture}
+function Get-ChildItem {param($Path,$ErrorAction) if ($script:hasCapture) {[pscustomobject]@{Name='kept.capt'}}}
+function Get-Content {param($Path,[switch]$Raw,$ErrorAction) $script:bridgeNote}
+$WarningPreference='SilentlyContinue';$existing=[pscustomobject]@{Name='Test'}
+$script:hasCapture=$true;$script:bridgeNote='2026-10-23 STOPPED: Uncertain previous job'
+. $guard
+if (!$unresolved) {throw 'Stopped uncertain job not detected'}
+$script:bridgeNote='Printing kept.capt';$rejected=$false
+try {. $guard} catch {$rejected=$true}
+if (!$rejected) {throw 'Active capture allowed to upgrade'}
+$script:hasCapture=$false;. $guard
+if ($unresolved) {throw 'Fresh setup incorrectly blocked'}
+'PASS: station identity, E100/offline, stopped upgrade allowed, active capture rejected, fresh setup allowed'

@@ -1,7 +1,23 @@
 #requires -RunAsAdministrator
-param([string]$StationIP, [string]$PrinterName)
+param([string]$StationIP, [string]$PrinterName, [switch]$ResolvePending)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
+function Move-BridgePendingToArchive([string]$Folder) {
+ $archive=Join-Path $Folder ('Archived\'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
+ $files=@(Get-ChildItem "$Folder\*.capt","$Folder\*.capt.progress" -File -ErrorAction SilentlyContinue)
+ if (Test-Path "$Folder\pending.txt") { $files+=Get-Item "$Folder\pending.txt" }
+ New-Item -ItemType Directory -Path $archive -Force | Out-Null
+ $moved=@()
+ try {
+  foreach ($file in $files) { Move-Item -LiteralPath $file.FullName -Destination $archive -ErrorAction Stop; $moved+=$file.Name }
+  [IO.File]::WriteAllText("$archive\reason.txt",'Operator discarded previous submission. Archived, not resent. Inspect physical printer separately.')
+ } catch {
+  foreach ($name in $moved) { Move-Item -LiteralPath (Join-Path $archive $name) -Destination $Folder -ErrorAction Stop }
+  throw
+ }
+ return $archive
+}
+# End pending archive helper.
 if (!$StationIP) { $StationIP=Read-Host 'ESP IP (for example 192.168.1.199)' }
 $address=$null
 if ($StationIP -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}$' -or ![Net.IPAddress]::TryParse($StationIP,[ref]$address) -or $address.AddressFamily -ne 'InterNetwork') { throw 'Invalid ESP IPv4 address.' }
@@ -129,7 +145,16 @@ Register-ScheduledTask -TaskName "ESP32PrinterStatus-$stationId" -Action $uiActi
 Start-ScheduledTask -TaskName "ESP32PrinterStatus-$stationId"
 
 if (@(Get-Printer | Where-Object { $_.PortName -eq $portName -and $_.JobCount -ne 0 }).Count) { throw 'Status window installed. Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
-if ((Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count) { throw 'Status window installed. Unresolved bridge job found. Inspect pending.txt/status.txt before reinstalling; nothing was resent.' }
+$unresolved=(Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count -gt 0
+if ($unresolved) {
+ $note=Get-Content "$root\status.txt" -Raw -ErrorAction SilentlyContinue
+ if (!$existing -or $note -notmatch '\bSTOPPED:') { throw 'Bridge has an unresolved/active capture. Wait until it stops before upgrading; no data was changed.' }
+ if ($ResolvePending) {
+  $archived=Move-BridgePendingToArchive $root
+  $unresolved=$false
+  Write-Host "Previous job archived without reprinting: $archived"
+ } else { Write-Warning 'Updating stopped bridge only. Printing stays blocked. Use -ResolvePending to archive the old job without reprinting and reopen the bridge.' }
+}
 $port=Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue
 if ($port -and ($port.PrinterHostAddress -ne '127.0.0.1' -or $port.PortNumber -ne $localPort)) { throw 'Existing bridge port has conflicting settings.' }
 $listener=Get-NetTCPConnection -LocalPort $localPort -State Listen -ErrorAction SilentlyContinue
@@ -353,8 +378,8 @@ public static class Esp32CaptBridge {
      if(length>65536)throw new InvalidDataException("Status too large");json=new string(data,0,length);
     }
     if(!Flag(json,"connected")||!Flag(json,"responsive"))status=0x80;
-    else if(!Flag(json,"fresh"))status=0x2;
-    else {if(Flag(json,"service_error"))status|=2;if(Flag(json,"paper_jam"))status|=8;if(Flag(json,"paper_required"))status|=0x10;
+    else if(!Flag(json,"fresh"))status=0x100002;
+    else {if(Flag(json,"service_error"))status|=0x100002;if(Flag(json,"paper_jam"))status|=8;if(Flag(json,"paper_required"))status|=0x10;
      if(Flag(json,"cover_open"))status|=0x00400000;if(Flag(json,"toner_warning"))status|=0x20000;if(Flag(json,"active"))status|=0x400;}
    }catch{status=0x80;}
    if(File.Exists(Pending))status|=0x100002;
@@ -508,6 +533,7 @@ $info.pMonitorName=$null
 $info.pDefaultDataType='RAW'
 if (!(Get-PrinterDriver -Name $driverName -ErrorAction SilentlyContinue) -and ![EspRenderDriver]::Add($null,3,[ref]$info,0x18)) { throw (New-Object ComponentModel.Win32Exception([Runtime.InteropServices.Marshal]::GetLastWin32Error())) }
 $task=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if (@(Get-Printer | Where-Object { $_.PortName -eq $portName -and $_.JobCount -ne 0 }).Count) { throw 'A new print job arrived during setup. Existing bridge was not stopped.' }
 if ($task) { Stop-ScheduledTask -TaskName $taskName; Start-Sleep -Seconds 1 }
 Move-Item -Force $staged "$root\bridge.exe"
 & icacls.exe "$root\*" /reset /T /Q | Out-Null
@@ -521,7 +547,12 @@ for($i=0;$i -lt 10;$i++) {
  Start-Sleep -Seconds 1
  if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $localPort -State Listen -ErrorAction SilentlyContinue) { $ready=$true;break }
 }
-if (!$ready) { Get-Content "$root\status.txt" -ErrorAction SilentlyContinue;throw 'Bridge did not start.' }
+if (!$ready) {
+ $note=Get-Content "$root\status.txt" -Raw -ErrorAction SilentlyContinue
+ $running=Get-ScheduledTask -TaskName $taskName
+ if (!$unresolved -or $running.State -ne 'Running' -or $note -notmatch '\bSTOPPED:.*Uncertain previous job') { Write-Host $note;throw 'Bridge did not start.' }
+ Write-Warning 'Bridge updated and status monitor running. Print listener intentionally blocked by the preserved uncertain job.'
+}
 if (!$port) { Add-PrinterPort -Name $portName -PrinterHostAddress '127.0.0.1' -PortNumber $localPort }
 if ($existing) {
  if ($existing.Name -ne $printerName) { Rename-Printer -Name $existing.Name -NewName $printerName }
@@ -535,7 +566,8 @@ if (!$existing) { Set-PrintConfiguration -PrinterName $printerName -PaperSize A4
 @{id=$stationId;ip=$StationIP;name=$PrinterName} | ConvertTo-Json | Set-Content -Encoding UTF8 "$statusRoot\station.json"
 $created=Get-Printer -Name $printerName
 if ($created.PortName -ne $portName -or $created.DriverName -ne $driverName) { throw 'Printer verification failed.' }
-Write-Host "Ready: $printerName"
+if ($unresolved) { Write-Host "Updated: $printerName (printing blocked: uncertain previous job retained)" }
+else { Write-Host "Ready: $printerName" }
 Write-Host 'Use A4 and choose portrait/landscape, simplex/duplex and layout in the Canon driver. Cassette 1 is selected by the bridge.'
 Write-Host 'Local bridge starts with Windows. No Mac, remote SSH, or always-on intermediary is required.'
 Write-Host "If printing stops, inspect $root\status.txt and pending.txt. Never resend an uncertain page blindly."
