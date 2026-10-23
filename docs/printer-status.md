@@ -252,3 +252,35 @@ On this Mac the same script was installed into the current user's Application
 Support with a per-user LaunchAgent, preserving the paused queue and old job 238.
 A held test job 239 triggered the popup and was then canceled without printing.
 The live native window was visually checked and showed Canon E100 0000.
+
+### Stable progress and desktop queue controls (2026-10-23)
+
+User-facing progress now comes from the persistent `job_control` record (or cloud
+heartbeat `job`), including ID, source, phase, total and completed impressions.
+Raw TCP connection state/counters include diagnostic reads and must not be used
+as print-job activity or progress. `/printer/status` top-level active/total/completed
+are serialized from the same job snapshot. Cloud heartbeat LAN activity also uses
+the job record. ESP dashboard and both desktop monitors retain a failed job's
+0/2 record instead of alternating with unknown totals when diagnostic sockets
+open/close. Zero of two is a count, not successful job completion.
+
+A second cause was the Windows bridge's preflight retry: it sends F001 metadata
+before reading the service fault, repeatedly starting then failing the same job.
+ESP now rejects F001 before job activation while a fresh CAPT fault is present.
+It records a new failed-before-start job atomically, preserves the same failed
+record across retries and never overwrites an active or uncertain job.
+
+Mac window now has a selectable native table and SF Symbol pause/resume/trash
+buttons, with actual CUPS job states from Get-Jobs. Hold/resume/cancel target the
+exact selected local CUPS job via lp/cancel; they do not resume the printer queue,
+clear E100 or release uncertain print checkpoints. Cancellation asks confirmation.
+Windows window has equivalent selected-job Suspend/Resume/Remove-PrintJob buttons.
+These are LOCAL spooler controls; ESP/web job controls remain separate. Pages already
+sent to the printer cannot be recalled. If interrupting active delivery leaves an
+uncertain checkpoint, inspect output and resolve it before sending the document again.
+
+Tested production Mac handlers on held job 240: resume to pending, hold again,
+then cancel; no paper was sent and existing job 238 was untouched. Model tests cover
+TCP churn with a fixed failed job, and the C++ job tests cover 50 identical fault
+retries plus preservation of uncertain results. Windows model/bridge tests passed;
+its existing captured waiting document was preserved and the GUI updated separately.

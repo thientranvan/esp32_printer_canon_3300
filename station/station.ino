@@ -255,7 +255,7 @@ async function refresh(patch=null){try{
  if(u.recovering){title='Đang khôi phục USB';note='Trạm đang tự dò lại máy in.';}
  else if(u.error){title='Lỗi kết nối USB';note='Mã lỗi '+u.error+'. Xem chẩn đoán bên dưới.';}
  else if(u.connected&&!u.responsive){title='Máy in chưa phản hồi';note='Kiểm tra nguồn và kết nối USB.';}
- else if(u.connected&&u.responsive){title=t.state===2?'Đang in qua LAN':c.state==='printing'?'Đang in từ web':'Máy in đã kết nối';note='USB có phản hồi; chưa xác minh cảm biến giấy/mực.';}
+ else if(u.connected&&u.responsive){title=j.active?(j.source==='cloud'?'Đang in từ web':'Đang in qua LAN'):'Máy in đã kết nối';note='USB có phản hồi; chưa xác minh cảm biến giấy/mực.';}
  const p=s.capt||{};
  if(u.connected&&u.responsive){
   if(!p.fresh){title='Đang đọc trạng thái máy in';note='Chưa có phản hồi CAPT mới; không xác nhận máy sẵn sàng.';}
@@ -265,9 +265,11 @@ async function refresh(patch=null){try{
   }
  }
  el('printer').textContent=title;el('printer-note').textContent=note;
- const active=c.state==='paused'||c.state==='printing'||c.state==='waiting_printer'||c.state==='downloading',lan=t.state===1||t.state===2;
- el('job').hidden=!(active||lan);const total=active?c.total:t.total,done=active?c.completed:t.completed,known=active?c.progress_known:total>0;
- el('job-progress').textContent=(active?'Web':'LAN')+' · '+(known?done+' / '+total+' mặt in hoàn tất':'Đang xử lý · chưa biết tổng số mặt in');
+ // Progress belongs to the persistent job, never a diagnostic TCP connection.
+ const known=!!j.id&&j.total>0,total=known?j.total:0,done=known?j.completed:0;
+ el('job').hidden=!j.id;
+ const phase=states[j.state]||j.state||'Đang xử lý';
+ el('job-progress').textContent=phase+' · '+(known?'Đã ghi nhận '+done+' / '+total+' mặt in':'Chưa có tổng số mặt in');
  el('progress').max=total||1;if(known)el('progress').value=done;else el('progress').removeAttribute('value');
  if(!loaded){el('station-name').value=s.station.name;for(const k of ['ip','gateway','mask','dns'])el('station-'+k).value=s.network[k];el('cloud-enabled').checked=c.enabled;loaded=true;document.querySelector('[data-config]').disabled=false;}
  el('hardware').textContent='Thời gian chạy '+Math.floor(s.uptime/60)+' phút · Flash '+Math.round(s.flash/1048576)+' MB · PSRAM '+Math.round(s.psram/1048576)+' MB';
@@ -435,10 +437,10 @@ void setup() {
   server.on("/printer/status", HTTP_GET, [] {
     IPAddress remote=server.client().remoteIP(),local=WiFi.localIP(),mask=WiFi.subnetMask();
     if(!WiFi.isConnected() || (uint32_t(remote)&uint32_t(mask))!=(uint32_t(local)&uint32_t(mask))){server.send(403,"text/plain","LAN only");return;}
-    auto u=readUSB();auto c=cloudSnapshot();bool web=cloudBusy();server.sendHeader("Cache-Control","no-store");
-    server.send(200,"application/json",String("{\"schema\":1,\"job_control\":")+jobStatusJSON()+",\"connected\":"+(u.connected?"true":"false")+
+    auto u=readUSB();auto j=jobSnapshot();server.sendHeader("Cache-Control","no-store");
+    server.send(200,"application/json",String("{\"schema\":1,\"job_control\":")+jobStatusJSON(j)+",\"connected\":"+(u.connected?"true":"false")+
       ",\"responsive\":"+(u.responsive?"true":"false")+",\"capt\":"+captTelemetryJSON()+
-      ",\"active\":"+((captTCPState.load()==2||web)?"true":"false")+",\"total\":"+(web?c.total:captTCPTotal.load())+",\"completed\":"+(web?c.completed:captTCPCompleted.load())+"}");
+      ",\"active\":"+(j.active?"true":"false")+",\"total\":"+j.total+",\"completed\":"+j.completed+"}");
   });
   server.on("/printer/command", HTTP_GET, captResult);
   server.on("/printer/command", HTTP_POST, captSubmit);

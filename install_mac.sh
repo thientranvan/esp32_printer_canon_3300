@@ -128,11 +128,11 @@ EOF
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."
 # Desktop monitor runs as the logged-in user, never as the CUPS/root daemon.
 status_script="$source_dir/installers/esp32-printer-status-mac.js"
-status_sha=a4b9519b02b08e7d0cdd75fbdef436f1059e4f9368808fdfefb6277ba9fe47fc
+status_sha=f35f8a343e350fa6795a436e9adb85fcf06efb53bae9affbf641d735b4d6cdc5
 if [ ! -f "$status_script" ]; then
   status_script="$work/esp32-printer-status-mac.js"
   /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
-    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/67977c2b2f4808e7e2e6d0d2aa74834de938126d/installers/esp32-printer-status-mac.js -o "$status_script"
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/0cd87ce1e666b6ce4cf2b6d2bae89ac94ac068ca/installers/esp32-printer-status-mac.js -o "$status_script"
 fi
 [ "$(/usr/bin/shasum -a 256 "$status_script" | /usr/bin/cut -d' ' -f1)" = "$status_sha" ] || { echo 'Status monitor checksum mismatch.' >&2; exit 1; }
 /usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"

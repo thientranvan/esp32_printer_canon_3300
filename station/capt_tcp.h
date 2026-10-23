@@ -104,6 +104,8 @@ static void captTCPTask(void *) {
           if(length!=8 || !tcpRead(client,buffer+4,4)) { captTCPError.store(ESP_ERR_INVALID_ARG);break; }
           unsigned total=uint32_t(buffer[4])|(uint32_t(buffer[5])<<8)|(uint32_t(buffer[6])<<16)|(uint32_t(buffer[7])<<24);
           if(!total || total>9900){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
+          // Fault retries must not repeatedly turn the same failed job into printing.
+          if(captFault()){jobRejectBeforeStart(jobId,total,cooperative);captTCPError.store(ESP_FAIL);break;}
           captTCPTotal.store(total);
           if(!printJob){if(!strcmp(jobSnapshot().state,"uncertain"))break;jobBegin(jobId,"lan",cooperative);printJob=true;}
           jobProgress(total,0);

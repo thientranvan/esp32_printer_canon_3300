@@ -21,11 +21,16 @@ function Get-DeviceView($s) {
   if ($errors.Count) {$title=if ($s.capt.service_error) {"Canon $($s.capt.service_code)"} else {'Máy in cần xử lý'};$detail=$errors -join "`r`n";$kind='error'}
   elseif ($s.active) {$title='Đang in';$detail='Máy in đang xử lý lệnh.';$kind='printing'}
  }
- $progress=if ($s -and $s.capt.fresh -and $s.active -and $s.total -gt 0) {"$($s.completed) / $($s.total) mặt in hoàn tất"} else {'Chưa có tổng số mặt in được xác nhận'}
+ $j=$s.job_control
+ $phases=@{printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
+ $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif (!$j.id) {'Chưa có lệnh in trên trạm'} else {
+  $phase=if ($phases.ContainsKey([string]$j.state)) {$phases[[string]$j.state]} else {$j.state}
+  if ($j.total -gt 0) {"$phase · Đã ghi nhận $($j.completed) / $($j.total) mặt in"} else {"$phase · Chưa có tổng số mặt in"}
+ }
  [pscustomobject]@{Title=$title;Detail=$detail;Kind=$kind;Progress=$progress}
 }
 $form=New-Object Windows.Forms.Form
-$form.Text="$($settings.name) — Canon LBP3300";$form.ClientSize=New-Object Drawing.Size(780,570)
+$form.Text="$($settings.name) — Canon LBP3300";$form.ClientSize=New-Object Drawing.Size(780,610)
 $form.MinimumSize=$form.Size;$form.StartPosition='CenterScreen';$form.BackColor=[Drawing.Color]::FromArgb(242,245,250)
 $form.Font=New-Object Drawing.Font('Segoe UI',10)
 function Add-Label($value,$x,$y,$w,$h,$size=10) {
@@ -43,12 +48,29 @@ $queueTitle=Add-Label 'Hàng đợi Windows' 28 296 720 26 12
 $list=New-Object Windows.Forms.ListView;$list.SetBounds(28,328,724,126);$list.View='Details';$list.FullRowSelect=$true
 foreach ($column in @(@('ID',45),@('Tài liệu',315),@('Trạng thái',200),@('Trang spool',130))) {[void]$list.Columns.Add($column[0],$column[1])}
 $form.Controls.Add($list)
-$footer=Add-Label 'Đang kết nối…' 28 466 724 30 9
-function Add-Button($caption,$x,$width,$action) {$b=New-Object Windows.Forms.Button;$b.Text=$caption;$b.SetBounds($x,516,$width,34);$b.FlatStyle='Flat';$b.BackColor=[Drawing.Color]::White;$b.add_Click($action);$form.Controls.Add($b)}
+$footer=Add-Label 'Đang kết nối…' 28 510 724 32 9
+function Add-Button($caption,$x,$width,$action) {$b=New-Object Windows.Forms.Button;$b.Text=$caption;$b.SetBounds($x,556,$width,34);$b.FlatStyle='Flat';$b.BackColor=[Drawing.Color]::White;$b.add_Click($action);$form.Controls.Add($b)}
 Add-Button 'Mở hàng đợi' 28 145 {Start-Process rundll32.exe -ArgumentList "printui.dll,PrintUIEntry /o /n `"$($settings.name)`""}
 Add-Button 'Tùy chọn in' 185 145 {Start-Process rundll32.exe -ArgumentList "printui.dll,PrintUIEntry /e /n `"$($settings.name)`""}
 Add-Button 'Quản lý trạm in' 342 165 {Start-Process "http://$($settings.ip)"}
 Add-Button 'Ẩn cửa sổ' 607 145 {$form.Hide()}
+function Control-LocalJob($action) {
+ if ($list.SelectedItems.Count -ne 1) {return}
+ $id=[int]$list.SelectedItems[0].Text
+ if ($action -eq 'cancel' -and [Windows.Forms.MessageBox]::Show("Hủy lệnh #${id}? Trang đã gửi vào máy in vẫn có thể ra giấy. Nếu đang gửi dữ liệu, cần kiểm tra kết quả trước khi in lại.",'Hủy lệnh in','YesNo','Warning') -ne 'Yes') {return}
+ try {
+  switch ($action) {
+   'pause' {Suspend-PrintJob -PrinterName $settings.name -ID $id -ErrorAction Stop}
+   'resume' {Resume-PrintJob -PrinterName $settings.name -ID $id -ErrorAction Stop}
+   'cancel' {Remove-PrintJob -PrinterName $settings.name -ID $id -ErrorAction Stop}
+  }
+  $script:nextPoll=[datetime]::MinValue
+ } catch {[void][Windows.Forms.MessageBox]::Show($_.Exception.Message,'Không thực hiện được','OK','Error')}
+}
+$pause=New-Object Windows.Forms.Button;$pause.Text='Ⅱ Tạm dừng';$pause.SetBounds(28,466,145,34);$pause.Enabled=$false;$pause.add_Click({Control-LocalJob 'pause'});$form.Controls.Add($pause)
+$resume=New-Object Windows.Forms.Button;$resume.Text='▶ Tiếp tục';$resume.SetBounds(185,466,145,34);$resume.Enabled=$false;$resume.add_Click({Control-LocalJob 'resume'});$form.Controls.Add($resume)
+$cancel=New-Object Windows.Forms.Button;$cancel.Text='× Xóa lệnh';$cancel.SetBounds(342,466,145,34);$cancel.Enabled=$false;$cancel.add_Click({Control-LocalJob 'cancel'});$form.Controls.Add($cancel)
+$list.add_SelectedIndexChanged({$selected=$list.SelectedItems.Count -eq 1;$pause.Enabled=$selected;$resume.Enabled=$selected;$cancel.Enabled=$selected})
 function Show-Monitor {$form.Show();$form.WindowState='Normal';$form.Activate()}
 $tray=New-Object Windows.Forms.NotifyIcon;$tray.Icon=[Drawing.SystemIcons]::Information;$tray.Text='Canon LBP3300 — ESP32';$tray.Visible=$true
 $tray.add_DoubleClick({Show-Monitor})
@@ -77,8 +99,8 @@ $timer.add_Tick({
    $icon.Image=if ($view.Kind -eq 'error') {[Drawing.SystemIcons]::Error.ToBitmap()} elseif ($view.Kind -eq 'warning') {[Drawing.SystemIcons]::Warning.ToBitmap()} else {[Drawing.SystemIcons]::Information.ToBitmap()}
    if ($oldImage) {$oldImage.Dispose()}
    $bar.Style='Continuous';$bar.Value=0
-   if ($s -and $s.capt.fresh -and $s.active -and $s.total -gt 0) {$bar.Value=[int][Math]::Max(0,[Math]::Min(100,100.0*$s.completed/$s.total))}
-   elseif ($s -and $s.active) {$bar.Style='Marquee'}
+   if ($s.job_control.id -and $s.job_control.total -gt 0) {$bar.Value=[int][Math]::Max(0,[Math]::Min(100,100.0*$s.job_control.completed/$s.job_control.total))}
+   elseif ($s.job_control.active) {$bar.Style='Marquee'}
    $signal=if ($view.Kind -in @('error','warning')) {$view.Title+$view.Detail} else {''}
    if ($signal -and $signal -ne $script:lastSignal) {Show-Monitor};$script:lastSignal=$signal
    $footer.Text="Cập nhật $(Get-Date -Format HH:mm:ss) | Bộ đếm tính theo mặt in; spool không xác nhận giấy đã ra."
@@ -90,11 +112,12 @@ $timer.add_Tick({
    $key=($jobs | ForEach-Object {$_.ID}) -join ','
    if ($key -and $key -ne $script:lastJobs) {Show-Monitor};$script:lastJobs=$key
    $queueTitle.Text="Hàng đợi Windows — $($jobs.Count) lệnh"
+   $selectedId=if ($list.SelectedItems.Count -eq 1) {$list.SelectedItems[0].Text} else {''}
    $list.BeginUpdate();$list.Items.Clear()
    foreach ($job in $jobs) {
     $item=New-Object Windows.Forms.ListViewItem([string]$job.ID)
     [void]$item.SubItems.Add([string]$job.DocumentName);[void]$item.SubItems.Add([string]$job.JobStatus)
-    [void]$item.SubItems.Add("$($job.PagesPrinted) / $($job.TotalPages)");[void]$list.Items.Add($item)
+    [void]$item.SubItems.Add("$($job.PagesPrinted) / $($job.TotalPages)");[void]$list.Items.Add($item);if ($item.Text -eq $selectedId) {$item.Selected=$true}
    }
    $list.EndUpdate()
    $script:client=New-Object Net.WebClient;$script:client.Encoding=[Text.Encoding]::UTF8;$script:client.Proxy=$null

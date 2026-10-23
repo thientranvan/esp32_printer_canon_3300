@@ -70,20 +70,20 @@ static std::atomic<bool> cloudOnline{false};
 static std::atomic<uint32_t> cloudCommandSeq{0};
 static std::atomic<int> cloudCommandResult{0};
 static bool cloudHeartbeat(bool force=false) {return cloudOnline.load();}
-static String jobStatusJSON() {
-  auto j=jobSnapshot();
+static String jobStatusJSON(const PrintControl::Job &j) {
   return String("{\"id\":")+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
     ",\"request\":"+jsonString(j.request)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
     ",\"total\":"+j.total+",\"completed\":"+j.completed+"}";
 }
+static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
-  auto u=readUSB();
-  String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":captTCPState.load()==2?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
+  auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
+  String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
   String body="{\"schema\":1,\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
-    ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(captTCPState.load()==2?"true":"false")+
-    ",\"total\":"+String(captTCPTotal.load())+",\"completed\":"+String(captTCPCompleted.load())+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON()+",\"queue_command\":"+queueCommandJSON()+"}";
+    ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
+    ",\"total\":"+String(lanJob?j.total:0)+",\"completed\":"+String(lanJob?j.completed:0)+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON(j)+",\"queue_command\":"+queueCommandJSON()+"}";
   return body;
 }
 // Dedicated network task: HTTPS cannot block USB engine/status or local controls.

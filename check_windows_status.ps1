@@ -21,10 +21,9 @@ $s=[pscustomobject]@{connected=$true;responsive=$true;active=$false;capt=[pscust
 $v=Get-DeviceView $s
 if ($v.Title -notmatch 'E100 0000' -or $v.Kind -ne 'error') {throw 'Exact Canon fault missing'}
 if ((Get-DeviceView $null).Kind -ne 'error') {throw 'Offline not an error'}
-$s.capt.service_error=$false;$s.active=$true
+$s.capt.service_error=$false;$s.active=$true;$s | Add-Member NoteProperty job_control ([pscustomobject]@{id='test';state='printing';active=$true;total=0;completed=0})
 if ((Get-DeviceView $s).Progress -match '/') {throw 'Invented page total'}
-$s | Add-Member NoteProperty total 3
-$s | Add-Member NoteProperty completed 1
+$s.job_control.total=3;$s.job_control.completed=1
 if ((Get-DeviceView $s).Progress -notmatch '1 / 3') {throw 'Physical progress missing'}
 $guard=[scriptblock]::Create([regex]::Match($setup,'(?s)\$unresolved=.*?(?=\$port=Get-PrinterPort)').Value)
 function Test-Path {param($Path) $script:hasCapture}

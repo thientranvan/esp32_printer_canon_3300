@@ -12,6 +12,11 @@ struct Job {
   *this=Job();std::strncpy(id,target,64);std::strncpy(source,origin,7);
   std::strcpy(state,"printing");active=true;controllable=control;
  }
+ bool rejectBeforeStart(const char *target,const char *origin,unsigned count,bool control=false) {
+  if(active || !std::strcmp(state,"uncertain"))return false;
+  if(!matches(target)){begin(target,origin,control);total=count;finish("failed");}
+  return true;
+ }
  bool command(const char *target,const char *action) {
   if(!matches(target))return false;
   if(!std::strcmp(action,"delete")) {if(active || !std::strcmp(state,"uncertain"))return false;*this=Job();return true;}
