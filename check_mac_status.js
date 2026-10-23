@@ -33,3 +33,9 @@ s.capt.paper_required=true;assert.equal(context.deviceView(s).kind,'warning');
 s.capt.paper_jam=true;assert.equal(context.deviceView(s).kind,'error');
 s.capt.fresh=false;assert.equal(context.deviceView(s).kind,'warning');
 s.connected=false;assert.equal(context.deviceView(s).kind,'offline');
+
+assert.equal(context.queueView({'printer-state':3},[]),null);
+let local=context.queueView({'printer-state':5},[{'job-state':3,'job-state-reasons':'printer-stopped','job-printer-state-message':'Expected LBP3300 A4'}]);
+assert.equal(local.kind,'warning');assert(local.detail.includes('Chọn A4'));assert(local.title.includes('Mac'));
+assert.equal(context.queueView({'printer-state':3},[{'job-state':4,'job-state-reasons':'job-hold-until-specified'}]),null);
+assert(context.queueView({'printer-state':5,'printer-state-message':'Filter failed'},[]).detail.includes('Filter failed'));

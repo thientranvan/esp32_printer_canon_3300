@@ -72,3 +72,13 @@ Web ESP và cửa sổ Windows/Mac dùng icon kèm chữ, không chỉ dùng mà
 Dev web server áp dụng cùng quy tắc, giữ nguyên mã lỗi và chữ mô tả. Không dùng
 màu xanh khi CAPT stale; không hiểu dấu tích là mọi cảm biến đã được kiểm chứng.
 Thay đổi chỉ là UI; không thêm báo cáo nền hay phụ thuộc máy tính.
+
+## Lỗi trước khi ESP nhận lệnh trên Mac
+
+Cửa sổ Mac đọc thêm printer-state/message và job-state/reasons/message từ CUPS
+qua IPP cục bộ. Khi hàng đợi stopped, tự mở cảnh báo vàng và hiện nguyên nhân;
+`Expected LBP3300 A4` được giải thích là chọn A4 tại ứng dụng. Không hiển thị
+xanh sẵn sàng thay cho lỗi queue Mac. Không tự bật lại queue hoặc in lại tài liệu.
+Dữ liệu này chỉ hiển thị tại Mac, không gửi ESP/server. ESP không thể biết lệnh
+bị chặn trước khi gửi. Đã thử dừng queue trống với lỗi giả, xác nhận cửa sổ tự mở,
+khôi phục queue; không tạo hay gửi tài liệu in.

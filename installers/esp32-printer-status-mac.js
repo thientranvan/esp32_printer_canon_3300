@@ -24,6 +24,13 @@ function jobView(s) {
     if(!j || !j.id || !j.active)return {text:'Trạm hiện không có lệnh đang chạy',value:0};
     return {text:(states[j.state]||j.state)+' · '+(j.total>0?'Đã ghi nhận '+j.completed+' / '+j.total+' mặt in':'Chưa có tổng số mặt in'),value:j.total>0?Math.max(0,Math.min(100,100*j.completed/j.total)):0};
 }
+function queueView(printer,jobs) {
+    var blocked=jobs.filter(function(j){return j['job-state']===6||String(j['job-state-reasons']||'').indexOf('printer-stopped')>=0;});
+    if(Number(printer['printer-state'])!==5&&!blocked.length)return null;
+    var message=String((blocked[0]||{})['job-printer-state-message']||printer['printer-state-message']||'Hàng đợi Mac đang tạm dừng.');
+    if(/Expected LBP3300 A4/.test(message))message='Tài liệu chọn khổ giấy chưa hỗ trợ. Chọn A4 trong Word/PDF rồi gửi lại; xóa lệnh sai khổ còn chờ.';
+    return statusView('Hàng đợi Mac bị dừng',message+'\nLỗi tại Mac; trạng thái này không phải lỗi máy in trên ESP.','warning');
+}
 function run(argv) {
     ObjC.import('AppKit');ObjC.import('Foundation');
     if(argv.length!==3 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(argv[0]) || argv[0].split('.').some(function(x){return +x>255;}) || !/^[A-Za-z0-9_-]+$/.test(argv[1])) throw Error('Expected valid IPv4, CUPS queue and name');
@@ -49,17 +56,17 @@ function run(argv) {
     [['id','Lệnh',95],['name','Tài liệu',320],['state','Trạng thái',270]].forEach(function(c){var column=$.NSTableColumn.alloc.initWithIdentifier($(c[0]));column.title=$(c[1]);column.width=c[2];table.addTableColumn(column);});
     scroll.documentView=table;content.addSubview(scroll);
     var footer=label('Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.',24,448,710,38,11,false);
-    var request=null, spool=null, lastJobs=null, lastError='', nextPoll=0, target;
+    var request=null, spool=null, lastJobs=null, lastError='', nextPoll=0, target, localProblem=null, lastStatus=null;
     function show() {window.makeKeyAndOrderFront(null);app.activateIgnoringOtherApps(true);console.log('STATUS: opened '+queue);}
-    function task(path,args,captureError) {
-        var p=$.NSPipe.pipe,t=$.NSTask.alloc.init;t.executableURL=$.NSURL.fileURLWithPath($(path));t.arguments=$(args);t.standardOutput=p;t.standardError=captureError?p:$.NSFileHandle.fileHandleWithNullDevice;t.launch;
+    function task(path,args,captureError,input) {
+        var p=$.NSPipe.pipe,t=$.NSTask.alloc.init;t.executableURL=$.NSURL.fileURLWithPath($(path));t.arguments=$(args);t.standardOutput=p;t.standardError=captureError?p:$.NSFileHandle.fileHandleWithNullDevice;var stdin=input?$.NSPipe.pipe:null;if(stdin)t.standardInput=stdin;t.launch;if(stdin){stdin.fileHandleForWriting.writeData($(input).dataUsingEncoding($.NSUTF8StringEncoding));stdin.fileHandleForWriting.closeFile;}
         return {task:t,pipe:p};
     }
     function read(t) {return ObjC.unwrap($.NSString.alloc.initWithDataEncoding(t.pipe.fileHandleForReading.readDataToEndOfFile,$.NSUTF8StringEncoding)) || '';}
     function apply(s) {
-        var v=deviceView(s);state.stringValue=$(v.title);message.stringValue=$(v.detail);var color={ready:$.NSColor.systemGreenColor,busy:$.NSColor.systemBlueColor,warning:$.NSColor.colorWithSRGBRedGreenBlueAlpha(0.52,0.33,0,1),error:$.NSColor.systemRedColor,offline:$.NSColor.secondaryLabelColor}[v.kind];state.textColor=color;
+        lastStatus=s;var v=deviceView(s);if(localProblem&&v.kind!=='error'&&v.kind!=='offline')v=localProblem;state.stringValue=$(v.title);message.stringValue=$(v.detail);var color={ready:$.NSColor.systemGreenColor,busy:$.NSColor.systemBlueColor,warning:$.NSColor.colorWithSRGBRedGreenBlueAlpha(0.52,0.33,0,1),error:$.NSColor.systemRedColor,offline:$.NSColor.secondaryLabelColor}[v.kind];state.textColor=color;
         var symbol={ready:'checkmark.circle.fill',busy:'printer.fill',warning:'exclamationmark.triangle.fill',error:'xmark.octagon.fill',offline:'wifi.slash'}[v.kind];statusIcon.image=$.NSImage.imageWithSystemSymbolNameAccessibilityDescription($(symbol),$(v.title));statusIcon.contentTintColor=color;
-        var view=jobView(s);progress.doubleValue=view.value;progressText.stringValue=$(view.text);
+        var view=jobView(s);progress.doubleValue=view.value;progressText.stringValue=$(localProblem?'Lệnh đang bị chặn tại hàng đợi Mac. Xem nguyên nhân bên trên.':view.text);
         var error=v.error?v.title+v.detail:'';if(s&&s.job_control&&s.job_control.state==='uncertain')error+='uncertain:'+s.job_control.id;if(error && error!==lastError)show();lastError=error;
         if(Date.now()>actionUntil)footer.stringValue=$('Cập nhật '+new Date().toLocaleTimeString()+' | Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.');
     }
@@ -93,15 +100,18 @@ function run(argv) {
                     if(lastJobs!==null && ids.some(function(id){return lastJobs.indexOf(id)<0;}))show();lastJobs=ids;
                     spool=null;
                     // History identifies new submissions; the next task shows pending jobs only.
-                    var active=task('/usr/bin/ipptool',['-X','-T','2','ipp://localhost/printers/'+queue,'/usr/share/cups/ipptool/get-jobs.test']);activeOnly=active;
+                    var query='{ OPERATION Get-Printer-Attributes GROUP operation-attributes-tag ATTR charset attributes-charset utf-8 ATTR language attributes-natural-language en ATTR uri printer-uri $uri ATTR keyword requested-attributes printer-state,printer-state-message STATUS successful-ok }\n'+
+                        '{ OPERATION Get-Jobs GROUP operation-attributes-tag ATTR charset attributes-charset utf-8 ATTR language attributes-natural-language en ATTR uri printer-uri $uri ATTR keyword requested-attributes job-id,job-name,job-state,job-state-reasons,job-printer-state-message STATUS successful-ok }\n';
+                    activeOnly=task('/usr/bin/ipptool',['-X','-T','2','ipp://localhost/printers/'+queue,'/dev/stdin'],false,query);
                 }
                 if(activeOnly && !activeOnly.task.running) {
                     var xml=read(activeOnly);activeOnly=null;
                     var result=ObjC.deepUnwrap($.NSPropertyListSerialization.propertyListWithDataOptionsFormatError($(xml).dataUsingEncoding($.NSUTF8StringEncoding),0,null,null));
                     if(!result || !result.Successful)throw Error('Không đọc được hàng đợi CUPS');
+                    var attributes=result.Tests[0].ResponseAttributes.filter(function(a){return a['printer-state']!==undefined;})[0]||{}, jobs=result.Tests[1].ResponseAttributes||[];localProblem=queueView(attributes,jobs);apply(lastStatus);
                     var selected=selectedJob(), selectedId=selected?selected.id:null;
                     var states={3:'Đang chờ',4:'Đang giữ',5:'Đang xử lý',6:'Đã dừng'};
-                    rows=result.Tests[0].ResponseAttributes.filter(function(j){return !!j['job-id'];}).map(function(j){return {id:j['job-id'],name:j['job-name']||'(Xem tài liệu trong Print Center)',code:j['job-state'],state:(states[j['job-state']]||j['job-state'])+(j['job-state-reasons']?' · '+j['job-state-reasons']:'')};});
+                    rows=jobs.filter(function(j){return !!j['job-id'];}).map(function(j){return {id:j['job-id'],name:j['job-name']||'(Xem tài liệu trong Print Center)',code:j['job-state'],state:(states[j['job-state']]||j['job-state'])+(j['job-state-reasons']?' · '+j['job-state-reasons']:'')};});
                     table.reloadData;
                     var index=rows.map(function(j){return j.id;}).indexOf(selectedId);
                     if(index>=0)table.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(index),false);
