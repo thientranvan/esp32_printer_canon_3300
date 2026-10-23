@@ -12,7 +12,9 @@ def main():
     initial = json.loads(c.request('/status'))
     assert not initial['job_control']['active'] and not initial['cloud']['job'], 'Station must be idle'
     host = initial['ip']
-    client_id = ('mac-' + socket.gethostname() + '-' + 'telemetry-check').replace('.', '_')[:64]
+    previous = next((r for r in initial.get('clients', {}).get('items', [])
+                     if r.get('os') == 'macos' and r.get('name', '').lower() == socket.gethostname().lower()), None)
+    client_id = previous['id'] if previous else ('mac-' + socket.gethostname() + '-' + 'telemetry-check').replace('.', '_')[:64]
     report = dict(id=client_id, name='Telemetry check', os='macos', queue='Diagnostic only', truncated=False, jobs=[])
 
     def post(value, expected=202, content_type='application/json'):
@@ -49,6 +51,8 @@ def main():
         # No F001 or CAPT raster/reservation commands: printer never gets this metadata.
     finally:
         tcp.close()
+    if previous:
+        post(previous)
     print('PASS: report boundaries, empty queue, capabilities, metadata ACK; no print submitted')
 
 
