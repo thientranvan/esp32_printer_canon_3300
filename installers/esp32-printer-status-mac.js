@@ -14,6 +14,7 @@ function deviceView(s) {
 function jobView(s) {
     var j=s&&s.job_control, states={printing:'Đang in',paused:'Đã tạm dừng',failed:'Lệnh lỗi',uncertain:'Chưa rõ kết quả',completed:'Đã hoàn tất',resolved:'Đã đối soát'};
     if(!s)return {text:'Mất kết nối — chưa có tiến trình mới',value:0};
+    if(j && j.id && j.state==='uncertain')return {text:'Lệnh cần đối soát — chưa rõ kết quả in',value:0};
     if(!j || !j.id || !j.active)return {text:'Trạm hiện không có lệnh đang chạy',value:0};
     return {text:(states[j.state]||j.state)+' · '+(j.total>0?'Đã ghi nhận '+j.completed+' / '+j.total+' mặt in':'Chưa có tổng số mặt in'),value:j.total>0?Math.max(0,Math.min(100,100*j.completed/j.total)):0};
 }
