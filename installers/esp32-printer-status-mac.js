@@ -38,7 +38,7 @@ function run(argv) {
     }
     label(name,24,20,710,32,23,true);label('Canon LBP3300  |  '+host,24,58,710,23,13,false);
     var statusIcon=$.NSImageView.alloc.initWithFrame($.NSMakeRect(24,386,56,56));statusIcon.imageScaling=$.NSImageScaleProportionallyUpOrDown;content.addSubview(statusIcon);
-    var state=label('Đang kết nối…',94,106,640,36,23,true);
+    var state=label('Đang kết nối…',94,111,640,30,23,true);
     var message=label('',24,151,710,66,14,false);
     var progressText=label('Chưa có tổng số mặt in được xác nhận',24,226,710,25,13,false);
     var progress=$.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(24,270,712,12));progress.indeterminate=false;progress.minValue=0;progress.maxValue=100;content.addSubview(progress);
