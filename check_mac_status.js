@@ -16,5 +16,7 @@ console.log('PASS: Mac status faults, stale/offline, activity and retained job h
 s.job_control={id:'same-job',state:'failed',active:false,total:2,completed:0};
 const stable=context.jobView(s).text;
 for(const active of [true,false,true,false]) {s.active=active;s.total=active?0:2;assert.equal(context.jobView(s).text,stable);}
-assert(stable.includes('0 / 2') && stable.includes('Lệnh lỗi'));
+assert.equal(stable,'Trạm hiện không có lệnh đang chạy');
+s.job_control.active=true;s.job_control.state='printing';assert(context.jobView(s).text.includes('0 / 2'));
+s.job_control.active=false;assert(!context.jobView(s).text.includes('0 / 2'));
 assert(source.includes("control('pause')") && source.includes("control('resume')") && source.includes("control('cancel')"));
