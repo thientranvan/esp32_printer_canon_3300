@@ -12,3 +12,9 @@ s.capt.fresh=false;assert.equal(context.deviceView(s).title,'Chưa có trạng t
 assert(source.includes("['-W','all','-o',queue]"));
 assert(!source.includes('cupsaccept') && !source.includes('cupsenable'));
 console.log('PASS: Mac status faults, stale/offline, activity and retained job history');
+
+s.job_control={id:'same-job',state:'failed',active:false,total:2,completed:0};
+const stable=context.jobView(s).text;
+for(const active of [true,false,true,false]) {s.active=active;s.total=active?0:2;assert.equal(context.jobView(s).text,stable);}
+assert(stable.includes('0 / 2') && stable.includes('Lệnh lỗi'));
+assert(source.includes("control('pause')") && source.includes("control('resume')") && source.includes("control('cancel')"));

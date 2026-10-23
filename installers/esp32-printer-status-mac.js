@@ -11,6 +11,12 @@ function deviceView(s) {
     if(c.toner_warning) errors.push('Cảnh báo mực.');
     return {title:errors.length ? (c.service_error ? 'Canon '+c.service_code : 'Máy in cần xử lý') : (s.active?'Đang in':'Sẵn sàng'), detail:errors.join('\n') || (s.active?'Máy in đang xử lý lệnh.':'Máy in đang rảnh.'), error:errors.length>0};
 }
+function jobView(s) {
+    var j=s&&s.job_control, states={printing:'Đang in',paused:'Đã tạm dừng',failed:'Lệnh lỗi',uncertain:'Chưa rõ kết quả',completed:'Đã hoàn tất',resolved:'Đã đối soát'};
+    if(!s)return {text:'Mất kết nối — chưa có tiến trình mới',value:0};
+    if(!j || !j.id)return {text:'Chưa có lệnh in trên trạm',value:0};
+    return {text:(states[j.state]||j.state)+' · '+(j.total>0?'Đã ghi nhận '+j.completed+' / '+j.total+' mặt in':'Chưa có tổng số mặt in'),value:j.total>0?Math.max(0,Math.min(100,100*j.completed/j.total)):0};
+}
 function run(argv) {
     ObjC.import('AppKit');ObjC.import('Foundation');
     if(argv.length!==3 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(argv[0]) || argv[0].split('.').some(function(x){return +x>255;}) || !/^[A-Za-z0-9_-]+$/.test(argv[1])) throw Error('Expected valid IPv4, CUPS queue and name');
@@ -29,27 +35,48 @@ function run(argv) {
     var progressText=label('Chưa có tổng số mặt in được xác nhận',24,226,710,25,13,false);
     var progress=$.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(24,270,712,12));progress.indeterminate=false;progress.minValue=0;progress.maxValue=100;content.addSubview(progress);
     label('Hàng đợi trên Mac',24,288,710,25,15,true);
-    var scroll=$.NSScrollView.alloc.initWithFrame($.NSMakeRect(24,112,712,108));scroll.hasVerticalScroller=true;scroll.borderType=$.NSBezelBorder;
-    var jobs=$.NSTextView.alloc.initWithFrame($.NSMakeRect(0,0,690,108));jobs.editable=false;jobs.font=$.NSFont.monospacedSystemFontOfSizeWeight(12,0);scroll.documentView=jobs;content.addSubview(scroll);
-    var footer=label('Bộ đếm tính theo mặt in; spool không xác nhận giấy đã ra.',24,438,710,28,11,false);
+    var rows=[], controlTask=null, actionNote='', actionUntil=0;
+    var scroll=$.NSScrollView.alloc.initWithFrame($.NSMakeRect(24,142,712,78));scroll.hasVerticalScroller=true;scroll.borderType=$.NSBezelBorder;
+    var table=$.NSTableView.alloc.initWithFrame($.NSMakeRect(0,0,710,78));table.allowsMultipleSelection=false;
+    [['id','Lệnh',95],['name','Tài liệu',320],['state','Trạng thái',270]].forEach(function(c){var column=$.NSTableColumn.alloc.initWithIdentifier($(c[0]));column.title=$(c[1]);column.width=c[2];table.addTableColumn(column);});
+    scroll.documentView=table;content.addSubview(scroll);
+    var footer=label('Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.',24,448,710,38,11,false);
     var request=null, spool=null, lastJobs=null, lastError='', nextPoll=0, target;
     function show() {window.makeKeyAndOrderFront(null);app.activateIgnoringOtherApps(true);console.log('STATUS: opened '+queue);}
-    function task(path,args) {
-        var p=$.NSPipe.pipe,t=$.NSTask.alloc.init;t.executableURL=$.NSURL.fileURLWithPath($(path));t.arguments=$(args);t.standardOutput=p;t.standardError=$.NSFileHandle.fileHandleWithNullDevice;t.launch;
+    function task(path,args,captureError) {
+        var p=$.NSPipe.pipe,t=$.NSTask.alloc.init;t.executableURL=$.NSURL.fileURLWithPath($(path));t.arguments=$(args);t.standardOutput=p;t.standardError=captureError?p:$.NSFileHandle.fileHandleWithNullDevice;t.launch;
         return {task:t,pipe:p};
     }
     function read(t) {return ObjC.unwrap($.NSString.alloc.initWithDataEncoding(t.pipe.fileHandleForReading.readDataToEndOfFile,$.NSUTF8StringEncoding)) || '';}
     function apply(s) {
         var v=deviceView(s);state.stringValue=$(v.title);message.stringValue=$(v.detail);state.textColor=v.error?$.NSColor.systemRedColor:$.NSColor.systemGreenColor;
-        var known=s && s.capt && s.capt.fresh && s.active && s.total>0;
-        progress.doubleValue=known?Math.max(0,Math.min(100,100*s.completed/s.total)):0;
-        progressText.stringValue=$(known?s.completed+' / '+s.total+' mặt in hoàn tất':'Chưa có tổng số mặt in được xác nhận');
+        var view=jobView(s);progress.doubleValue=view.value;progressText.stringValue=$(view.text);
         var error=v.error?v.title+v.detail:'';if(error && error!==lastError)show();lastError=error;
-        footer.stringValue=$('Cập nhật '+new Date().toLocaleTimeString()+' | Spool không xác nhận giấy đã ra.');
+        if(Date.now()>actionUntil)footer.stringValue=$('Cập nhật '+new Date().toLocaleTimeString()+' | Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.');
+    }
+    function selectedJob(){var row=Number(table.selectedRow);return row>=0&&row<rows.length?rows[row]:null;}
+    function control(action){
+        var job=selectedJob();if(!job || controlTask)return;
+        if(action==='cancel') {
+            var alert=$.NSAlert.alloc.init;alert.messageText=$('Hủy lệnh #'+job.id+'?');
+            alert.informativeText=$('Lệnh sẽ bị xóa khỏi hàng đợi Mac. Trang đã gửi vào máy in vẫn có thể ra giấy. Nếu đang gửi dữ liệu, cần kiểm tra kết quả trước khi in lại.');
+            alert.addButtonWithTitle($('Hủy lệnh'));alert.addButtonWithTitle($('Quay lại'));if(Number(alert.runModal)!==1000)return;
+        }
+        var id=queue+'-'+job.id;
+        controlTask=action==='cancel'?task('/usr/bin/cancel',[id],true):task('/usr/bin/lp',['-i',id,'-H',action==='pause'?'hold':'resume'],true);
+        actionNote=action==='cancel'?'Đã yêu cầu hủy lệnh.':action==='pause'?'Đã yêu cầu giữ lệnh trên Mac.':'Đã yêu cầu tiếp tục; cần khắc phục lỗi máy in nếu hàng đợi bị dừng.';
+        footer.stringValue=$('Đang gửi yêu cầu…');actionUntil=Date.now()+10000;
     }
     ObjC.registerSubclass({name:'ESP32PrinterStatusActions',superclass:'NSObject',methods:{
+        'numberOfRowsInTableView:':{types:['long',['id']],implementation:function(){return rows.length;}},
+        'tableView:objectValueForTableColumn:row:':{types:['id',['id','id','long']],implementation:function(view,column,row){var item=rows[Number(row)];return $(item?String(item[ObjC.unwrap(column.identifier)]||''):'');}},
+        'pause:':{types:['void',['id']],implementation:function(){control('pause');}},
+        'resume:':{types:['void',['id']],implementation:function(){control('resume');}},
+        'cancel:':{types:['void',['id']],implementation:function(){control('cancel');}},
         'tick:':{types:['void',['id']],implementation:function() {
             try {
+                var chosen=selectedJob();pauseButton.enabled=!!chosen&&!controlTask&&chosen.code!==4;resumeButton.enabled=!!chosen&&!controlTask&&chosen.code===4;cancelButton.enabled=!!chosen&&!controlTask;
+                if(controlTask && !controlTask.task.running){var output=read(controlTask);footer.stringValue=$(Number(controlTask.task.terminationStatus)===0?actionNote:'Không thực hiện được: '+output.trim());actionUntil=Date.now()+10000;controlTask=null;nextPoll=0;}
                 if(request && !request.task.running) {var s=null;try{s=JSON.parse(read(request));}catch(e){} request=null;apply(s);}
                 if(spool && !spool.task.running) {
                     var output=read(spool), ids=output.split('\n').filter(function(l){return l.indexOf(queue+'-')===0;}).map(function(l){return l.split(/\s+/)[0];});
@@ -57,9 +84,19 @@ function run(argv) {
                     if(lastJobs!==null && ids.some(function(id){return lastJobs.indexOf(id)<0;}))show();lastJobs=ids;
                     spool=null;
                     // History identifies new submissions; the next task shows pending jobs only.
-                    var active=task('/usr/bin/lpstat',['-W','not-completed','-o',queue]);activeOnly=active;
+                    var active=task('/usr/bin/ipptool',['-X','-T','2','ipp://localhost/printers/'+queue,'/usr/share/cups/ipptool/get-jobs.test']);activeOnly=active;
                 }
-                if(activeOnly && !activeOnly.task.running) {var text=read(activeOnly);jobs.string=$(text.trim()?text.trim().split('\n').map(function(line){var parts=line.split(/\s+/);return 'Lệnh #'+parts[0].slice(queue.length+1)+'   |   '+parts[1]+'   |   '+Math.ceil(Number(parts[2])/1024)+' KB';}).join('\n'):'Không có lệnh đang chờ trên Mac.');activeOnly=null;}
+                if(activeOnly && !activeOnly.task.running) {
+                    var xml=read(activeOnly);activeOnly=null;
+                    var result=ObjC.deepUnwrap($.NSPropertyListSerialization.propertyListWithDataOptionsFormatError($(xml).dataUsingEncoding($.NSUTF8StringEncoding),0,null,null));
+                    if(!result || !result.Successful)throw Error('Không đọc được hàng đợi CUPS');
+                    var selected=selectedJob(), selectedId=selected?selected.id:null;
+                    var states={3:'Đang chờ',4:'Đang giữ',5:'Đang xử lý',6:'Đã dừng'};
+                    rows=result.Tests[0].ResponseAttributes.filter(function(j){return !!j['job-id'];}).map(function(j){return {id:j['job-id'],name:j['job-name']||'(Xem tài liệu trong Print Center)',code:j['job-state'],state:(states[j['job-state']]||j['job-state'])+(j['job-state-reasons']?' · '+j['job-state-reasons']:'')};});
+                    table.reloadData;
+                    var index=rows.map(function(j){return j.id;}).indexOf(selectedId);
+                    if(index>=0)table.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(index),false);
+                }
                 if(Date.now()>=nextPoll && !request && !spool && !activeOnly) {
                     request=task('/usr/bin/curl',['--silent','--fail','--noproxy','*','--connect-timeout','1','--max-time','2','--max-filesize','16384','http://'+host+'/printer/status']);
                     spool=task('/usr/bin/lpstat',['-W','all','-o',queue]);nextPoll=Date.now()+1000;
@@ -72,9 +109,11 @@ function run(argv) {
         'hide:':{types:['void',['id']],implementation:function(){window.orderOut(null);}},
         'applicationShouldHandleReopen:hasVisibleWindows:':{types:['bool',['id','bool']],implementation:function(){show();return true;}}
     }});
-    var activeOnly=null;target=$.ESP32PrinterStatusActions.alloc.init;app.delegate=target;
-    function button(text,x,width,selector){var b=$.NSButton.alloc.initWithFrame($.NSMakeRect(x,22,width,34));b.title=$(text);b.bezelStyle=$.NSBezelStyleRounded;b.target=target;b.action=selector;content.addSubview(b);}
-    button('Hàng đợi Mac',24,158,'queue:');button('Cài đặt máy in',190,158,'settings:');button('Quản lý trạm in',356,170,'web:');button('Ẩn cửa sổ',580,156,'hide:');
+    var activeOnly=null;target=$.ESP32PrinterStatusActions.alloc.init;app.delegate=target;table.dataSource=target;
+    function button(text,x,width,selector){var b=$.NSButton.alloc.initWithFrame($.NSMakeRect(x,22,width,34));b.title=$(text);b.bezelStyle=$.NSBezelStyleRounded;b.target=target;b.action=selector;content.addSubview(b);return b;}
+    function jobButton(title,x,width,selector,symbol){var b=button(title,x,width,selector);b.setFrameOrigin($.NSMakePoint(x,98));b.image=$.NSImage.imageWithSystemSymbolNameAccessibilityDescription($(symbol),$(title));b.imagePosition=$.NSImageLeft;b.enabled=false;return b;}
+    var pauseButton=jobButton('Tạm dừng',24,150,'pause:','pause.fill'),resumeButton=jobButton('Tiếp tục',184,150,'resume:','play.fill'),cancelButton=jobButton('Xóa lệnh',344,150,'cancel:','trash');
+    button('Hàng đợi Mac' ,24,158,'queue:');button('Cài đặt máy in',190,158,'settings:');button('Quản lý trạm in',356,170,'web:');button('Ẩn cửa sổ',580,156,'hide:');
     var timer=$.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(0.25,target,'tick:',null,true);
     app.finishLaunching;show();app.run;
 }
