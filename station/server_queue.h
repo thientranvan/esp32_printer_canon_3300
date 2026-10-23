@@ -4,7 +4,12 @@ static portMUX_TYPE serverQueueLock=portMUX_INITIALIZER_UNLOCKED;
 static char serverQueueJSON[4097]="{\"supported\":false,\"items\":[]}";
 static char queueRequestId[65]={},queueJob[65]={},queueAction[8]={},queueRevision[65]={},queueResult[24]={};
 static uint32_t serverQueueAt=0;
-static String serverQueueSnapshot(){char copy[4097];portENTER_CRITICAL(&serverQueueLock);memcpy(copy,serverQueueJSON,sizeof(copy));uint32_t at=serverQueueAt;portEXIT_CRITICAL(&serverQueueLock);String s(copy);s.remove(s.length()-1);return s+",\"age_ms\":"+(at?String(uint32_t(millis()-at)):"null")+"}";}
+static String serverQueueSnapshot(){
+ // Snapshot can be called inside WebServer's 8 KiB loop task; keep 4 KiB off stack.
+ auto *copy=static_cast<char *>(malloc(sizeof(serverQueueJSON)));if(!copy)return "{\"supported\":false,\"error\":\"snapshot_memory\",\"items\":[]}";
+ portENTER_CRITICAL(&serverQueueLock);memcpy(copy,serverQueueJSON,sizeof(serverQueueJSON));uint32_t at=serverQueueAt;portEXIT_CRITICAL(&serverQueueLock);
+ String s(copy);free(copy);s.remove(s.length()-1);return s+",\"age_ms\":"+(at?String(uint32_t(millis()-at)):"null")+"}";
+}
 static String queueCommandJSON(){char id[65],job[65],action[8],revision[65],result[24];portENTER_CRITICAL(&serverQueueLock);memcpy(id,queueRequestId,sizeof(id));memcpy(job,queueJob,sizeof(job));memcpy(action,queueAction,sizeof(action));memcpy(revision,queueRevision,sizeof(revision));memcpy(result,queueResult,sizeof(result));portEXIT_CRITICAL(&serverQueueLock);return "{\"id\":"+jsonString(id)+",\"job_id\":"+jsonString(job)+",\"action\":"+jsonString(action)+",\"revision\":"+jsonString(revision)+",\"result\":"+jsonString(result)+"}";}
 static bool submitQueueCommand(const String &id,const String &action){
  if(!cloudIdentifier(id)||(action!="pause"&&action!="resume"&&action!="cancel"&&action!="delete"))return false;

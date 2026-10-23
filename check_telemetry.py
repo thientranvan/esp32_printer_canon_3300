@@ -51,6 +51,9 @@ def main():
         # No F001 or CAPT raster/reservation commands: printer never gets this metadata.
     finally:
         tcp.close()
+    for _ in range(30):
+        snapshot = json.loads(c.request('/status'))
+        assert snapshot['uptime'] >= initial['uptime'], 'Station rebooted while assembling status'
     if previous:
         post(previous)
     print('PASS: report boundaries, empty queue, capabilities, metadata ACK; no print submitted')

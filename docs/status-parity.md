@@ -148,3 +148,13 @@ nguyên capture/khóa cũ khi nâng cấp; không có yêu cầu purge hoặc ph
 Mac đã nâng bộ cửa sổ theo dõi theo user; backend CUPS cài cấp hệ thống cần
 chạy lại bộ cài bằng quyền quản trị để gửi F004 tên tài liệu của job thực thi.
 Các máy khác cũng cần chạy bộ cài mới để bắt đầu báo queue.
+
+COM stress follow-up: phát hiện stack canary loopTask khi ghép /status;
+addr2line trỏ serverQueueSnapshot có buffer cục bộ 4097 byte, cộng frame WebServer
+và metadata mới vượt stack 8 KiB. Chuyển riêng buffer snapshot này sang heap,
+giữ khóa chỉ cho memcpy; lỗi cấp phát trả queue unavailable, không nhận điều khiển
+bằng snapshot cũ. Check live đọc /status liên tiếp và kiểm tra uptime không giảm.
+
+Sau sửa snapshot: 30 lượt /status liên tiếp không reset; COM uptime tăng liên tục,
+USB connected và CAPT fresh, cloud idle/heartbeat200/claim204; chỉ hai reporter
+thật Mac/Windows, Windows giữ nguyên một capture pending inspection.
