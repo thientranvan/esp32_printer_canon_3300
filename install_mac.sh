@@ -126,3 +126,39 @@ EOF
 /usr/bin/install -o root -g wheel -m 644 "$work/status.plist" "$plist"
 /bin/launchctl bootstrap system "$plist"
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."
+# Desktop monitor runs as the logged-in user, never as the CUPS/root daemon.
+status_script="$source_dir/installers/esp32-printer-status-mac.js"
+status_sha=a4b9519b02b08e7d0cdd75fbdef436f1059e4f9368808fdfefb6277ba9fe47fc
+if [ ! -f "$status_script" ]; then
+  status_script="$work/esp32-printer-status-mac.js"
+  /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/67977c2b2f4808e7e2e6d0d2aa74834de938126d/installers/esp32-printer-status-mac.js -o "$status_script"
+fi
+[ "$(/usr/bin/shasum -a 256 "$status_script" | /usr/bin/cut -d' ' -f1)" = "$status_sha" ] || { echo 'Status monitor checksum mismatch.' >&2; exit 1; }
+/usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"
+window_label=com.esp32printer.window.$id
+window_plist=/Library/LaunchAgents/$window_label.plist
+name_xml=$(printf '%s' "$name" | /usr/bin/perl -pe 's/&/&amp;/g;s/</&lt;/g;s/>/&gt;/g')
+cat > "$work/window.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>$window_label</string>
+<key>ProgramArguments</key><array><string>/usr/bin/osascript</string><string>-l</string><string>JavaScript</string><string>$target_dir/status-mac.js</string><string>$host</string><string>$queue</string><string>$name_xml</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
+<key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>
+EOF
+/usr/bin/plutil -lint "$work/window.plist"
+/usr/bin/install -d -m 755 /Library/LaunchAgents
+/usr/bin/install -o root -g wheel -m 644 "$work/window.plist" "$window_plist"
+console_uid=$(/usr/bin/stat -f %u /dev/console)
+if [ "$console_uid" -ne 0 ]; then
+  # Remove this monitor's older per-user launch override, if installed during upgrade.
+  console_user=$(/usr/bin/stat -f %Su /dev/console)
+  console_dir=$(/usr/bin/dscl . -read "/Users/$console_user" NFSHomeDirectory | /usr/bin/sed 's/^NFSHomeDirectory: //')
+  if [ -n "$console_dir" ] && [ "$console_dir" != / ]; then
+    /bin/rm -f "$console_dir/Library/LaunchAgents/$window_label.plist"
+  fi
+  /bin/launchctl bootout "gui/$console_uid/$window_label" 2>/dev/null || true
+  /bin/launchctl bootstrap "gui/$console_uid" "$window_plist"
+fi
+echo 'Native status window installed; opens for new print jobs and new printer faults.'

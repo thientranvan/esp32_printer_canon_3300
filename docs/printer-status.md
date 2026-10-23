@@ -228,3 +228,27 @@ live homepage includes installer link and all three support copy fields; Wi-Fi
 192.168.1.199 and printer USB connected. COM reports STATION: PASS after reboot.
 Both Windows support commands were parsed on the Windows host without executing
 them, preserving the active support session.
+
+### macOS desktop status window (2026-10-23)
+
+CUPS state monitoring alone does not provide a desktop popup. The installer now
+adds a separate native AppKit window, using macOS JavaScript for Automation
+(`/usr/bin/osascript`), without Python, Homebrew or new dependencies. Its per-station
+Aqua LaunchAgent runs in the logged-in desktop, while the CUPS monitor continues
+separately. Status is fetched asynchronously about once per second, with a two-second
+network timeout. The window shows exact Canon codes, physical impression progress
+only with a fresh known denominator, and pending local job IDs. Buttons open native
+Print Center, printer settings and the ESP dashboard. Closing hides the window;
+the Dock icon reopens it. New faults and new CUPS job IDs request activation.
+Completed CUPS job history is included in detection so fast spool jobs are not
+missed when default CUPS history retention is enabled. The window never resumes,
+cancels or retries existing print jobs automatically. It displays pending job IDs;
+document names and full CUPS controls remain in native Print Center.
+
+The Mac installer downloads a SHA-256-pinned monitor when only install_mac.sh was
+downloaded, and installs /Library/LaunchAgents/com.esp32printer.window.<station>.plist.
+Existing Macs need the new monitor; queue/driver presence alone is insufficient.
+On this Mac the same script was installed into the current user's Application
+Support with a per-user LaunchAgent, preserving the paused queue and old job 238.
+A held test job 239 triggered the popup and was then canceled without printing.
+The live native window was visually checked and showed Canon E100 0000.

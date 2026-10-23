@@ -39,3 +39,8 @@ print("Installer packaging, backend pin and bootstrap checks passed")
 
 ui = Path("installers/esp32-printer-status.ps1").read_text()
 assert "$statusSource=@'\n" + ui + "\n'@" in windows, "Embedded status UI differs from source"
+
+mac_ui=Path("installers/esp32-printer-status-mac.js").read_bytes()
+assert hashlib.sha256(mac_ui).hexdigest() == re.search(r"^status_sha=([0-9a-f]{64})$", mac, re.M)[1]
+assert "com.esp32printer.window.$id" in mac and "LimitLoadToSessionType" in mac
+assert "console_uid" in mac and 'bootstrap "gui/$console_uid"' in mac
