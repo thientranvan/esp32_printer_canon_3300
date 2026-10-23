@@ -187,3 +187,26 @@ Test: `powershell -NoProfile -File .\check_pending_archive.ps1`.
 Windows SetPrinter(level6) có thể bỏ cờ ERROR đơn lẻ. Với service_error hoặc status
 stale, bridge đặt thêm USER_INTERVENTION để queue không hiện Ready giả. Mã E100
 cụ thể vẫn ở cửa sổ status/ESP/server; User intervention không phải tên lỗi Canon.
+
+### Windows status window (2026-10-23)
+
+The station monitor now uses a native WinForms dashboard: station name/IP,
+colour-coded Canon fault card (including exact E100 0000), physical impression
+progress when a fresh total exists, and a Windows spool job list. Buttons open
+Windows queue, Canon printing preferences and the ESP dashboard. Closing hides
+to the notification area; double-click restores it. Windows spool page counts
+are labelled separately and never treated as confirmed paper output.
+
+The local bridge publishes an opaque GUID in the station's Users-readable,
+SYSTEM/Admin-writable `print-event.txt` when accepting a print connection.
+The desktop monitor checks it every 250 ms, also checks spool job changes and
+new device errors, and opens the window. No document content or credentials are
+published. HTTP status uses an asynchronous request with a two-second deadline;
+network status is sampled about once per second. Installation restarts only the
+matching station monitor so upgrades replace the running UI. Windows can restrict
+foreground focus; the monitor requests activation but cannot override OS policy.
+
+Verified on the connected Windows machine: upgraded existing Máy 1 without adding
+a queue; parser/bridge self-tests and status model tests passed. Captured the real
+window showing E100 0000, hid it and verified an opaque test event made it visible
+again. This popup test sends no CAPT pages. E100 remains a physical printer fault.

@@ -15,23 +15,17 @@ if (!$rejected) {throw 'Different station name collision accepted'}
 $conflict=$null;$stationQueues=@();. $selection
 if ($existing) {throw 'Fresh station reused unrelated queue'}
 $ui=Get-Content "$PSScriptRoot\installers\esp32-printer-status.ps1" -Raw
-$poll=[scriptblock]::Create([regex]::Match($ui,'(?s)\$timer.add_Tick\(\{(.*?)\n\}\)').Groups[1].Value)
-$settings=[pscustomobject]@{name='Test';ip='192.168.1.199'}
-$Config='ignored';$text=[pscustomobject]@{Text=''}
-$form=New-Object PSObject
-foreach ($method in @('Show','Activate')) {$form | Add-Member ScriptMethod $method {}}
-$form | Add-Member NoteProperty WindowState 'Normal'
-$form | Add-Member NoteProperty Text ''
-function Get-Content {param($LiteralPath,[switch]$Raw) '{"name":"Test","ip":"192.168.1.199"}'}
-function Get-PrintJob {param($PrinterName,$ErrorAction) [pscustomobject]@{ID=1;DocumentName='Test';JobStatus='Error';PagesPrinted=0;TotalPages=1}}
-function Get-Printer {param($Name,$ErrorAction) [pscustomobject]@{PrinterStatus='UserIntervention'}}
-function Invoke-RestMethod {param($Uri,$TimeoutSec) if ($script:offline) {throw 'Offline'};[pscustomobject]@{connected=$true;responsive=$true;active=$false;capt=[pscustomobject]@{fresh=$true;service_error=$true;service_code='E100 0000';decoded=1;started=0;completed=0}}}
-$script:polling=$false;$script:lastSignal='';$script:lastJobs=''
-& $poll
-if ($text.Text -notmatch 'E100 0000' -or $text.Text -notmatch 'total unavailable' -or $text.Text -notmatch 'requires attention') {throw "Missing exact error / honest progress: $($text.Text)"}
-$script:offline=$true
-& $poll
-if ($text.Text -notmatch 'ESP offline') {throw 'Offline left stale error visible'}
+$model=[scriptblock]::Create([regex]::Match($ui,'(?s)function Get-DeviceView\(\$s\) \{.*?\n\}').Value)
+. $model
+$s=[pscustomobject]@{connected=$true;responsive=$true;active=$false;capt=[pscustomobject]@{fresh=$true;service_error=$true;service_code='E100 0000'}}
+$v=Get-DeviceView $s
+if ($v.Title -notmatch 'E100 0000' -or $v.Kind -ne 'error') {throw 'Exact Canon fault missing'}
+if ((Get-DeviceView $null).Kind -ne 'error') {throw 'Offline not an error'}
+$s.capt.service_error=$false;$s.active=$true
+if ((Get-DeviceView $s).Progress -match '/') {throw 'Invented page total'}
+$s | Add-Member NoteProperty total 3
+$s | Add-Member NoteProperty completed 1
+if ((Get-DeviceView $s).Progress -notmatch '1 / 3') {throw 'Physical progress missing'}
 $guard=[scriptblock]::Create([regex]::Match($setup,'(?s)\$unresolved=.*?(?=\$port=Get-PrinterPort)').Value)
 function Test-Path {param($Path) $script:hasCapture}
 function Get-ChildItem {param($Path,$ErrorAction) if ($script:hasCapture) {[pscustomobject]@{Name='kept.capt'}}}
