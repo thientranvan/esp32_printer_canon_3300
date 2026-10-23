@@ -39,3 +39,9 @@ The mock test proves empty claim 204 handling; a live empty claim cannot be forc
 while that job is locked. User confirmed no sheets emerged. CAPT still reports one
 decoded impression and zero started/completed, so do not clear the lock merely
 because no paper emerged. Empty the printer buffer and reconcile before new claims.
+
+Follow-up reconciliation: user power-cycled only the printer; fresh CAPT counters
+all returned to zero. Resolved the exact retained cloud job through the authenticated
+cloud reconciliation endpoint without replaying its document. Live requests then
+confirmed claim_http=204, heartbeat_http=200 and cloud.state=idle. This verifies the
+no-content claim path against production, in addition to the deterministic tests.
