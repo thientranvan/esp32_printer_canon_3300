@@ -54,3 +54,8 @@ if sys.platform == 'darwin':
     icon_function=mac_ui.decode().split('function printerAppIcon() {',1)[1].split('function run(argv)',1)[0]
     native_check="ObjC.import('AppKit');ObjC.import('Foundation');function printerAppIcon() {"+icon_function+"\nvar image=printerAppIcon();if(image.size.width!==256||image.size.height!==256||image.TIFFRepresentation.length<1000)throw Error('Invalid Dock icon');"
     subprocess.run(['osascript','-l','JavaScript','-'], input=native_check, text=True, check=True)
+
+assert '/usr/bin/osacompile -l JavaScript -o "$status_app" "$status_script"' in mac
+assert 'CFBundleDisplayName -string "$name — Trạm in ESP32"' in mac
+assert '<string>$status_app/Contents/MacOS/applet</string>' in mac
+assert '<string>/usr/bin/osascript</string>' not in mac
