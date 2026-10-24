@@ -15,7 +15,7 @@
 WebServer server(80);
 Preferences prefs;
 String csrf;
-String stationID, stationName = "Máy 1";
+String stationID, stationName = "Máy 1", stationAP;
 IPAddress stationIP(192,168,1,199), stationGateway(192,168,1,1), stationMask(255,255,255,0), stationDNS(192,168,1,1);
 struct StationSettings {
   uint32_t version;
@@ -55,6 +55,11 @@ bool validStationName(const String &name) {
   for (uint8_t c : name) if (c < 32 || c == 127 || c == '\\' || c == '/' || c == '"' || c == ';') return false;
   return true;
 }
+bool validAPName(const String &name) {
+  if(!name.length()||name.length()>32)return false;
+  for(uint8_t c:name)if(c<32||c==127)return false;
+  return true;
+}
 bool validNetwork(const String &ipText, const String &gatewayText, const String &maskText, const String &dnsText) {
   IPAddress ip, gateway, mask, dns;
   if (!ip.fromString(ipText) || !gateway.fromString(gatewayText) || !mask.fromString(maskText) || !dns.fromString(dnsText)) return false;
@@ -68,7 +73,7 @@ bool validNetwork(const String &ipText, const String &gatewayText, const String 
 }
 String profileJSON() {
   return "{\"schema\":1,\"lan_metadata_version\":1,\"model\":\"LBP3300\",\"id\":" + jsonString(stationID) +
-    ",\"name\":" + jsonString(stationName) + ",\"ip\":" + jsonString(WiFi.localIP().toString()) + "}";
+    ",\"name\":" + jsonString(stationName) + ",\"ap_ssid\":"+jsonString(stationAP)+",\"ip\":" + jsonString(WiFi.localIP().toString()) + "}";
 }
 
 #include "cloud_print.h"
@@ -216,6 +221,7 @@ void home() {
 <label>IP tĩnh<input id="station-ip" name="ip" inputmode="decimal" required></label><label>Gateway<input id="station-gateway" name="gateway" inputmode="decimal" required></label>
 <label>Subnet<input id="station-mask" name="mask" inputmode="decimal" required></label><label>DNS<input id="station-dns" name="dns" inputmode="decimal" required></label></div>
 <label><input id="cloud-enabled" name="cloud_enabled" type="checkbox">Nhận lệnh in từ web</label><label>Token do server cấp<input name="cloud_token" type="password" maxlength="96" autocomplete="new-password" placeholder="Để trống để giữ token đã lưu"></label><p class="meta">quanly.lophocbinhminh.com · Token chỉ hiện một lần khi server cấp.</p><div><button class="primary" data-config disabled>Lưu &amp; khởi động lại</button></div></form></details>
+<details><summary>Tên Wi-Fi phát từ ESP (AP)</summary><p>Đổi tên mạng dùng để vào trạm khi chưa có LAN. Không đổi tên máy in hoặc mạng Wi-Fi LAN.</p><form action="/wifi/ap" method="post" class="stack"><input name="token" type="hidden" value="__CSRF__"><label>Tên Wi-Fi ESP<input id="ap-name" name="ap_ssid" maxlength="32" required autocomplete="off"></label><p class="meta">Tối đa 32 byte UTF-8. Lưu sẽ khởi động lại; kết nối lại bằng tên mới. Mật khẩu giữ nguyên.</p><div><button>Lưu tên Wi-Fi ESP</button></div></form></details>
 <details><summary>Đổi Wi-Fi</summary><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><form action="/wifi" method="post" class="stack"><input type="hidden" name="token" value="__CSRF__"><div class="row"><button id="wifi-scan" type="button" onclick="scanWifi()">Quét Wi-Fi</button><span id="wifi-scan-note" role="status" aria-live="polite">Bấm quét để chọn mạng 2,4 GHz.</span></div><label>Chọn mạng Wi-Fi<select id="wifi-list" required onchange="chooseWifi()"><option value="">Chọn mạng sau khi quét</option></select></label><label id="wifi-hidden-label" hidden>Tên mạng ẩn<input id="wifi-hidden" maxlength="32" autocomplete="off" oninput="chooseWifi()"></label><input id="wifi-ssid" name="ssid" type="hidden"><label>Mật khẩu Wi-Fi<input name="password" type="password" maxlength="63" autocomplete="new-password"></label><div><button id="wifi-connect" disabled>Kết nối Wi-Fi</button></div></form></details>
 <details><summary>Bảo trì &amp; chẩn đoán</summary><p id="hardware" class="meta"></p><pre id="diagnostics">Đang đọc dữ liệu USB…</pre>
 <form action="/usb/start" method="post" id="usb-start" hidden><input type="hidden" name="token" value="__CSRF__"><button>Bật USB Host</button></form>
@@ -321,7 +327,7 @@ async function refresh(patch=null){try{
  const phase=states[j.state]||j.state||'Đang xử lý';
  el('job-progress').textContent=phase+' · '+(known?'Đã ghi nhận '+done+' / '+total+' mặt in':'Chưa có tổng số mặt in');
  el('progress').max=total||1;if(known)el('progress').value=done;else el('progress').removeAttribute('value');
- if(!loaded){el('station-name').value=s.station.name;for(const k of ['ip','gateway','mask','dns'])el('station-'+k).value=s.network[k];el('cloud-enabled').checked=c.enabled;loaded=true;document.querySelector('[data-config]').disabled=false;}
+ if(!loaded){el('station-name').value=s.station.name;el('ap-name').value=s.station.ap_ssid||'';for(const k of ['ip','gateway','mask','dns'])el('station-'+k).value=s.network[k];el('cloud-enabled').checked=c.enabled;loaded=true;document.querySelector('[data-config]').disabled=false;}
  el('hardware').textContent='Thời gian chạy '+Math.floor(s.uptime/60)+' phút · Flash '+Math.round(s.flash/1048576)+' MB · PSRAM '+Math.round(s.psram/1048576)+' MB';
  el('diagnostics').textContent=(u.details||'Chưa có thiết bị USB.')+'\nUSB error: '+u.error+' · LAN error: '+t.error;
  el('usb-start').hidden=u.installed;el('resolve').hidden=c.state!=='uncertain';
@@ -372,11 +378,14 @@ void setup() {
     stationIP.fromString(saved.ip); stationGateway.fromString(saved.gateway);
     stationMask.fromString(saved.mask); stationDNS.fromString(saved.dns);
   }
+  String defaultAP="ESP32-Printer-"+((stationIP[3]>=199&&stationIP[3]<=201)?String("May")+String(stationIP[3]-198):stationID.substring(12));
+  stationAP=prefs.getString("apssid",defaultAP);
+  if(!validAPName(stationAP))stationAP=defaultAP;
   bool staticOK = WiFi.config(stationIP, stationGateway, stationMask, stationDNS);
   String hostname = "esp32-" + stationID.substring(12);
   WiFi.setHostname(hostname.c_str());
   WiFi.setAutoReconnect(true);
-  bool apOK = WiFi.softAP(("ESP32-Printer-" + stationID.substring(12)).c_str(), DEVICE_PASSWORD);
+  bool apOK = WiFi.softAP(stationAP.c_str(), DEVICE_PASSWORD);
   healthy = idOK && storageOK && wifiOK && staticOK && apOK && memoryOK &&
             ESP.getFlashChipSize() == 16777216 && ESP.getPsramSize() == 8388608;
   csrf = String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX);
@@ -577,6 +586,14 @@ void setup() {
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", json);
   });
+  server.on("/wifi/ap",HTTP_POST,[]{
+    if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    if(captTCPState.load()||cloudBusy()||jobSnapshot().active){server.send(409,"text/plain; charset=utf-8","Trạm đang in. Đổi tên khi trạm rảnh.");return;}
+    String name=server.arg("ap_ssid");
+    if(!validAPName(name)){server.send(400,"text/plain; charset=utf-8","Tên Wi-Fi phải từ 1 đến 32 byte, không chứa ký tự điều khiển.");return;}
+    if(!prefs.putString("apssid",name)){server.send(500,"text/plain","Save failed");return;}
+    server.send(200,"text/plain; charset=utf-8","Đã lưu. ESP đang khởi động lại; kết nối Wi-Fi bằng tên mới. Mật khẩu giữ nguyên.");rebootAt=millis()+1500;
+  });
   server.on("/wifi/scan",HTTP_POST,[]{
     if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
     if(connecting||captTCPState.load()||cloudBusy()||jobSnapshot().active){server.send(409,"text/plain; charset=utf-8","Đang in hoặc kết nối mạng. Quét lại khi trạm rảnh.");return;}
@@ -653,7 +670,7 @@ void setup() {
   } else {
     startUSB();
   }
-  Serial.printf("STATION: %s\nAP: ESP32-Printer-%s\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL",stationID.substring(12).c_str());
+  Serial.printf("STATION: %s\nAP: %s\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL",stationAP.c_str());
 }
 
 // Keep USB/job snapshots off the WebServer caller's stack frame.

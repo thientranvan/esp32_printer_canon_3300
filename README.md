@@ -33,11 +33,11 @@ Chẩn đoán: [script](installers/esp32-printer-diagnostics.ps1) nhận `-Stati
 
 Mở trang quản trị của từng ESP, mục **Cấu hình trạm in**, đặt tên/IP riêng:
 
-| Tên | IP |
-| --- | --- |
-| Máy 1 | 192.168.1.199 |
-| Máy 2 | 192.168.1.200 |
-| Máy 3 | 192.168.1.201 |
+| Tên | IP | Wi-Fi AP mặc định trong firmware mới |
+| --- | --- | --- |
+| Máy 1 | 192.168.1.199 | ESP32-Printer-May1 |
+| Máy 2 | 192.168.1.200 | ESP32-Printer-May2 |
+| Máy 3 | 192.168.1.201 | ESP32-Printer-May3 |
 
 Bo Máy 2 đã nạp ngày 24/10/2026: ESP32-S3, MAC `10:51:DB:78:A8:FC`, ID
 `esp32-1051db78a8fc`, flash 16 MB. Tên **Máy 2** và IP `.200` được khởi tạo
@@ -63,7 +63,7 @@ khi ghi flash; nạp lại 115200 thành công và hash verified. Dùng 115200 c
 Wi-Fi LAN vẫn cần cấu hình qua AP; địa chỉ IP ghi trong log là cấu hình tĩnh,
 không tự xác nhận đã kết nối LAN.
 
-Mỗi bo mới cần cấu hình riêng qua Wi-Fi AP `ESP32-Printer-<6 ký tự MAC cuối>`
+Mỗi bo mới cần cấu hình riêng qua Wi-Fi AP theo bảng trên (firmware cũ dùng hậu tố MAC)
 tại `http://192.168.4.1`; đừng đưa cả ba bo mặc định .199 vào cùng LAN trước khi đổi IP.
 Gateway/subnet/DNS sửa được; cần dành địa chỉ trên router để tránh trùng DHCP.
 
@@ -760,3 +760,14 @@ Lỗi server chỉ xét khi cloud bật; lỗi cloud không che nhịp đang nh�
 LED chạy không chặn, độ sáng thấp; không suy ra giấy đã ra từ đèn.
 Kiểm thử nhịp: `clang++ -std=c++11 check_status_led.cpp -o /tmp/check_status_led && /tmp/check_status_led`
 (trên Mac có thể cần `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`).
+
+## Đổi tên Wi-Fi ESP (AP)
+
+Trang chủ có mục thu gọn **Tên Wi-Fi phát từ ESP (AP)**, cho nhập SSID riêng
+1–32 byte UTF-8, không ký tự điều khiển. Lưu qua POST `/wifi/ap` có xác thực và
+CSRF, giữ trong khóa NVS riêng `printer/apssid`; không đổi struct cấu hình trạm,
+Wi-Fi LAN hoặc token cloud. Trạm đang in từ chối đổi tên. Lưu thành công khởi động
+lại; kết nối lại AP bằng tên mới, mật khẩu cũ vẫn giữ. Tên tùy chỉnh tồn tại qua OTA.
+Khi chưa lưu tùy chỉnh, IP `.199/.200/.201` chọn AP `ESP32-Printer-May1/May2/May3`;
+IP ngoài nhóm này dùng hậu tố MAC để tránh trùng. `profile.ap_ssid` trả tên thực tế.
+Các AP có hậu tố MAC ghi ở phần lịch sử là tên lúc provision, trước bản đổi tên này.
