@@ -736,3 +736,16 @@ Kiểm tra offline: `python3 check_home.py` (cần Node), không gửi lệnh in
 ESP có task poll độc lập cloud; Mac/Windows có monitor trong bộ cài mới.
 Chi tiết kiểm chứng, giới hạn cảm biến, progress và contract server:
 [docs/printer-status.md](docs/printer-status.md).
+
+## Đèn RGB báo trạng thái
+
+Trang chủ có mục **Đèn RGB: màu và nhịp nháy**, thu gọn mặc định, ghi đầy đủ bảng
+màu và ưu tiên. Wi-Fi mất/chưa có: đỏ 250 ms sáng/250 ms tắt. Nhận/in: xanh dương
+125/125 ms. Rảnh và CAPT mới không lỗi: xanh lá chớp 60 ms mỗi 3 giây. Thiếu USB:
+vàng 500 ms mỗi 2 giây; CAPT cũ: vàng 120 ms mỗi giây; lỗi máy in/cảnh báo mực:
+vàng chớp đôi mỗi 1,6 giây. Tạm dừng: xanh ngọc 500 ms mỗi 1,6 giây. Cần đối soát:
+tím chớp đôi mỗi 1,6 giây. Tự kiểm tra phần cứng lỗi: đỏ 100/100 ms.
+Lỗi server chỉ xét khi cloud bật; lỗi cloud không che nhịp đang nhận/in.
+LED chạy không chặn, độ sáng thấp; không suy ra giấy đã ra từ đèn.
+Kiểm thử nhịp: `clang++ -std=c++11 check_status_led.cpp -o /tmp/check_status_led && /tmp/check_status_led`
+(trên Mac có thể cần `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`).

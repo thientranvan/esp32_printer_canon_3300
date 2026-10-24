@@ -10,6 +10,8 @@ ids = re.findall(r'\bid="([^"]+)"', html)
 assert len(ids) == len(set(ids)), 'Duplicate HTML IDs'
 assert 'fetch(\'/support/command' not in html
 assert 'innerHTML' not in html
+assert '<details id="led-guide">' in html and '<details id="led-guide" open' not in html
+assert 'Chớp nhẹ 1 lần mỗi 3 giây' in html and 'Chớp đôi mỗi 1,6 giây' in html
 for field in ['support-start','support-stop','support-mac']:
     assert f"copyField('{field}')" in html
 assert 'Enable-NetFirewallRule -Name ESP32PrinterSupport' in html
