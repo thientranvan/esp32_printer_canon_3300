@@ -52,6 +52,17 @@ Cổng USB native biến mất khỏi Mac khi USB Host khởi động là hành 
 ưu tiên chuyển dây sang COM/UART0 cho các lượt debug tiếp theo.
 
 ID tự lấy từ MAC, không đổi theo tên/IP. Cấu hình lưu NVS, áp dụng sau reboot.
+Bo Máy 3 đã nạp qua COM ngày 24/10/2026: MAC `10:51:DB:78:6A:34`, ID
+`esp32-1051db786a34`, flash 16 MB, PSRAM 8 MB. Khác MAC Máy 2, được người dùng
+xác nhận gán **Máy 3**, IP `192.168.1.201`. Cấu hình/token riêng lưu NVS một lần,
+không xóa namespace hiệu chuẩn/Wi-Fi. Log UART xác nhận tên/IP, `STATION: PASS`,
+AP `ESP32-Printer-786a34`, uptime tăng liên tục. Firmware gồm quét chọn Wi-Fi,
+RGB theo trạng thái và bảng màu thu gọn trên trang chủ. Chưa xác minh in giấy.
+Cổng COM hiện `/dev/cu.usbserial-10`, 115200 baud. Nạp 921600 gặp mất dữ liệu trước
+khi ghi flash; nạp lại 115200 thành công và hash verified. Dùng 115200 cho bo này.
+Wi-Fi LAN vẫn cần cấu hình qua AP; địa chỉ IP ghi trong log là cấu hình tĩnh,
+không tự xác nhận đã kết nối LAN.
+
 Mỗi bo mới cần cấu hình riêng qua Wi-Fi AP `ESP32-Printer-<6 ký tự MAC cuối>`
 tại `http://192.168.4.1`; đừng đưa cả ba bo mặc định .199 vào cùng LAN trước khi đổi IP.
 Gateway/subnet/DNS sửa được; cần dành địa chỉ trên router để tránh trùng DHCP.
