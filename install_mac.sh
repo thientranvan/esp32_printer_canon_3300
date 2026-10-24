@@ -138,7 +138,17 @@ fi
 /usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"
 # A named app bundle gives the Dock its own identity instead of "osascript".
 status_app="$target_dir/Status-$id.app"
-/usr/bin/osacompile -l JavaScript -o "$status_app" "$status_script"
+# Applets do not forward executable argv to the JavaScript run handler.
+/usr/bin/osascript -l JavaScript - "$status_script" "$work/status-app.js" "$host" "$queue" "$name" <<'JXA'
+ObjC.import('Foundation');
+function run(args) {
+ var source=ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError($(args[0]),$.NSUTF8StringEncoding,null));
+ if(!source||source.indexOf('function run(argv) {')<0)throw Error('Invalid status source');
+ source=source.replace('function run(argv) {','function startStatus(argv) {')+'\nfunction run() {return startStatus('+JSON.stringify(args.slice(2))+');}\n';
+ if(!$(source).writeToFileAtomicallyEncodingError($(args[1]),true,$.NSUTF8StringEncoding,null))throw Error('Cannot write configured status app');
+}
+JXA
+/usr/bin/osacompile -l JavaScript -o "$status_app" "$work/status-app.js"
 /usr/bin/plutil -replace CFBundleName -string "$name — Trạm in ESP32" "$status_app/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleDisplayName -string "$name — Trạm in ESP32" "$status_app/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleIdentifier -string "com.esp32printer.status.$id" "$status_app/Contents/Info.plist"
@@ -150,7 +160,7 @@ cat > "$work/window.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>Label</key><string>$window_label</string>
-<key>ProgramArguments</key><array><string>$status_app/Contents/MacOS/applet</string><string>$host</string><string>$queue</string><string>$name_xml</string></array>
+<key>ProgramArguments</key><array><string>$status_app/Contents/MacOS/applet</string></array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
 <key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>
 EOF

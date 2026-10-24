@@ -55,7 +55,24 @@ if sys.platform == 'darwin':
     native_check="ObjC.import('AppKit');ObjC.import('Foundation');function printerAppIcon() {"+icon_function+"\nvar image=printerAppIcon();if(image.size.width!==256||image.size.height!==256||image.TIFFRepresentation.length<1000)throw Error('Invalid Dock icon');"
     subprocess.run(['osascript','-l','JavaScript','-'], input=native_check, text=True, check=True)
 
-assert '/usr/bin/osacompile -l JavaScript -o "$status_app" "$status_script"' in mac
+assert '/usr/bin/osacompile -l JavaScript -o "$status_app" "$work/status-app.js"' in mac
 assert 'CFBundleDisplayName -string "$name — Trạm in ESP32"' in mac
 assert '<string>$status_app/Contents/MacOS/applet</string>' in mac
 assert '<string>/usr/bin/osascript</string>' not in mac
+
+assert "JSON.stringify(args.slice(2))" in mac
+assert "<string>$status_app/Contents/MacOS/applet</string><string>$host</string>" not in mac
+
+if sys.platform == 'darwin':
+    import tempfile
+    import json
+    with tempfile.TemporaryDirectory() as folder:
+        configured=Path(folder)/'status.js'
+        wrapper=mac.split("<<'JXA'\n",1)[1].split('\nJXA',1)[0]
+        args=['192.168.1.199','ESP32_esp3298c377a136b0','Máy 1 & \"test\"']
+        subprocess.run(['osascript','-l','JavaScript','-',str(Path('installers/esp32-printer-status-mac.js').resolve()),str(configured),*args],input=wrapper,text=True,check=True)
+        result=configured.read_text()
+        encoded=result.rsplit('return startStatus(',1)[1].split(');}',1)[0]
+        assert json.loads(encoded)==args
+        assert 'function run()' in result and 'function startStatus(argv)' in result
+        subprocess.run(['osacompile','-l','JavaScript','-o',str(Path(folder)/'Status.app'),str(configured)],check=True)
