@@ -42,6 +42,18 @@ const refresh=new Function('document','fetch','setTimeout',input.script+';return
  status.capt.fresh=false;await refresh();assert.equal(nodes.printer.textContent,'Đang đọc trạng thái máy in');assert.equal(nodes['printer-status'].dataset.tone,'warn');
  status.usb.connected=false;status.usb.responsive=false;await refresh();assert.equal(nodes.printer.textContent,'Chưa kết nối máy in');
  offline=true;await refresh();assert.equal(nodes.connection.dataset.tone,'error');assert.equal(nodes['printer-status'].dataset.tone,'offline');assert.equal(nodes.job.hidden,true);assert.equal(nodes.resolve.hidden,true);assert.equal(nodes.printer.textContent,'Chưa có trạng thái mới');
+ let scanCalls=0;
+ const scan=new Function('document','fetch','setTimeout',input.script+';return {scanWifi,chooseWifi};')(document,async(path,options)=>{
+  scanCalls++;if(options)return {ok:true,status:202};if(scanCalls===2)return {status:202};
+  return {ok:true,status:200,json:async()=>({networks:[{ssid:'__hidden__',rssi:-70,secure:false},{ssid:'<unsafe>',rssi:-40,secure:true},{ssid:'<unsafe>',rssi:-80,secure:true}]})};
+ },callback=>callback());
+ await scan.scanWifi();assert.equal(scanCalls,3);assert.equal(nodes['wifi-list'].children.length,4);
+ assert(nodes['wifi-list'].children[1].textContent.startsWith('<unsafe>'));assert.equal(nodes['wifi-scan'].disabled,false);
+ nodes['wifi-list'].value='ssid:__hidden__';scan.chooseWifi();assert.equal(nodes['wifi-ssid'].value,'__hidden__');assert.equal(nodes['wifi-hidden-label'].hidden,true);
+ nodes['wifi-list'].value='__hidden__';nodes['wifi-hidden'].value='Mạng ẩn';scan.chooseWifi();assert.equal(nodes['wifi-ssid'].value,'Mạng ẩn');assert.equal(nodes['wifi-hidden-label'].hidden,false);
+ const failed=new Function('document','fetch','setTimeout',input.script+';return scanWifi;')(document,async()=>({ok:false,text:async()=>'Trạm đang in'}),callback=>callback());
+ await failed();assert.equal(nodes['wifi-scan-note'].textContent,'Trạm đang in');assert.equal(nodes['wifi-scan'].disabled,false);
+ console.log('PASS: Wi-Fi scan polling, deduplication, safe labels, hidden SSID and scan failure');
  console.log('PASS: IDs, CSRF forms, LAN/cloud progress, edit preservation, USB disconnect, stale status');
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''

@@ -39,6 +39,18 @@ Mở trang quản trị của từng ESP, mục **Cấu hình trạm in**, đặ
 | Máy 2 | 192.168.1.200 |
 | Máy 3 | 192.168.1.201 |
 
+Bo Máy 2 đã nạp ngày 24/10/2026: ESP32-S3, MAC `10:51:DB:78:A8:FC`, ID
+`esp32-1051db78a8fc`, flash 16 MB. Tên **Máy 2** và IP `.200` được khởi tạo
+một lần trong NVS `printer/station`, giữ nguyên namespace hiệu chuẩn/Wi-Fi cũ;
+OTA firmware chung sau này vẫn đọc cấu hình NVS này. Token trạm được tạo riêng,
+cloud mặc định tắt; không sao chép token Máy 1. Wi-Fi LAN do người dùng tự cấu hình.
+AP `ESP32-Printer-78a8fc` đã được Mac quét thấy sau khi khởi động firmware.
+Chưa kiểm chứng kết nối LAN hoặc in giấy trên bo này. Mật khẩu không ghi trong docs.
+Bo đang cắm USB native (`USB-Serial/JTAG`), chưa có COM/UART0. Sau nạp, hard-reset
+USB có lần giữ bo ở download mode; watchdog-reset đưa bo chạy và phát AP.
+Cổng USB native biến mất khỏi Mac khi USB Host khởi động là hành vi dự kiến;
+ưu tiên chuyển dây sang COM/UART0 cho các lượt debug tiếp theo.
+
 ID tự lấy từ MAC, không đổi theo tên/IP. Cấu hình lưu NVS, áp dụng sau reboot.
 Mỗi bo mới cần cấu hình riêng qua Wi-Fi AP `ESP32-Printer-<6 ký tự MAC cuối>`
 tại `http://192.168.4.1`; đừng đưa cả ba bo mặc định .199 vào cùng LAN trước khi đổi IP.
@@ -229,6 +241,14 @@ Original full 16 MiB flash backup: `backups/original-98c377a136b0.bin`.
 
 ## Wi-Fi station firmware
 
+Giao diện **Đổi Wi-Fi → Quét Wi-Fi** cho chọn mạng 2,4 GHz, hiển thị tín hiệu
+và mạng mở/có mật khẩu, gộp SSID trùng. Chỉ mạng ẩn mới cần nhập tên thủ công.
+Quét bất đồng bộ; không cho bắt đầu lúc in/kết nối mạng. Endpoint xác thực
+`POST /wifi/scan` cần CSRF, `GET /wifi/scan` trả 202 khi đang quét hoặc danh sách
+khi xong. Giới hạn 32 kết quả; không chứa mật khẩu. Đã kiểm thử giao diện offline
+và build; cần nạp firmware mới để dùng trên bo.
+
+
 Wi-Fi v2 uses static LAN IP `192.168.1.199`, subnet `255.255.255.0`,
 gateway/DNS `192.168.1.1`, verified against the current Mac LAN settings.
 Exclude `.199` from the router DHCP pool or reserve it for the ESP station MAC
@@ -239,7 +259,7 @@ rendered with `textContent`.
 
 `station/station.ino` provides an authenticated status/configuration page and HTTP firmware upload.
 AP: `ESP32-Printer-36B0`, address `http://192.168.4.1`, username `admin`.
-The random device password is in ignored local file `station/device_secret.h`;
+The device password is in ignored local file `station/device_secret.h`;
 it is also the WPA2 AP password. Preserve this header for future builds.
 No router password is stored in source files or printed to serial.
 

@@ -30,6 +30,8 @@ uint32_t rebootAt = 0;
 uint32_t connectionAt = 0;
 bool connecting = false;
 String pendingSSID, pendingPassword;
+bool wifiScanRunning=false;
+String wifiScanResult="{\"networks\":[]}";
 String windowsReport;
 String supportCommand = "# Hiện không cần chạy thêm lệnh trên Windows.";
 struct WiFiConfig { char ssid[33]; char password[64]; };
@@ -174,7 +176,7 @@ void home() {
   String page = R"HTML(<!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trạm in ESP32</title>
 <style>
-:root{color-scheme:light;--ink:#182b3b;--muted:#526777;--line:#dce5eb;--accent:#086b60}*{box-sizing:border-box}body{margin:0;background:#f2f6f8;color:var(--ink);font:14px/1.45 system-ui,sans-serif}main{max-width:1120px;margin:auto;padding:12px 16px}header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.eyebrow{color:var(--accent);font-size:12px;font-weight:750;letter-spacing:.12em}h1{font-size:24px;line-height:1.2;margin:6px 0}h2{font-size:17px;margin:0 0 8px}p{margin:8px 0;color:var(--muted)}a{color:var(--accent);text-underline-offset:3px}button,.button{display:inline-block;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink);font:inherit;font-weight:650;cursor:pointer;text-decoration:none}button:hover,.button:hover{background:#eaf2f3}button:disabled{opacity:.55;cursor:wait}.primary{background:var(--accent);border-color:var(--accent);color:white}.primary:hover{background:#07574e}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.card,details{background:white;border:1px solid var(--line);border-radius:10px;padding:14px}.grid>*,.fields>*{min-width:0}.wide{grid-column:1/-1}.badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:13px;background:#edf1f4;color:var(--muted)}.badge[data-tone=ok]{background:#dff4eb;color:#15563e}.badge[data-tone=warn]{background:#fff1d6;color:#735015}.badge[data-tone=error]{background:#fbe7e7;color:#922c2c}.big{font-size:19px;font-weight:700;line-height:1.4;margin:6px 0;color:var(--ink)}.printer-status{display:flex;align-items:center;gap:10px}.printer-status[data-tone=ok]{color:#166534}.printer-status[data-tone=busy]{color:#1754a1}.printer-status[data-tone=warn]{color:#855400}.printer-status[data-tone=error]{color:#b42318}.printer-status[data-tone=offline]{color:#596579}.printer-status .big{color:inherit;margin:0;min-height:56px;display:flex;align-items:center}.status-icon{display:flex;align-items:center;justify-content:center;flex:0 0 56px;width:56px;height:56px;font-size:44px;font-weight:700;line-height:1;transform:translateY(-3px)}.meta{font-size:13px;color:var(--muted)}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row input{flex:1;min-width:180px}.stack{display:grid;gap:8px}label{display:block;font-size:14px;font-weight:600}input,textarea{display:block;width:100%;margin-top:6px;padding:7px 9px;border:1px solid #b9cbd5;border-radius:8px;background:white;color:var(--ink);font:inherit}input[readonly],textarea{background:#f7f9fb;font:13px/1.6 ui-monospace,monospace}input[type=checkbox]{display:inline;width:auto;margin:0 8px 0 0}input[type=file]{font-size:13px}textarea{resize:vertical;min-height:58px}summary{font-weight:700;cursor:pointer}details{margin-top:10px}details[open]>summary{margin-bottom:10px}.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.fields .full{grid-column:1/-1}.notice{padding:12px;border-radius:8px;background:#fff5df;color:#725018}.error{color:#922c2c}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#f7f9fb;padding:12px;border-radius:8px}footer{margin-top:12px;font-size:12px;color:var(--muted)}:focus-visible{outline:3px solid #168779;outline-offset:3px}progress{width:100%;height:9px;accent-color:var(--accent)}[hidden]{display:none!important}@media(max-width:620px){main{padding:14px 10px}header{align-items:flex-start;flex-direction:column}.grid,.fields{grid-template-columns:minmax(0,1fr)}.card,details{padding:12px}h1{font-size:26px}}
+:root{color-scheme:light;--ink:#182b3b;--muted:#526777;--line:#dce5eb;--accent:#086b60}*{box-sizing:border-box}body{margin:0;background:#f2f6f8;color:var(--ink);font:14px/1.45 system-ui,sans-serif}main{max-width:1120px;margin:auto;padding:12px 16px}header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.eyebrow{color:var(--accent);font-size:12px;font-weight:750;letter-spacing:.12em}h1{font-size:24px;line-height:1.2;margin:6px 0}h2{font-size:17px;margin:0 0 8px}p{margin:8px 0;color:var(--muted)}a{color:var(--accent);text-underline-offset:3px}button,.button{display:inline-block;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink);font:inherit;font-weight:650;cursor:pointer;text-decoration:none}button:hover,.button:hover{background:#eaf2f3}button:disabled{opacity:.55;cursor:wait}.primary{background:var(--accent);border-color:var(--accent);color:white}.primary:hover{background:#07574e}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.card,details{background:white;border:1px solid var(--line);border-radius:10px;padding:14px}.grid>*,.fields>*{min-width:0}.wide{grid-column:1/-1}.badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:13px;background:#edf1f4;color:var(--muted)}.badge[data-tone=ok]{background:#dff4eb;color:#15563e}.badge[data-tone=warn]{background:#fff1d6;color:#735015}.badge[data-tone=error]{background:#fbe7e7;color:#922c2c}.big{font-size:19px;font-weight:700;line-height:1.4;margin:6px 0;color:var(--ink)}.printer-status{display:flex;align-items:center;gap:10px}.printer-status[data-tone=ok]{color:#166534}.printer-status[data-tone=busy]{color:#1754a1}.printer-status[data-tone=warn]{color:#855400}.printer-status[data-tone=error]{color:#b42318}.printer-status[data-tone=offline]{color:#596579}.printer-status .big{color:inherit;margin:0;min-height:56px;display:flex;align-items:center}.status-icon{display:flex;align-items:center;justify-content:center;flex:0 0 56px;width:56px;height:56px;font-size:44px;font-weight:700;line-height:1;transform:translateY(-3px)}.meta{font-size:13px;color:var(--muted)}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row input{flex:1;min-width:180px}.stack{display:grid;gap:8px}label{display:block;font-size:14px;font-weight:600}input,textarea,select{display:block;width:100%;margin-top:6px;padding:7px 9px;border:1px solid #b9cbd5;border-radius:8px;background:white;color:var(--ink);font:inherit}input[readonly],textarea{background:#f7f9fb;font:13px/1.6 ui-monospace,monospace}input[type=checkbox]{display:inline;width:auto;margin:0 8px 0 0}input[type=file]{font-size:13px}textarea{resize:vertical;min-height:58px}summary{font-weight:700;cursor:pointer}details{margin-top:10px}details[open]>summary{margin-bottom:10px}.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.fields .full{grid-column:1/-1}.notice{padding:12px;border-radius:8px;background:#fff5df;color:#725018}.error{color:#922c2c}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#f7f9fb;padding:12px;border-radius:8px}footer{margin-top:12px;font-size:12px;color:var(--muted)}:focus-visible{outline:3px solid #168779;outline-offset:3px}progress{width:100%;height:9px;accent-color:var(--accent)}[hidden]{display:none!important}@media(max-width:620px){main{padding:14px 10px}header{align-items:flex-start;flex-direction:column}.grid,.fields{grid-template-columns:minmax(0,1fr)}.card,details{padding:12px}h1{font-size:26px}}
 .support-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.support-grid textarea{font-size:12px;line-height:1.4;min-height:68px}#feedback:empty{display:none}@media(max-width:620px){.support-grid{grid-template-columns:1fr}}
 </style></head><body><main>
 <header><div><span class="eyebrow">TRẠM IN WI-FI</span><h1 id="name">Canon LBP3300</h1><span class="meta">Canon LBP3300 · A4 · Khay cassette 1</span></div><div class="row"><a class="button" href="#install" onclick="document.getElementById('install').open=true">Cài máy in</a><span id="connection" class="badge" role="status">Đang kết nối trạm…</span></div></header>
@@ -202,7 +204,7 @@ void home() {
 <label>IP tĩnh<input id="station-ip" name="ip" inputmode="decimal" required></label><label>Gateway<input id="station-gateway" name="gateway" inputmode="decimal" required></label>
 <label>Subnet<input id="station-mask" name="mask" inputmode="decimal" required></label><label>DNS<input id="station-dns" name="dns" inputmode="decimal" required></label></div>
 <label><input id="cloud-enabled" name="cloud_enabled" type="checkbox">Nhận lệnh in từ web</label><label>Token do server cấp<input name="cloud_token" type="password" maxlength="96" autocomplete="new-password" placeholder="Để trống để giữ token đã lưu"></label><p class="meta">quanly.lophocbinhminh.com · Token chỉ hiện một lần khi server cấp.</p><div><button class="primary" data-config disabled>Lưu &amp; khởi động lại</button></div></form></details>
-<details><summary>Đổi Wi-Fi</summary><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><form action="/wifi" method="post" class="stack"><input type="hidden" name="token" value="__CSRF__"><label>Tên mạng (SSID)<input name="ssid" maxlength="32" required autocomplete="off"></label><label>Mật khẩu Wi-Fi<input name="password" type="password" maxlength="63" autocomplete="new-password"></label><div><button>Kết nối Wi-Fi</button></div></form></details>
+<details><summary>Đổi Wi-Fi</summary><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><form action="/wifi" method="post" class="stack"><input type="hidden" name="token" value="__CSRF__"><div class="row"><button id="wifi-scan" type="button" onclick="scanWifi()">Quét Wi-Fi</button><span id="wifi-scan-note" role="status" aria-live="polite">Bấm quét để chọn mạng 2,4 GHz.</span></div><label>Chọn mạng Wi-Fi<select id="wifi-list" required onchange="chooseWifi()"><option value="">Chọn mạng sau khi quét</option></select></label><label id="wifi-hidden-label" hidden>Tên mạng ẩn<input id="wifi-hidden" maxlength="32" autocomplete="off" oninput="chooseWifi()"></label><input id="wifi-ssid" name="ssid" type="hidden"><label>Mật khẩu Wi-Fi<input name="password" type="password" maxlength="63" autocomplete="new-password"></label><div><button id="wifi-connect" disabled>Kết nối Wi-Fi</button></div></form></details>
 <details><summary>Bảo trì &amp; chẩn đoán</summary><p id="hardware" class="meta"></p><pre id="diagnostics">Đang đọc dữ liệu USB…</pre>
 <form action="/usb/start" method="post" id="usb-start" hidden><input type="hidden" name="token" value="__CSRF__"><button>Bật USB Host</button></form>
 <form action="/cloud/resolve" method="post" id="resolve" hidden onsubmit="return confirm('Chỉ bỏ khóa khi đã kiểm tra giấy đã in và xử lý công việc dở trên máy in. Không tự in lại. Tiếp tục?')"><input type="hidden" name="token" value="__CSRF__"><p class="notice">Công việc web chưa rõ kết quả. Kiểm tra giấy và xử lý lệnh dở trước khi bỏ khóa.</p><button>Bỏ khóa sau khi đã kiểm tra</button></form>
@@ -211,6 +213,29 @@ void home() {
 <script>
 const el=id=>document.getElementById(id);let loaded=false;
 function copyField(id){const field=el(id);field.focus();field.select();let ok=false;try{ok=document.execCommand('copy');}catch{}el('feedback').textContent=ok?'Đã sao chép.':'Đã chọn nội dung. Nhấn Ctrl+C hoặc Command+C để sao chép.';}
+function chooseWifi(){
+ const hidden=el('wifi-list').value==='__hidden__';el('wifi-hidden-label').hidden=!hidden;el('wifi-hidden').required=hidden;
+ const ssid=hidden?el('wifi-hidden').value:el('wifi-list').value.slice(5);el('wifi-ssid').value=ssid;el('wifi-connect').disabled=!ssid;
+}
+async function scanWifi(){
+ el('wifi-scan').disabled=true;el('wifi-connect').disabled=true;el('wifi-scan-note').textContent='Đang quét Wi-Fi…';
+ try{
+  const start=await fetch('/wifi/scan',{method:'POST',body:new URLSearchParams({token:'__CSRF__'})});
+  if(!start.ok)throw Error(await start.text());
+  let data=null;
+  for(let i=0;i<30;i++){
+   await new Promise(resolve=>setTimeout(resolve,500));const r=await fetch('/wifi/scan');
+   if(r.status===202)continue;if(!r.ok)throw Error(await r.text());data=await r.json();break;
+  }
+  if(!data)throw Error('Quét quá lâu. Bấm quét lại.');
+  const list=el('wifi-list'),selected=el('wifi-ssid').value;list.replaceChildren();
+  const option=(value,text)=>{const item=document.createElement('option');item.value=value;item.textContent=text;list.append(item);};
+  option('','Chọn mạng Wi-Fi');const seen=new Set();
+  for(const n of data.networks.sort((a,b)=>b.rssi-a.rssi)){if(!n.ssid||seen.has(n.ssid))continue;seen.add(n.ssid);option('ssid:'+n.ssid,n.ssid+' · '+n.rssi+' dBm'+(n.secure?' · Có mật khẩu':' · Mạng mở'));}
+  option('__hidden__','Mạng ẩn — nhập tên mạng');if(seen.has(selected))list.value='ssid:'+selected;else list.value='';
+  el('wifi-scan-note').textContent=seen.size?'Tìm thấy '+seen.size+' mạng.':'Chưa thấy mạng. Quét lại hoặc chọn mạng ẩn.';
+ }catch(e){el('wifi-scan-note').textContent=e.message;}finally{el('wifi-scan').disabled=false;chooseWifi();}
+}
 const cloudNames={disabled:'Chưa bật',connecting:'Đang kết nối',idle:'Đã kết nối',server_error:'Lỗi kết nối server',downloading:'Đang tải lệnh in',waiting_printer:'Đang chờ máy in',printing:'Đang in',completed:'Đã hoàn tất',failed:'Lệnh in lỗi',uncertain:'Cần kiểm tra kết quả in',resolved:'Đã đối soát',blocked:'Đang bị khóa',paused:'Đã dừng gửi mặt tiếp theo'};
 let cached=null,currentJobId='';
 async function resolveJob(){
@@ -540,6 +565,25 @@ void setup() {
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", json);
   });
+  server.on("/wifi/scan",HTTP_POST,[]{
+    if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    if(connecting||captTCPState.load()||cloudBusy()||jobSnapshot().active){server.send(409,"text/plain; charset=utf-8","Đang in hoặc kết nối mạng. Quét lại khi trạm rảnh.");return;}
+    if(!wifiScanRunning){WiFi.scanDelete();int n=WiFi.scanNetworks(true);if(n==WIFI_SCAN_FAILED){server.send(503,"text/plain; charset=utf-8","Không khởi động được quét Wi-Fi.");return;}wifiScanRunning=true;}
+    server.send(202,"application/json","{\"scanning\":true}");
+  });
+  server.on("/wifi/scan",HTTP_GET,[]{
+    if(!authorized())return;server.sendHeader("Cache-Control","no-store");
+    if(wifiScanRunning){
+      int n=WiFi.scanComplete();if(n==WIFI_SCAN_RUNNING){server.send(202,"application/json","{\"scanning\":true}");return;}
+      wifiScanRunning=false;
+      if(n<0){WiFi.scanDelete();server.send(503,"text/plain; charset=utf-8","Quét Wi-Fi thất bại. Thử lại.");return;}
+      // ponytail: show first 32 scan records; rank before truncation if crowded sites need more.
+      wifiScanResult="{\"networks\":[";
+      for(int i=0;i<n&&i<32;++i){if(i)wifiScanResult+=",";wifiScanResult+="{\"ssid\":"+jsonString(WiFi.SSID(i))+",\"rssi\":"+String(WiFi.RSSI(i))+",\"secure\":"+(WiFi.encryptionType(i)==WIFI_AUTH_OPEN?"false":"true")+"}";}
+      wifiScanResult+="]}";WiFi.scanDelete();
+    }
+    server.send(200,"application/json",wifiScanResult);
+  });
   server.on("/wifi", HTTP_POST, [] {
     if (!authorized()) return;
     if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
@@ -548,7 +592,8 @@ void setup() {
         (password.length() > 0 && password.length() < 8)) {
       server.send(400, "text/plain", "Invalid SSID or password length"); return;
     }
-    if (connecting) { server.send(409, "text/plain", "Connection pending"); return; }
+    if(wifiScanRunning&&WiFi.scanComplete()!=WIFI_SCAN_RUNNING){WiFi.scanDelete();wifiScanRunning=false;}
+    if (connecting || wifiScanRunning) { server.send(409, "text/plain; charset=utf-8", "Đang quét hoặc kết nối Wi-Fi. Chờ rồi thử lại."); return; }
     pendingSSID = ssid;
     pendingPassword = password;
     WiFi.disconnect();
@@ -596,7 +641,7 @@ void setup() {
   } else {
     startUSB();
   }
-  Serial.printf("STATION: %s\nAP: ESP32-Printer-36B0\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL");
+  Serial.printf("STATION: %s\nAP: ESP32-Printer-%s\nWeb: http://192.168.4.1\nLogin: admin\n", healthy ? "PASS" : "FAIL",stationID.substring(12).c_str());
 }
 
 void loop() {
