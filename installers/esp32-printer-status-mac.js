@@ -31,11 +31,27 @@ function queueView(printer,jobs) {
     if(/Expected LBP3300 A4/.test(message))message='Tài liệu chọn khổ giấy chưa hỗ trợ. Chọn A4 trong Word/PDF rồi gửi lại; xóa lệnh sai khổ còn chờ.';
     return statusView('Hàng đợi Mac bị dừng',message+'\nLỗi tại Mac; trạng thái này không phải lỗi máy in trên ESP.','warning');
 }
+function printerAppIcon() {
+    var image=$.NSImage.alloc.initWithSize($.NSMakeSize(256,256));image.lockFocus;
+    function box(x,y,w,h,r,red,green,blue){$.NSColor.colorWithSRGBRedGreenBlueAlpha(red,green,blue,1).setFill;$.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(x,256-y-h,w,h),r,r).fill;}
+    box(12,12,232,232,52,0.03,0.42,0.38);
+    box(66,54,106,72,6,0.88,0.96,0.96);
+    box(43,98,170,88,18,0.68,0.85,0.87);
+    box(57,119,142,50,10,0.09,0.22,0.28);
+    box(69,147,118,68,6,1,1,1);
+    box(87,166,82,7,3,0.58,0.72,0.75);box(87,183,62,7,3,0.58,0.72,0.75);
+    $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.26,0.89,0.64,1).setFill;
+    $.NSBezierPath.bezierPathWithOvalInRect($.NSMakeRect(182,142,10,10)).fill;
+    $.NSColor.whiteColor.setStroke;
+    [24,14].forEach(function(radius){var arc=$.NSBezierPath.bezierPath;arc.lineWidth=5;arc.lineCapStyle=$.NSRoundLineCapStyle;arc.appendBezierPathWithArcWithCenterRadiusStartAngleEndAngleClockwise($.NSMakePoint(193,202),radius,30,150,false);arc.stroke;});
+    $.NSColor.whiteColor.setFill;$.NSBezierPath.bezierPathWithOvalInRect($.NSMakeRect(190,199,6,6)).fill;
+    image.unlockFocus;return image;
+}
 function run(argv) {
     ObjC.import('AppKit');ObjC.import('Foundation');
     if(argv.length!==3 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(argv[0]) || argv[0].split('.').some(function(x){return +x>255;}) || !/^[A-Za-z0-9_-]+$/.test(argv[1])) throw Error('Expected valid IPv4, CUPS queue and name');
     var host=argv[0], queue=argv[1], name=argv[2], app=$.NSApplication.sharedApplication;
-    app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
+    app.setActivationPolicy($.NSApplicationActivationPolicyRegular);app.applicationIconImage=printerAppIcon();
     var window=$.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0,0,760,540),15,$.NSBackingStoreBuffered,false);
     window.title=$(name+' — Canon LBP3300');window.releasedWhenClosed=false;window.center;
     var content=window.contentView;

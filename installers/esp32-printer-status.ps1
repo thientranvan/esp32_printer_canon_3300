@@ -31,7 +31,44 @@ function Get-DeviceView($s) {
  }
  [pscustomobject]@{Title=$title;Detail=$detail;Kind=$kind;Progress=$progress}
 }
+# Native vector icon, shared visual design with the Mac Dock icon. No download.
+Add-Type -TypeDefinition @"
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
+public static class ESP32StatusIcon {
+ [DllImport("shell32.dll", CharSet=CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+ [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+ static void Box(Graphics g, int x,int y,int w,int h,int r,Color color) {
+  using(var p=new GraphicsPath()) using(var b=new SolidBrush(color)) {
+   p.AddArc(x,y,r*2,r*2,180,90);p.AddArc(x+w-r*2,y,r*2,r*2,270,90);
+   p.AddArc(x+w-r*2,y+h-r*2,r*2,r*2,0,90);p.AddArc(x,y+h-r*2,r*2,r*2,90,90);p.CloseFigure();g.FillPath(b,p);
+  }
+ }
+ public static Icon Create() {
+  using(var bitmap=new Bitmap(256,256)) {
+   using(var g=Graphics.FromImage(bitmap)) {
+    g.SmoothingMode=SmoothingMode.AntiAlias;
+    Box(g,12,12,232,232,52,Color.FromArgb(8,107,97));
+    Box(g,66,54,106,72,6,Color.FromArgb(224,245,245));
+    Box(g,43,98,170,88,18,Color.FromArgb(173,217,222));
+    Box(g,57,119,142,50,10,Color.FromArgb(23,56,71));
+    Box(g,69,147,118,68,6,Color.White);
+    Box(g,87,166,82,7,3,Color.FromArgb(148,184,191));Box(g,87,183,62,7,3,Color.FromArgb(148,184,191));
+    using(var b=new SolidBrush(Color.FromArgb(66,227,163))) g.FillEllipse(b,182,104,10,10);
+    using(var pen=new Pen(Color.White,5)) {pen.StartCap=pen.EndCap=LineCap.Round;g.DrawArc(pen,169,30,48,48,210,120);g.DrawArc(pen,179,40,28,28,210,120);}
+    g.FillEllipse(Brushes.White,190,51,6,6);
+   }
+   IntPtr handle=bitmap.GetHicon();try {using(var icon=Icon.FromHandle(handle))return (Icon)icon.Clone();} finally {DestroyIcon(handle);}
+  }
+ }
+}
+"@ -ReferencedAssemblies System.Drawing
+[void][ESP32StatusIcon]::SetCurrentProcessExplicitAppUserModelID("ESP32Printer.Status.$($settings.id)")
+$appIcon=[ESP32StatusIcon]::Create()
 $form=New-Object Windows.Forms.Form
+$form.Icon=$appIcon
 $form.Text="$($settings.name) — Canon LBP3300";$form.ClientSize=New-Object Drawing.Size(780,610)
 $form.MinimumSize=$form.Size;$form.StartPosition='CenterScreen';$form.BackColor=[Drawing.Color]::FromArgb(242,245,250)
 $form.Font=New-Object Drawing.Font('Segoe UI',10)
@@ -74,7 +111,7 @@ $resume=New-Object Windows.Forms.Button;$resume.Text='▶ Tiếp tục';$resume.
 $cancel=New-Object Windows.Forms.Button;$cancel.Text='× Xóa lệnh';$cancel.SetBounds(342,466,145,34);$cancel.Enabled=$false;$cancel.add_Click({Control-LocalJob 'cancel'});$form.Controls.Add($cancel)
 $list.add_SelectedIndexChanged({$selected=$list.SelectedItems.Count -eq 1;$pause.Enabled=$selected;$resume.Enabled=$selected;$cancel.Enabled=$selected})
 function Show-Monitor {$form.Show();$form.WindowState='Normal';$form.Activate()}
-$tray=New-Object Windows.Forms.NotifyIcon;$tray.Icon=[Drawing.SystemIcons]::Information;$tray.Text='Canon LBP3300 — ESP32';$tray.Visible=$true
+$tray=New-Object Windows.Forms.NotifyIcon;$tray.Icon=$appIcon;$tray.Text='Canon LBP3300 — ESP32';$tray.Visible=$true
 $tray.add_DoubleClick({Show-Monitor})
 $menu=New-Object Windows.Forms.ContextMenuStrip
 [void]$menu.Items.Add('Mở trạng thái',$null,{Show-Monitor})
@@ -128,4 +165,4 @@ $timer.add_Tick({
  } catch {$footer.Text="Không đọc được trạng thái: $($_.Exception.Message)"}
 })
 $timer.Start()
-try {[Windows.Forms.Application]::Run($form)} finally {$timer.Dispose();if ($script:client) {$script:client.CancelAsync();$script:client.Dispose()};$tray.Dispose();$mutex.Dispose()}
+try {[Windows.Forms.Application]::Run($form)} finally {$timer.Dispose();if ($script:client) {$script:client.CancelAsync();$script:client.Dispose()};$tray.Dispose();$appIcon.Dispose();$mutex.Dispose()}

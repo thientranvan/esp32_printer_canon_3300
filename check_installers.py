@@ -44,3 +44,13 @@ mac_ui=Path("installers/esp32-printer-status-mac.js").read_bytes()
 assert hashlib.sha256(mac_ui).hexdigest() == re.search(r"^status_sha=([0-9a-f]{64})$", mac, re.M)[1]
 assert "com.esp32printer.window.$id" in mac and "LimitLoadToSessionType" in mac
 assert "console_uid" in mac and 'bootstrap "gui/$console_uid"' in mac
+
+assert 'app.applicationIconImage=printerAppIcon()' in mac_ui.decode()
+assert '$form.Icon=$appIcon' in ui and '$tray.Icon=$appIcon' in ui
+assert 'SetCurrentProcessExplicitAppUserModelID' in ui and 'DestroyIcon(handle)' in ui
+assert '$shortcut.IconLocation="$statusRoot\\printer.ico,0"' in windows
+
+if sys.platform == 'darwin':
+    icon_function=mac_ui.decode().split('function printerAppIcon() {',1)[1].split('function run(argv)',1)[0]
+    native_check="ObjC.import('AppKit');ObjC.import('Foundation');function printerAppIcon() {"+icon_function+"\nvar image=printerAppIcon();if(image.size.width!==256||image.size.height!==256||image.TIFFRepresentation.length<1000)throw Error('Invalid Dock icon');"
+    subprocess.run(['osascript','-l','JavaScript','-'], input=native_check, text=True, check=True)
