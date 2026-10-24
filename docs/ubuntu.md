@@ -54,3 +54,12 @@ chưa xác nhận giấy in thực tế từ Ubuntu; đặc biệt cần nghiệ
 
 Bubblewrap phải chạy được với tài khoản CUPS; sandbox lỗi thì render thất bại,
 không có fallback bỏ sandbox hoặc tự đổi cấu hình kernel/AppArmor.
+
+Đã triển khai 24/10/2026: source/bộ cài lên GitHub; Máy 1 nạp COM (đúng MAC,
+hash verified), Máy 2/3 nạp OTA (HTTP 200). Sau reboot cả ba healthy, Wi-Fi nối,
+cloud idle, heartbeat 200. Đã đọc lại HTML từng trạm: `ubuntu-command` chứa đúng
+IP `.199`/`.200`/`.201`; link GitHub và toàn bộ hash asset bộ cài đã xác minh.
+
+Ca thử copies=2 bằng native pdftopdf đã phát hiện nhân bản trang phía CUPS.
+PPD cuối nhận application/pdf trực tiếp; filter tự gọi pdftopdf với copies=1,
+backend xử lý copies/collate sau ghép cặp hai mặt để không in nhân đôi số bản.
