@@ -1,6 +1,26 @@
 # Sửa hiển thị trạng thái server — 23/10/2026
 
-Chỉ là hướng dẫn cho dev server. Chưa sửa PHP/JS, DB hay dịch vụ production.
+Các mục ngày 23/10 bên dưới là hướng dẫn lịch sử cho dev server.
+
+## Cập nhật 24/10: USB ngắt phải ưu tiên hơn CAPT cũ
+
+Theo yêu cầu sửa trực tiếp lần này, đã sửa riêng `printerStatus()` trong
+`/var/www/lop1/app/printer_repository.php`, giữ nguyên thay đổi khác đang có.
+Sau enabled/online/stale, kiểm tra USB recovering, disconnected, USB error và
+unresponsive trước faults/CAPT freshness. Không xóa trường CAPT hoặc giả lập
+fresh/ready trên ESP để né lỗi hiển thị server. ESP đã gửi đúng
+`printer.state=disconnected`, `usb_connected=false`, `usb_responsive=false`.
+
+Kiểm tra production bằng dữ liệu DB chỉ đọc: cả ba trạm online trả reason
+**Máy in chưa kết nối USB**, printer_state `disconnected`.
+Không thay đổi DB, hàng đợi, service hoặc JS/CSS. PHP lint đạt.
+Kiểm tra hồi quy trên server: `php scripts/check_printer_usb_status.php`;
+bản test trong repo firmware là `check_server_printer_status.php` (nhận đường
+dẫn file PHP server), kiểm tra USB ngắt, recovering, lỗi USB, không phản hồi,
+CAPT cũ khi USB còn nối và ESP offline. Tất cả đều chặn ready.
+
+Firmware phục hồi heartbeat đã nạp COM Máy 1, OTA Máy 2/3. Không cần nạp lại
+Máy 1 cùng binary lần nữa; lỗi nhãn CAPT/USB được sửa phía server.
 
 ## 1. Không lấy lịch sử làm tiến trình đang in
 

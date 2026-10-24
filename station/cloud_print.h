@@ -264,6 +264,12 @@ static void cloudTask(void *) {
     if(id.length())cloudState(state.c_str(),error.c_str());
     bool online=cloudHeartbeat(true);
     if(!online){auto code=cloudSnapshot().heartbeatHttp;String message=String("Heartbeat failed (HTTP ")+code+")";cloudState(code==0?"connecting":"server_error",code==0?"Waiting for initial heartbeat":message.c_str());vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(!id.length()) {
+      auto recovered=cloudSnapshot();
+      if(!strcmp(recovered.state,"connecting") ||
+         (!strcmp(recovered.state,"server_error") && !strncmp(recovered.error,"Heartbeat failed (HTTP ",22)))
+        cloudState("idle");
+    }
     if(id.length()) {
       if(state=="uncertain" && cloudResolve.exchange(false)) {
         cloudNeedsInspection.store(false);jobFinish("resolved");state="resolved";error="Operator inspected printer; no automatic reprint";

@@ -1,0 +1,48 @@
+*PPD-Adobe: "4.3"
+*FormatVersion: "4.3"
+*FileVersion: "1.0"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*PCFileName: "ESP3300.PPD"
+*Manufacturer: "Canon"
+*Product: "(LBP3300)"
+*ModelName: "Canon LBP3300 ESP32 LAN"
+*NickName: "Canon LBP3300 ESP32 LAN"
+*ShortNickName: "LBP3300 ESP32"
+*PSVersion: "(3010.000) 0"
+*LanguageLevel: "3"
+*ColorDevice: False
+*DefaultColorSpace: Gray
+*FileSystem: False
+*Throughput: "21"
+*cupsVersion: 2.0
+*cupsManualCopies: True
+*cupsFilter: "application/pdf 0 esp32pdf"
+*LandscapeOrientation: Plus90
+*OpenUI *PageSize/Paper size: PickOne
+*OrderDependency: 10 AnySetup *PageSize
+*DefaultPageSize: A4
+*PageSize A4/A4: "<</PageSize[595.276 841.89]>>setpagedevice"
+*CloseUI: *PageSize
+*OpenUI *PageRegion: PickOne
+*OrderDependency: 10 AnySetup *PageRegion
+*DefaultPageRegion: A4
+*PageRegion A4/A4: "<</PageSize[595.276 841.89]>>setpagedevice"
+*CloseUI: *PageRegion
+*DefaultImageableArea: A4
+*ImageableArea A4: "14.4 14.4 580.876 827.49"
+*DefaultPaperDimension: A4
+*PaperDimension A4: "595.276 841.89"
+*OpenUI *Duplex/Two-sided printing: PickOne
+*OrderDependency: 20 AnySetup *Duplex
+*DefaultDuplex: None
+*Duplex None/Off: "<</Duplex false>>setpagedevice"
+*Duplex DuplexNoTumble/Long edge: "<</Duplex true/Tumble false>>setpagedevice"
+*Duplex DuplexTumble/Short edge: "<</Duplex true/Tumble true>>setpagedevice"
+*CloseUI: *Duplex
+*OpenUI *InputSlot/Paper source: PickOne
+*OrderDependency: 20 AnySetup *InputSlot
+*DefaultInputSlot: Cassette1
+*InputSlot Cassette1/Cassette 1: ""
+*CloseUI: *InputSlot
+*DefaultResolution: 600dpi

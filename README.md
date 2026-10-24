@@ -39,6 +39,49 @@ Mở trang quản trị của từng ESP, mục **Cấu hình trạm in**, đặ
 | Máy 2 | 192.168.1.200 | ESP32-Printer-May2 |
 | Máy 3 | 192.168.1.201 | ESP32-Printer-May3 |
 
+Máy 1 cập nhật qua COM ngày 24/10/2026: đối chiếu MAC `98:C3:77:A1:36:B0`,
+nạp 115200 baud tại `/dev/cu.usbmodem5CF90462221`, hash verified; giữ nguyên NVS.
+Log xác nhận `STATION: PASS`, AP `ESP32-Printer-May1`, cấu hình IP
+`192.168.1.199`, uptime tăng liên tục. Lượt này chưa kiểm chứng in giấy;
+địa chỉ cấu hình trong log không thay cho xác minh kết nối LAN.
+
+Máy 1 có phản ánh AP rớt liên tục sau cập nhật; log COM trong hơn 6 phút có
+uptime tăng liên tục, chưa thấy reset. Chưa kết luận nguyên nhân phần cứng.
+Firmware tắt Wi-Fi sleep và tự reconnect của SDK; kết nối mạng đã lưu tối đa
+15 giây/lượt, thử lại sau ít nhất 30 giây khi không có khách AP hoặc lượt quét.
+Khách AP đang truy cập sẽ dừng lượt dò mạng đã lưu; kết nối Wi-Fi do người dùng
+bấm trên web vẫn được thực hiện. AP/STA chung radio nên quét chủ động hoặc đổi
+kênh khi kết nối router vẫn có thể gây gián đoạn. Log COM bổ sung trạng thái STA,
+kênh, số khách AP và mã lý do disconnect, không ghi credential. Kiểm tra chính
+sách bằng `python3 check_wifi.py`; cần đối chiếu thực tế trước khi kết luận hết rớt.
+Đã nạp bản sửa Máy 1 qua COM, hash verified. Log sau nạp: `STATION: PASS`,
+STA báo reason `201` (không tìm thấy AP đích), kênh từ 12 về 1 trong lượt nối;
+sau 15 giây dừng lượt nối, AP giữ kênh 1 trong khoảng quan sát đến uptime 36 giây.
+Chưa có khách AP trong khoảng này, chưa xác minh kết nối ổn định từ điện thoại.
+Máy 2 và Máy 3 cũng đã cập nhật bản sửa Wi-Fi qua OTA ngày 24/10/2026:
+đối chiếu ID riêng, xác nhận job không hoạt động/TCP rảnh/cloud tắt trước nạp;
+cả hai trả HTTP 200 cập nhật thành công. Sau reboot, `/status` xác nhận
+`healthy=true`, kết nối LAN tại `.200`/`.201`, đúng AP `ESP32-Printer-May2`/
+`ESP32-Printer-May3`; cấu hình NVS được giữ. Chưa thử in hoặc đo độ ổn định AP dài hạn.
+
+Chẩn đoán cloud Máy 1 ngày 24/10/2026: `/status` giữ `server_error` với
+`Heartbeat failed (HTTP -1)` dù `heartbeat_http=200`. Đối chiếu SSH server:
+481 heartbeat gần nhất của đúng ID đều trả 200; Nginx/PHP-FPM hoạt động,
+không có lỗi upstream/TLS tương ứng trong phần error log được kiểm tra.
+Lỗi firmware: khi heartbeat phục hồi nhưng chưa nối USB, nhánh claim không chạy
+nên lỗi heartbeat cũ không được xóa, kéo theo RGB đỏ. Đã thêm chuyển về `idle`
+khi online, không có job cloud và trạng thái cũ là chờ kết nối/lỗi heartbeat;
+giữ nguyên lỗi claim và trạng thái blocked/uncertain. Kiểm tra hồi quy:
+`python3 check_cloud_recovery.py`. Chưa xác định nguyên nhân lần HTTP -1 ban đầu;
+không coi HTTP -1 là mã lỗi do server trả về.
+Đã nạp bản sửa qua COM Máy 1, hash verified; sau reboot uptime 13 giây,
+`healthy=true`, Wi-Fi kết nối, cloud `idle`, lỗi rỗng, heartbeat 200 trong khi
+USB vẫn chưa nối máy in. Xác minh bằng `/status`, chưa xác nhận màu LED bằng mắt.
+Máy 2/3 đã nhận cùng bản sửa heartbeat qua OTA; đối chiếu đúng ID, không có job
+trước cập nhật. Sau reboot cả ba trạm healthy, Wi-Fi kết nối, cloud idle,
+heartbeat 200. Theo yêu cầu sửa nhãn server, đã sửa thứ tự USB/CAPT trong PHP
+và bàn giao docs/test; xem `docs/server-status-display-fix.md` mục 24/10.
+
 Bo Máy 2 đã nạp ngày 24/10/2026: ESP32-S3, MAC `10:51:DB:78:A8:FC`, ID
 `esp32-1051db78a8fc`, flash 16 MB. Tên **Máy 2** và IP `.200` được khởi tạo
 một lần trong NVS `printer/station`, giữ nguyên namespace hiệu chuẩn/Wi-Fi cũ;
@@ -50,6 +93,12 @@ Bo đang cắm USB native (`USB-Serial/JTAG`), chưa có COM/UART0. Sau nạp, h
 USB có lần giữ bo ở download mode; watchdog-reset đưa bo chạy và phát AP.
 Cổng USB native biến mất khỏi Mac khi USB Host khởi động là hành vi dự kiến;
 ưu tiên chuyển dây sang COM/UART0 cho các lượt debug tiếp theo.
+
+Cập nhật Máy 2 ngày 24/10/2026 qua COM `/dev/cu.usbserial-10`, 115200 baud:
+đã đối chiếu MAC, nạp firmware chung thành công, hash verified; giữ nguyên NVS.
+Log sau nạp xác nhận `STATION: PASS`, AP mới `ESP32-Printer-May2`, cấu hình
+LAN `192.168.1.200`, uptime tăng liên tục. IP trong log chưa chứng minh kết nối
+Wi-Fi LAN. Firmware có đổi tên AP, quét chọn Wi-Fi và bảng trạng thái RGB thu gọn.
 
 ID tự lấy từ MAC, không đổi theo tên/IP. Cấu hình lưu NVS, áp dụng sau reboot.
 Bo Máy 3 đã nạp qua COM ngày 24/10/2026: MAC `10:51:DB:78:6A:34`, ID
@@ -771,3 +820,10 @@ lại; kết nối lại AP bằng tên mới, mật khẩu cũ vẫn giữ. Tê
 Khi chưa lưu tùy chỉnh, IP `.199/.200/.201` chọn AP `ESP32-Printer-May1/May2/May3`;
 IP ngoài nhóm này dùng hậu tố MAC để tránh trùng. `profile.ap_ssid` trả tên thực tế.
 Các AP có hậu tố MAC ghi ở phần lịch sử là tên lúc provision, trước bản đổi tên này.
+
+## Bộ cài Ubuntu desktop
+
+Trang ESP có link và lệnh cài Ubuntu 22.04/24.04 theo IP từng trạm. Tải
+[install_ubuntu.py](install_ubuntu.py), chạy `sudo python3 install_ubuntu.py IP`;
+tên mặc định lấy từ ESP, cài lại theo ID nên không tạo queue trùng. CUPS + bộ nén
+CAPT nguồn mở, không cần máy trung gian. Xem [phạm vi và kiểm thử](docs/ubuntu.md).

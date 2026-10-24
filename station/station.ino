@@ -29,6 +29,8 @@ bool uploadOK = false;
 uint32_t rebootAt = 0;
 uint32_t connectionAt = 0;
 bool connecting = false;
+bool savedWiFiAttempt = false;
+uint32_t savedWiFiAttemptAt = 0, savedWiFiRetryAt = 0;
 String pendingSSID, pendingPassword;
 bool wifiScanRunning=false;
 String wifiScanResult="{\"networks\":[]}";
@@ -81,11 +83,17 @@ String profileJSON() {
 #include "status_led.h"
 
 void connectSaved() {
+  savedWiFiRetryAt = millis();
+  if (WiFi.softAPgetStationNum()) return;
   WiFiConfig config = {};
   if (prefs.getBytes("wifi", &config, sizeof(config)) != sizeof(config)) return;
   if (!memchr(config.ssid, 0, sizeof(config.ssid)) ||
       !memchr(config.password, 0, sizeof(config.password))) return;
-  if (config.ssid[0]) WiFi.begin(config.ssid, config.password);
+  if (config.ssid[0]) {
+    savedWiFiAttemptAt = millis();
+    savedWiFiAttempt = true;
+    WiFi.begin(config.ssid, config.password);
+  }
 }
 
 bool authorized() {
@@ -211,9 +219,9 @@ void home() {
 <tr><td><span class="led-dot" style="--led:#9333ea"></span>Tím</td><td>Chớp đôi mỗi 1,6 giây</td><td>Lệnh cần đối soát hoặc trạm cloud đang bị khóa; không tự in lại.</td></tr>
 <tr><td><span class="led-dot" style="--led:#dc2626"></span>Đỏ</td><td>Rất nhanh: sáng/tắt 0,1 giây</td><td>Tự kiểm tra phần cứng/khởi tạo firmware không đạt.</td></tr>
 </tbody></table></div><p class="meta">Ưu tiên lần lượt: lỗi phần cứng, mất Wi-Fi, lỗi máy in, cần đối soát, tạm dừng, nhận/in, lỗi cloud, chưa có máy in, CAPT cũ, rảnh. Đèn không xác nhận giấy đã ra. Cloud tắt thì không dùng Internet/server để xét đèn.</p></details>
-<details id="install"><summary>Cài máy in Windows / Mac · bộ cài mới nhất trên GitHub</summary><p>Cài một lần trên từng máy. Bộ cài tự tải driver Canon nếu chưa có.</p>
+<details id="install"><summary>Cài máy in Windows / Mac / Ubuntu · bộ cài mới nhất trên GitHub</summary><p>Cài một lần trên từng máy. Windows/Mac tự tải driver Canon nếu chưa có; Ubuntu dùng CUPS và bộ nén CAPT nguồn mở.</p>
 <div class="grid"><section><h2>Windows 10 / 11</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1" download>Tải bộ cài Windows</a><p class="meta">Tải file, mở PowerShell quản trị, sao chép lệnh rồi chọn file vừa tải.</p><textarea id="windows-command" aria-label="Lệnh cài Windows" readonly rows="4">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea><button type="button" onclick="copyField('windows-command')">Sao chép lệnh Windows</button></section>
-<section><h2>macOS</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_mac.sh" download>Tải bộ cài Mac</a><p class="meta">Tải file, mở Terminal, sao chép lệnh rồi chọn file vừa tải.</p><textarea id="mac-command" aria-label="Lệnh cài Mac" readonly rows="4">capt_installer=$(osascript -e 'POSIX path of (choose file with prompt "Chon install_mac.sh")') &amp;&amp; sudo /bin/sh "$capt_installer" __STATION_IP__</textarea><button type="button" onclick="copyField('mac-command')">Sao chép lệnh Mac</button></section></div>
+<section><h2>macOS</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_mac.sh" download>Tải bộ cài Mac</a><p class="meta">Tải file, mở Terminal, sao chép lệnh rồi chọn file vừa tải.</p><textarea id="mac-command" aria-label="Lệnh cài Mac" readonly rows="4">capt_installer=$(osascript -e 'POSIX path of (choose file with prompt "Chon install_mac.sh")') &amp;&amp; sudo /bin/sh "$capt_installer" __STATION_IP__</textarea><button type="button" onclick="copyField('mac-command')">Sao chép lệnh Mac</button></section><section><h2>Ubuntu 22.04 / 24.04</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_ubuntu.py" download>Tải bộ cài Ubuntu</a><p class="meta">Tải file, mở Terminal tại thư mục chứa file rồi chạy lệnh. Có thể đặt tên khi cài; cài lại dùng ID trạm để tránh trùng máy. A4, cassette 1, 600 dpi; bố cục do CUPS xử lý.</p><textarea id="ubuntu-command" aria-label="Lệnh cài Ubuntu" readonly rows="3">sudo python3 ./install_ubuntu.py __STATION_IP__</textarea><button type="button" onclick="copyField('ubuntu-command')">Sao chép lệnh Ubuntu</button></section></div>
 <p class="meta">Chọn máy in trong Word, Chrome hoặc trình đọc PDF. Tùy chọn in nằm trong hộp thoại in của ứng dụng/driver.</p></details>
 <details id="settings"><summary>Cấu hình trạm &amp; kết nối web</summary><p>Đổi tên hoặc IP sẽ cần cập nhật hàng đợi trên máy tính. Lưu cấu hình sẽ khởi động lại ESP.</p>
 <form action="/station" method="post" class="stack"><input name="token" type="hidden" value="__CSRF__"><div class="fields">
@@ -363,7 +371,17 @@ void setup() {
   }
   bool storageOK = prefs.begin("printer", false);
   if (storageOK) supportCommand = prefs.getString("supportcmd", supportCommand);
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+      Serial.printf("Wi-Fi STA disconnected: reason=%u\n", info.wifi_sta_disconnected.reason);
+    else if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED)
+      Serial.println("Wi-Fi AP client connected");
+    else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED)
+      Serial.printf("Wi-Fi AP client disconnected: reason=%u\n", info.wifi_ap_stadisconnected.reason);
+    else if (event == ARDUINO_EVENT_WIFI_AP_STOP) Serial.println("Wi-Fi AP stopped");
+  });
   bool wifiOK = WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
   uint8_t mac[6]={};bool idOK=esp_read_mac(mac,ESP_MAC_WIFI_STA)==ESP_OK;
   bool nonzero=false;for(uint8_t b:mac)nonzero|=b!=0;idOK=idOK&&nonzero&&!(mac[0]&1);
   char id[19];snprintf(id,sizeof(id),"esp32-%02x%02x%02x%02x%02x%02x",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
@@ -384,7 +402,7 @@ void setup() {
   bool staticOK = WiFi.config(stationIP, stationGateway, stationMask, stationDNS);
   String hostname = "esp32-" + stationID.substring(12);
   WiFi.setHostname(hostname.c_str());
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   bool apOK = WiFi.softAP(stationAP.c_str(), DEVICE_PASSWORD);
   healthy = idOK && storageOK && wifiOK && staticOK && apOK && memoryOK &&
             ESP.getFlashChipSize() == 16777216 && ESP.getPsramSize() == 8388608;
@@ -712,12 +730,23 @@ void loop() {
     connecting = false;
     Serial.println("Wi-Fi attempt failed; restored saved settings");
   }
+  if (!connecting) {
+    if (WiFi.status() == WL_CONNECTED) savedWiFiAttempt = false;
+    else if (savedWiFiAttempt && (WiFi.softAPgetStationNum() || millis()-savedWiFiAttemptAt >= 15000)) {
+      WiFi.disconnect();
+      savedWiFiAttempt = false;
+      savedWiFiRetryAt = millis();
+      Serial.println("Wi-Fi saved attempt stopped; keeping AP available");
+    } else if (!savedWiFiAttempt && !wifiScanRunning && !WiFi.softAPgetStationNum() && millis()-savedWiFiRetryAt >= 30000) {
+      connectSaved();
+    }
+  }
   updateStatusLED();
   if (rebootAt && int32_t(millis() - rebootAt) >= 0) ESP.restart();
   static uint32_t lastLog = 0;
   if (millis() - lastLog >= 3000) {
     lastLog = millis();
-    Serial.printf("STATION: %s, uptime=%lu, AP=%s, LAN=%s, heap=%u\n", healthy ? "PASS" : "FAIL", millis()/1000, WiFi.softAPIP().toString().c_str(), WiFi.localIP().toString().c_str(), ESP.getFreeHeap());
+    Serial.printf("STATION: %s, uptime=%lu, AP=%s, LAN=%s, heap=%u, wifi=%d, channel=%d, ap_clients=%u\n", healthy ? "PASS" : "FAIL", millis()/1000, WiFi.softAPIP().toString().c_str(), WiFi.localIP().toString().c_str(), ESP.getFreeHeap(), int(WiFi.status()), WiFi.channel(), WiFi.softAPgetStationNum());
   }
   delay(2);
 }
