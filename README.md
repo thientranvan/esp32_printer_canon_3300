@@ -827,3 +827,9 @@ Trang ESP có link và lệnh cài Ubuntu 22.04/24.04 theo IP từng trạm. T�
 [install_ubuntu.py](install_ubuntu.py), chạy `sudo python3 install_ubuntu.py IP`;
 tên mặc định lấy từ ESP, cài lại theo ID nên không tạo queue trùng. CUPS + bộ nén
 CAPT nguồn mở, không cần máy trung gian. Xem [phạm vi và kiểm thử](docs/ubuntu.md).
+
+## Bộ cài Windows bấm chạy
+
+[ESP32PrinterSetup.exe](installers/ESP32PrinterSetup.exe): giao diện chọn IP, đọc
+trạm, đặt tên và cài/cập nhật; nhúng script hiện tại, không cần copy lệnh. Có nút
+tải EXE trên trang từng ESP. [Build và giới hạn kiểm thử](docs/windows-exe.md).
