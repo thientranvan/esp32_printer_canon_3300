@@ -48,6 +48,8 @@ function printerAppIcon() {
     $.NSColor.whiteColor.setFill;$.NSBezierPath.bezierPathWithOvalInRect($.NSMakeRect(190,199,6,6)).fill;
     image.unlockFocus;return image;
 }
+var reopenStatus=null;
+function reopen(){if(reopenStatus)reopenStatus();}
 function run(argv) {
     ObjC.import('AppKit');ObjC.import('Foundation');
     if(argv.length!==3 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(argv[0]) || argv[0].split('.').some(function(x){return +x>255;}) || !/^[A-Za-z0-9_-]+$/.test(argv[1])) throw Error('Expected valid IPv4, CUPS queue and name');
@@ -74,7 +76,17 @@ function run(argv) {
     scroll.documentView=table;content.addSubview(scroll);
     var footer=label('Điều khiển hàng đợi Mac; trang đã gửi vẫn có thể được in.',24,448,710,38,11,false);
     var request=null, spool=null, lastJobs=null, lastError='', nextPoll=0, target, localProblem=null, lastStatus=null;
-    function show() {window.makeKeyAndOrderFront(null);app.activateIgnoringOtherApps(true);console.log('STATUS: opened '+queue);}
+    var quitting=false;
+    function shutdownStatus() {
+        if(quitting)return;quitting=true;
+        if(timer)timer.invalidate;
+        [request,spool,activeOnly,controlTask].forEach(function(child){
+            if(!child)return;
+            try{if(child.task.running)child.task.terminate;}catch(e){}
+            try{child.pipe.fileHandleForReading.closeFile;}catch(e){}
+        });
+    }
+    function show() {if(quitting)return;window.makeKeyAndOrderFront(null);app.activateIgnoringOtherApps(true);console.log('STATUS: opened '+queue);}
     function task(path,args,captureError,input) {
         var p=$.NSPipe.pipe,t=$.NSTask.alloc.init;t.executableURL=$.NSURL.fileURLWithPath($(path));t.arguments=$(args);t.standardOutput=p;t.standardError=captureError?p:$.NSFileHandle.fileHandleWithNullDevice;var stdin=input?$.NSPipe.pipe:null;if(stdin)t.standardInput=stdin;t.launch;if(stdin){stdin.fileHandleForWriting.writeData($(input).dataUsingEncoding($.NSUTF8StringEncoding));stdin.fileHandleForWriting.closeFile;}
         return {task:t,pipe:p};
@@ -107,6 +119,7 @@ function run(argv) {
         'resume:':{types:['void',['id']],implementation:function(){control('resume');}},
         'cancel:':{types:['void',['id']],implementation:function(){control('cancel');}},
         'tick:':{types:['void',['id']],implementation:function() {
+            if(quitting)return;
             try {
                 var chosen=selectedJob();pauseButton.enabled=!!chosen&&!controlTask&&chosen.code!==4;resumeButton.enabled=!!chosen&&!controlTask&&chosen.code===4;cancelButton.enabled=!!chosen&&!controlTask;
                 if(controlTask && !controlTask.task.running){var output=read(controlTask);footer.stringValue=$(Number(controlTask.task.terminationStatus)===0?actionNote:'Không thực hiện được: '+output.trim());actionUntil=Date.now()+10000;controlTask=null;nextPoll=0;}
@@ -143,13 +156,17 @@ function run(argv) {
         'settings:':{types:['void',['id']],implementation:function(){ $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($('x-apple.systempreferences:com.apple.Print-Scan-Settings.extension'))); }},
         'web:':{types:['void',['id']],implementation:function(){ $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($('http://'+host))); }},
         'hide:':{types:['void',['id']],implementation:function(){window.orderOut(null);}},
-        'applicationShouldHandleReopen:hasVisibleWindows:':{types:['bool',['id','bool']],implementation:function(){show();return true;}}
+        'applicationWillTerminate:':{types:['void',['id']],implementation:function(){shutdownStatus();}},
+
     }});
-    var activeOnly=null;target=$.ESP32PrinterStatusActions.alloc.init;app.delegate=target;table.dataSource=target;
+    var activeOnly=null;target=$.ESP32PrinterStatusActions.alloc.init;table.dataSource=target;reopenStatus=show;
+    $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject(target,'applicationWillTerminate:',$.NSApplicationWillTerminateNotification,app);
     function button(text,x,width,selector){var b=$.NSButton.alloc.initWithFrame($.NSMakeRect(x,22,width,34));b.title=$(text);b.bezelStyle=$.NSBezelStyleRounded;b.target=target;b.action=selector;content.addSubview(b);return b;}
     function jobButton(title,x,width,selector,symbol){var b=button(title,x,width,selector);b.setFrameOrigin($.NSMakePoint(x,98));b.image=$.NSImage.imageWithSystemSymbolNameAccessibilityDescription($(symbol),$(title));b.imagePosition=$.NSImageLeft;b.enabled=false;return b;}
     var pauseButton=jobButton('Tạm dừng',24,150,'pause:','pause.fill'),resumeButton=jobButton('Tiếp tục',184,150,'resume:','play.fill'),cancelButton=jobButton('Xóa lệnh',344,150,'cancel:','trash');
     button('Hàng đợi Mac' ,24,158,'queue:');button('Cài đặt máy in',190,158,'settings:');button('Quản lý trạm in',356,170,'web:');button('Ẩn cửa sổ',580,156,'hide:');
     var timer=$.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(0.25,target,'tick:',null,true);
-    app.finishLaunching;show();app.run;
+    app.finishLaunching;
+    // Stay-open applet owns the event loop. Returning lets macOS dispatch Quit.
+    show();
 }
