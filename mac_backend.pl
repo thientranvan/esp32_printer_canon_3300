@@ -9,7 +9,7 @@ use Encode qw(encode decode FB_CROAK);
 
 # ponytail: A4/cassette 1 and <=100 pages, <=20 MiB. Validate other paper sources before extending.
 my $socket;
-my $stationHost;my $metadataSupported=0;
+my $stationHost;my $stationPort=9100;my $metadataSupported=0;my $recoverySupported=0;my $resumeBase=0;
 my @completedSheets=(0);my $lastCompleted=-1;
 my $cache = '/Library/Caches/ESP32Printer';
 my $pending = "$cache/pending.txt";
@@ -68,7 +68,7 @@ sub status {
     }
     my @c=unpack('x14v4',$s);
     if($c[3]!=$lastCompleted && @completedSheets>1){
-      my $total=$#completedSheets;my $done=$c[3]>$total?$total:$c[3];
+      my $total=$#completedSheets;my $done=$resumeBase+$c[3]>$total?$total:$resumeBase+$c[3];
       print STDERR 'ATTR: job-media-progress=',int(100*$done/$total),"\n";
       print STDERR "PAGE: total $completedSheets[$done]\n";
       $lastCompleted=$c[3];
@@ -158,6 +158,7 @@ sub check_control {
         local $/; my $body=<$curl>;close($curl) or fail('ESP job control unavailable; outcome uncertain');
         my $s=eval { JSON::PP::decode_json($body) };fail('Invalid job control response') unless $s && ($s->{job_control}{id}//'') eq $job;
         my $request=$s->{job_control}{request}//'';
+        if($resumeBase==0xFFFFFFFD){unlink($pending) if -e $pending;return;}
         fail('Operator cancelled submission; buffered pages may still print. Inspect before retry.') if $request eq 'cancel_requested';
         if ($request eq 'resume_requested') {ack(0xF003,pack('C',2));return;}
         return unless $request eq 'pause_requested';
@@ -165,24 +166,36 @@ sub check_control {
         status();select(undef,undef,undef,0.25);
     }
 }
-sub print_pages {
-    my (@pages) = @_;
+sub print_pages_attempt {
+    my ($job,@pages) = @_;
     @completedSheets=(0);$lastCompleted=-1;
     for my $p (@pages){push @completedSheets,$completedSheets[-1]+((ord(substr($p->[0],9,1))&4)?0:1);}
-    my $job="mac-".time."-$$";ack(0xF002,$job);
+    ack(0xF002,$job);
     require JSON::PP;
     my $text=sub {my ($value,$limit)=@_;my $s=eval {decode('UTF-8',$value,FB_CROAK)}; $s='' if $@;$s =~ s/[\x00-\x1f\x7f]/ /g;chop($s) while length(encode('UTF-8',$s))>$limit;return $s;};
     my $meta=JSON::PP->new->utf8->encode({title=>$text->($ARGV[2],128),client_name=>$text->((uname())[1],96),client_os=>'macos'});
     ack(0xF004,$meta) if $metadataSupported;
+    $resumeBase=0;
+    if($recoverySupported){
+        my $r=ack(0xF005,join('',map {chr(ord(substr($_->[0],9,1))&6)} @pages));
+        fail('Invalid recovery checkpoint') unless length($r)==6;
+        $resumeBase=unpack('x2V',$r);
+        fail('Operator cancelled submission; inspect buffered sheets.') if $resumeBase==0xFFFFFFFE;
+        fail('RECOVERY_WAIT: ESP waiting for printer restart / ready') if $resumeBase==0xFFFFFFFF;
+        fail('Invalid recovery offset') if $resumeBase>@pages;
+    }
     ack(0xF001, pack('V', scalar(@pages)));
+    splice(@pages,0,$resumeBase);
     my $model = command(0xA1A1);
     fail('Printer model mismatch') unless substr($model, 2, 2) eq "\x94\x2a";
     my @c = status();
     fail('Printer has an unresolved page') if grep { $_ != $c[0] } @c;
+    unless($recoverySupported && -e $pending){
     sysopen(my $marker, $pending, O_WRONLY | O_CREAT | O_EXCL, 0600)
         or fail('Uncertain previous job; inspect pending.txt before resuming');
     print $marker "Job submission started; no automatic retry.\n" or fail('Cannot write pending marker');
     close($marker) or fail('Cannot save pending marker');
+    }
     ack(0xA3A2);
     my $reserved = ack(0xA2A0, pack('vvV', 0, 30, 0));
     fail('Invalid reservation') unless length($reserved) == 4;
@@ -224,6 +237,21 @@ sub print_pages {
     ack(0xE1A1, info($id, 4, $page));
     ack(0xE0A9, pack('v', $id));
     unlink($pending) or fail('Cannot clear pending marker');
+}
+sub print_pages {
+    my (@pages)=@_;my $job="mac-".time."-$$";
+    while(1){
+        my $ok=eval {print_pages_attempt($job,@pages);1};return if $ok;
+        my $error=$@;
+        die $error unless $recoverySupported && ($error =~ /^RECOVERY_WAIT:/ || -e $pending) && $error !~ /Operator cancelled/;
+        print STDERR "INFO: ESP giữ điểm khôi phục; chờ máy in bật lại và hết lỗi.\n";
+        close($socket) if $socket;sleep 1;
+        while(1){
+            $socket=IO::Socket::INET->new(PeerAddr=>$stationHost,PeerPort=>$stationPort,Proto=>'tcp',Timeout=>5);
+            last if $socket;sleep 1;
+        }
+        $socket->autoflush(1);
+    }
 }
 # Native CUPS monitor: no USB ownership, no print submission, no queue resume.
 sub monitor {
@@ -321,12 +349,12 @@ sub main {
     my ($host, $port, $id) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?(?:/(esp32-[0-9a-f]{12}))?/?\z};
     if ($id) { $cache .= "/$id"; $pending = "$cache/pending.txt"; }
     fail('Invalid device URI') unless $host;
-    $stationHost=$host;
+    $stationHost=$host;$stationPort=$port||9100;
     eval {
         require JSON::PP;
         open(my $info,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2','--max-filesize','4096',"http://$host/setup/profile.json") or die 'profile';
         my $body='';while(length($body)<=4096){my $n=read($info,my $part,1024);last unless $n;$body.=$part;}close($info) or die 'profile';
-        my $profile=JSON::PP->new->max_size(4096)->decode($body);$metadataSupported=($profile->{lan_metadata_version}//0)>=1;
+        my $profile=JSON::PP->new->max_size(4096)->decode($body);$metadataSupported=($profile->{lan_metadata_version}//0)>=1;$recoverySupported=($profile->{lan_recovery_version}//0)>=1;
     };
     my $duplex = canon_duplex($ARGV[4]);
     fail('Select Canon Print Style / Binding Location for duplex') if !$duplex && $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
