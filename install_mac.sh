@@ -128,11 +128,11 @@ EOF
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."
 # Desktop monitor runs as the logged-in user, never as the CUPS/root daemon.
 status_script="$source_dir/installers/esp32-printer-status-mac.js"
-status_sha=0110e655f4e433fcb3f15cffcd84d853978e2338427596ad409babafd58f7126
+status_sha=0422d23e0a3baaf560de086c72a1e27b63ef75b89ab62e2bcdfb94b248539547
 if [ ! -f "$status_script" ]; then
   status_script="$work/esp32-printer-status-mac.js"
   /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
-    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/2749829bc41fad0e840a78c3ecf2ce5b3b55f7d2/installers/esp32-printer-status-mac.js -o "$status_script"
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/e34e0f64036ef2283b91ea464aa3b149b6c13c6e/installers/esp32-printer-status-mac.js -o "$status_script"
 fi
 [ "$(/usr/bin/shasum -a 256 "$status_script" | /usr/bin/cut -d' ' -f1)" = "$status_sha" ] || { echo 'Status monitor checksum mismatch.' >&2; exit 1; }
 /usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"
@@ -148,7 +148,8 @@ function run(args) {
  if(!$(source).writeToFileAtomicallyEncodingError($(args[1]),true,$.NSUTF8StringEncoding,null))throw Error('Cannot write configured status app');
 }
 JXA
-/usr/bin/osacompile -l JavaScript -o "$status_app" "$work/status-app.js"
+/usr/bin/osacompile -s -l JavaScript -o "$status_app" "$work/status-app.js"
+/usr/bin/plutil -replace OSAAppletStayOpen -bool true "$status_app/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleName -string "$name — Trạm in ESP32" "$status_app/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleDisplayName -string "$name — Trạm in ESP32" "$status_app/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleIdentifier -string "com.esp32printer.status.$id" "$status_app/Contents/Info.plist"
@@ -161,7 +162,7 @@ cat > "$work/window.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>Label</key><string>$window_label</string>
 <key>ProgramArguments</key><array><string>$status_app/Contents/MacOS/applet</string></array>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>10</integer>
 <key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>
 EOF
 /usr/bin/plutil -lint "$work/window.plist"

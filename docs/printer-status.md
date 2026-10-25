@@ -294,3 +294,9 @@ Desktop live progress now shows no running station job for inactive terminal rec
 uncertain results retain a separate reconciliation warning. ESP hides inactive
 progress and labels the remaining job-control card as last-job history. Printer
 faults such as E100 remain visible independently of queue deletion.
+
+## macOS Quit / shutdown (25/10/2026)
+
+Cửa sổ dùng applet stay-open và vòng lặp macOS; `run()` trả về, giữ delegate mặc định để macOS xử lý Quit/logout/shutdown. Khi thoát, dừng timer và các tiến trình con chỉ đọc trạng thái; không hủy job hoặc dừng backend in. LaunchAgent chỉ khởi động lại khi lỗi (`SuccessfulExit=false`), không bật lại sau Quit bình thường; lần đăng nhập sau vẫn RunAtLoad. Bộ cài đặt rõ `OSAAppletStayOpen=true` cả khi cập nhật app cũ.
+
+`python3 check_mac_quit.py` kiểm thử Quit native trên app tạm, không shutdown/reboot. Đã kiểm thử app đang cài trên Mac này thoát thành công, không tự bật lại sau throttle 10 giây, rồi mở lại cửa sổ.
