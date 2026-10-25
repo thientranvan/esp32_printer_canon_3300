@@ -39,3 +39,8 @@ Mono hoặc đổi dịch vụ production. Kiểm tra PE x64/GUI, resource icon/
 script nhúng trùng script gốc, SHA-256 và link trên ESP đạt. Máy Windows thử nghiệm
 `192.168.1.105:22222` không truy cập được; chưa nghiệm thu mở GUI/UAC và cài lại trên
 Windows thật. Giữ script PS1 làm lựa chọn hỗ trợ kỹ thuật trong mục thu gọn của ESP.
+
+Triển khai 25/10/2026: EXE và SHA-256 đã lên GitHub, tải lại từ raw GitHub có hash
+khớp. Máy 1 đã nạp giao diện mới qua COM, đúng MAC `98:C3:77:A1:36:B0`, hash
+verified; boot `STATION: PASS`, Wi-Fi status 3, AP `ESP32-Printer-May1`.
+Người dùng yêu cầu Máy 2/3 để nạp sau; chưa cập nhật giao diện EXE trên hai bo đó.
