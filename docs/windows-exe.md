@@ -48,3 +48,5 @@ Người dùng yêu cầu Máy 2/3 để nạp sau; chưa cập nhật giao di�
 Cả hai cách cài được giữ trên ESP: EXE là nút chính; mục thu gọn **Cài bằng
 PowerShell (cách cũ)** có link PS1, hướng dẫn mở PowerShell quản trị, lệnh chọn
 file đã tải với IP của trạm và nút sao chép. Không cần dùng EXE nếu chọn cách cũ.
+
+Bản khôi phục lỗi giấy 25/10/2026 nhúng bridge giữ phiên khi hết giấy/kẹt/nắp; hỗ trợ checkpoint ESP khi USB ngắt. Cần firmware mới trước khi chạy lại bộ cài. Chi tiết: [paper-jam-recovery.md](paper-jam-recovery.md).

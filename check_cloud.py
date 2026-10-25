@@ -15,12 +15,14 @@ engine = source[source.index('static bool cloudPrint('):source.index('static voi
 harness = r'''
 #include "station/prepared_job.h"
 #include "station/capt_status.h"
+#include "station/print_recovery.h"
 #include <cassert>
 #include <cstdio>
 #include <algorithm>
 using std::min;
 static unsigned decoded=0, started=0, submitted=0, completed=0, reservations=0, releases=0;
 static bool rejectPaper=false;
+static bool cloudTracking=false;static PrintRecovery::Checkpoint cloudRecovery;
 static uint8_t cloudBuffer[4096];
 static int cloudLock=0;
 #define portENTER_CRITICAL(x) (void)(x)
@@ -60,6 +62,9 @@ int main(){
  assert((flags==std::vector<int>{4,2,0}));assert(cloudView.submitted==3);
  decoded=started=submitted=completed=reservations=releases=0;rejectPaper=true;
  assert(!cloudPrint(j));assert(reservations==1 && releases==0 && decoded==0);
+ decoded=started=submitted=completed=reservations=releases=0;rejectPaper=false;flags.clear();
+ assert(cloudPrint(j,2));assert(decoded==1 && completed==1 && reservations==1 && releases==1);
+ assert((flags==std::vector<int>{0}));assert(cloudView.submitted==3);
  puts("PASS: production cloud engine, duplex order, pipeline, one reservation/release, no retry on failure");
 }
 '''
@@ -78,6 +83,9 @@ with tempfile.TemporaryDirectory() as folder:
     control = str(Path(folder, 'control'))
     subprocess.run([compiler, *flags, 'check_job_control.cpp', '-o', control], check=True)
     subprocess.run([control], check=True)
+    recovery = str(Path(folder, 'recovery'))
+    subprocess.run([compiler, *flags, 'check_print_recovery.cpp', '-o', recovery], check=True)
+    subprocess.run([recovery], check=True)
     binary = str(Path(folder, 'parser'))
     subprocess.run([compiler, *flags, 'check_prepared.cpp', '-o', binary], check=True)
     subprocess.run([binary], check=True)
@@ -122,3 +130,57 @@ with tempfile.TemporaryDirectory() as folder:
     binary = str(Path(folder, 'status'))
     subprocess.run([compiler, *flags, 'check_capt_status.cpp', '-o', binary], check=True)
     subprocess.run([binary], check=True)
+
+# Production fault wait keeps the CAPT session alive; no reserve/replay on ready.
+fault_engine=source[source.index('static bool cloudCounters('):source.index('static bool cloudWait(')]
+fault_harness=r'''
+#include "station/prepared_job.h"
+#include "station/capt_status.h"
+#include "station/print_recovery.h"
+#include "station/job_control.h"
+#include <cassert>
+#include <cstring>
+#include <cstdio>
+static uint8_t cloudBuffer[4096];static int cloudLock=0,jobLock=0;
+#define portENTER_CRITICAL(x) (void)(x)
+#define portEXIT_CRITICAL(x) (void)(x)
+#define pdMS_TO_TICKS(x) (x)
+static struct {unsigned completed;} cloudView;
+static PrintRecovery::Checkpoint cloudRecovery;static bool cloudTracking=true;
+static uint32_t cloudFaultTime=0,tick=0;
+static uint32_t millis(){return tick;}
+static PrintControl::Job currentJob;
+static PrintControl::Job jobSnapshot(){return currentJob;}
+static void jobProgress(unsigned,unsigned n){currentJob.completed=n;}
+static void jobRecoveryProgress(const PrintRecovery::Checkpoint &p){currentJob.completed=p.confirmed;}
+static void cloudState(const char *,const char * = ""){}
+static void cloudHeartbeat(){}
+static bool cancelOnWait=false;static unsigned queries=0,serviceQueries=0;
+static void vTaskDelay(unsigned n){tick+=n;if(cancelOnWait)strcpy(currentJob.request,"cancel_requested");}
+static void put16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
+static bool cloudCommand(unsigned op){
+ if(op==0xA2A2){++serviceQueries;return true;}
+ assert(op==0xA0A8);memset(cloudBuffer,0,sizeof(cloudBuffer));put16(cloudBuffer+2,60);
+ ++queries;
+ if(queries==1)cloudBuffer[6]=8; // Service fault also waits, retaining session.
+ if(queries==2)put16(cloudBuffer+16,0x100);
+ if(queries==3)put16(cloudBuffer+16,0x4000);
+ if(queries==4)put16(cloudBuffer+12,0x4000);
+ for(int i=0;i<4;++i)put16(cloudBuffer+18+i*2,2);
+ return true;
+}
+'''
+fault_main=r'''
+int main(){
+ cloudRecovery.begin("job",{4,2,0},1);cloudRecovery.started=true;currentJob.begin("job","cloud",true);currentJob.total=3;
+ unsigned c[4];assert(cloudCounters(c));assert(queries==5&&serviceQueries==1&&tick==800&&cloudFaultTime==800);
+ assert(currentJob.completed==2&&cloudRecovery.confirmed==2&&!strcmp(currentJob.state,"printing"));
+ queries=serviceQueries=0;cancelOnWait=true;assert(!cloudCounters(c));assert(queries==1&&currentJob.stopping());
+ puts("PASS: production cloud service/jam/cover/paper wait, ready in same session, preserved progress, cancellation during fault");
+}
+'''
+with tempfile.TemporaryDirectory() as folder:
+    cpp=Path(folder,'fault.cpp');cpp.write_text(fault_harness+fault_engine+fault_main)
+    binary=str(Path(folder,'fault'))
+    subprocess.run([compiler,*flags,str(cpp),'-o',binary],check=True)
+    subprocess.run([binary],check=True)

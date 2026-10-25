@@ -1,9 +1,14 @@
 #pragma once
 #include "job_control.h"
+#include "print_recovery.h"
 static portMUX_TYPE jobLock=portMUX_INITIALIZER_UNLOCKED;
 static PrintControl::Job currentJob;
 static PrintControl::Job jobSnapshot() {portENTER_CRITICAL(&jobLock);auto j=currentJob;portEXIT_CRITICAL(&jobLock);return j;}
-static bool jobCommand(const String &id,const String &action) {portENTER_CRITICAL(&jobLock);bool ok=currentJob.command(id.c_str(),action.c_str());portEXIT_CRITICAL(&jobLock);return ok;}
+static bool jobCommand(const String &id,const String &action) {portENTER_CRITICAL(&jobLock);bool ok=currentJob.command(id.c_str(),action.c_str());
+  if(ok&&!currentJob.active&&currentJob.unresolved()&&!strcmp(currentJob.source,"lan")&&currentJob.stopping()){
+    bool remove=currentJob.deleteAfterStop;currentJob.finish("cancelled");if(remove)currentJob=PrintControl::Job();
+  }
+  portEXIT_CRITICAL(&jobLock);return ok;}
 static void jobBegin(const char *id,const char *source,bool control=false) {portENTER_CRITICAL(&jobLock);currentJob.begin(id,source,control);portEXIT_CRITICAL(&jobLock);}
 static void jobFinish(const char *state) {portENTER_CRITICAL(&jobLock);currentJob.finish(state);portEXIT_CRITICAL(&jobLock);}
 static void jobProgress(unsigned total,unsigned completed) {portENTER_CRITICAL(&jobLock);currentJob.total=total;currentJob.completed=completed;portEXIT_CRITICAL(&jobLock);}
@@ -11,3 +16,5 @@ static void jobProgress(unsigned total,unsigned completed) {portENTER_CRITICAL(&
 static void jobRejectBeforeStart(const char *id,unsigned total,bool control) {portENTER_CRITICAL(&jobLock);currentJob.rejectBeforeStart(id,"lan",total,control);portEXIT_CRITICAL(&jobLock);}
 
 static void jobMetadata(const char *title,const char *client,const char *os) {portENTER_CRITICAL(&jobLock);currentJob.metadata(title,client,os);portEXIT_CRITICAL(&jobLock);}
+
+static void jobRecoveryProgress(const PrintRecovery::Checkpoint &checkpoint){portENTER_CRITICAL(&jobLock);currentJob.automaticRecovery=true;currentJob.completed=checkpoint.confirmed;currentJob.completedSheets=checkpoint.sheets();portEXIT_CRITICAL(&jobLock);}

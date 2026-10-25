@@ -19,13 +19,14 @@ function Get-DeviceView($s) {
   if ($s.capt.paper_required) {$errors+='Kiểm tra giấy, khổ giấy và khay giấy đã chọn.'}
   if ($s.capt.toner_warning) {$errors+='Cảnh báo mực.'}
   if ($errors.Count) {$title=if ($s.capt.service_error) {"Canon $($s.capt.service_code)"} else {'Máy in cần xử lý'};$detail=$errors -join "`r`n";$kind=if ($s.capt.service_error -or $s.capt.paper_jam) {'error'} else {'warning'}}
+  elseif ($s.job_control.state -eq 'waiting_printer') {$title='Đang chờ khôi phục';$detail='Xử lý lỗi, đóng nắp/nạp giấy; máy sẵn sàng sẽ tự tiếp tục.';$kind='warning'}
   elseif ($s.job_control.state -eq 'uncertain') {$title='Lệnh cần đối soát';$detail='Chưa rõ kết quả lệnh trước; không tự in lại.';$kind='warning'}
   elseif ($s.job_control.state -eq 'paused') {$title='Đã tạm dừng';$detail='Lệnh đang tạm dừng gửi.';$kind='warning'}
   elseif ($s.active) {$title='Đang in';$detail='Máy in đang xử lý lệnh.';$kind='busy'}
  }
  $j=$s.job_control
- $phases=@{printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
- $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif ($j.id -and $j.state -eq 'uncertain') {'Lệnh cần đối soát — chưa rõ kết quả in'} elseif (!$j.id -or !$j.active) {'Trạm hiện không có lệnh đang chạy'} else {
+ $phases=@{cancelled='Đã hủy gửi';waiting_printer='Chờ máy in để tự in tiếp';printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
+ $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif ($j.id -and $j.state -eq 'uncertain') {'Lệnh cần đối soát — chưa rõ kết quả in'} elseif (!$j.id -or (!$j.active -and $j.state -ne 'waiting_printer')) {'Trạm hiện không có lệnh đang chạy'} else {
   $phase=if ($phases.ContainsKey([string]$j.state)) {$phases[[string]$j.state]} else {$j.state}
   if ($j.total -gt 0) {"$phase · Đã ghi nhận $($j.completed) / $($j.total) mặt in"} else {"$phase · Chưa có tổng số mặt in"}
  }

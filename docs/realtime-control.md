@@ -1,3 +1,5 @@
+> Bổ sung 25/10/2026: [Khôi phục lỗi giấy và điều khiển job](paper-jam-recovery.md) thay quy tắc khóa Hủy/Xóa của job `uncertain`; giữ phiên khi lỗi hết, khôi phục theo tờ chỉ khi có checkpoint.
+
 # ESP32: trạng thái trực tiếp và điều khiển job — bàn giao 23/10/2026
 
 > Quy định nguồn trạng thái độc lập trên ESP, capability và dữ liệu chưa biết: [status-parity.md](status-parity.md).

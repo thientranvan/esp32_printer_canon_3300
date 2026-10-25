@@ -833,3 +833,5 @@ CAPT nguồn mở, không cần máy trung gian. Xem [phạm vi và kiểm thử
 [ESP32PrinterSetup.exe](installers/ESP32PrinterSetup.exe): giao diện chọn IP, đọc
 trạm, đặt tên và cài/cập nhật; nhúng script hiện tại, không cần copy lệnh. Có nút
 tải EXE trên trang từng ESP. [Build và giới hạn kiểm thử](docs/windows-exe.md).
+
+Khôi phục kẹt giấy/tắt bật máy in: [checkpoint theo tờ, LAN/cloud và giới hạn](docs/paper-jam-recovery.md). Cần firmware và bộ gửi LAN mới; job cũ `uncertain` không tự nâng cấp.

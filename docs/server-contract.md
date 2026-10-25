@@ -1,3 +1,7 @@
+# Bổ sung khôi phục kẹt giấy (25/10/2026)
+
+Xem [paper-jam-recovery.md](paper-jam-recovery.md): `job.state=waiting_printer`, `job.recovery`, tự gửi lại phần chưa hoàn tất sau máy in ngắt/kết nối lại, trong cùng lần thực thi. Không requeue/claim lại hoặc replay journal sau ESP reset. Quy tắc đối soát bên dưới vẫn áp dụng nếu không có checkpoint hợp lệ.
+
 # Contract ESP32–quanly.lophocbinhminh.com, v1
 
 > Quy định nguồn trạng thái độc lập trên ESP, capability và dữ liệu chưa biết: [status-parity.md](status-parity.md).

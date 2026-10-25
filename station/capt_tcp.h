@@ -2,6 +2,11 @@
 #include <WiFi.h>
 #include "job_runtime.h"
 #include <cJSON.h>
+#include "print_recovery.h"
+static PrintRecovery::Checkpoint lanRecovery;
+// ponytail: remember last 16 completed LAN IDs in RAM; persistent spool needed across ESP reboot.
+static std::vector<std::pair<std::string,bool>> lanCompletedIds;
+static void rememberLanResult(const char *id,bool cancelled){lanCompletedIds.push_back({id,cancelled});if(lanCompletedIds.size()>16)lanCompletedIds.erase(lanCompletedIds.begin());}
 
 // ponytail: direct CAPT TCP, one active connection, OS spoolers hold queued jobs.
 // Add a durable ESP spool for independently submitted prepared jobs (VPS path).
@@ -67,7 +72,7 @@ static void captTCPTask(void *) {
     }
     client.setNoDelay(true);
     captTCPTotal.store(0); captTCPCompleted.store(0);
-    bool printJob=false,released=false,cooperative=false,mayPrint=false;char jobId[65]={},jobTitle[129]={},jobClient[97]={},jobOS[9]={};
+    bool printJob=false,released=false,cooperative=false,mayPrint=false,recoverable=false;unsigned resumeBase=0;char jobId[65]={},jobTitle[129]={},jobClient[97]={},jobOS[9]={};
     snprintf(jobId,sizeof(jobId),"lan-%08lx-%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
     captTCPState.store(1);
     uint32_t waiting = millis();
@@ -83,6 +88,39 @@ static void captTCPTask(void *) {
         uint16_t opcode = uint16_t(buffer[0]) | (uint16_t(buffer[1]) << 8);
         unsigned length = unsigned(buffer[2]) | (unsigned(buffer[3]) << 8);
         captTCPHeader.store(uint32_t(opcode) | (uint32_t(length) << 16));
+        // Full sheet plan, not client progress. ESP chooses restart checkpoint.
+        if(opcode==0xF005) {
+          if(!cooperative||printJob||length<5||length>9904)break;
+          std::vector<uint8_t> plan(length-4);
+          if(!tcpRead(client,plan.data(),plan.size())||!PrintRecovery::Checkpoint::valid(plan))break;
+          bool alreadyDone=false,cancelledDone=false;for(const auto &result:lanCompletedIds)if(result.first==jobId){alreadyDone=true;cancelledDone=result.second;}
+          if(alreadyDone){uint8_t done[10]={5,0xF0,10,0,0,1,uint8_t(cancelledDone?254:253),255,255,255};client.write(done,10);break;}
+          auto previous=jobSnapshot();bool same=lanRecovery.matches(jobId,plan);
+          if(previous.matches(jobId)&&!same)break;
+          if(same&&!strcmp(previous.state,"completed")){
+            const uint8_t completed[10]={5,0xF0,10,0,0,1,253,255,255,255};
+            client.write(completed,10);break;
+          }
+          if(same&&!strcmp(previous.request,"cancel_requested")){
+            const uint8_t cancelled[10]={5,0xF0,10,0,0,1,254,255,255,255};
+            client.write(cancelled,10);rememberLanResult(jobId,true);jobFinish("cancelled");if(previous.deleteAfterStop)jobCommand(jobId,"delete");lanRecovery=PrintRecovery::Checkpoint();break;
+          }
+          bool held=previous.id[0]&&(!strcmp(previous.state,"waiting_printer")||!strcmp(previous.state,"uncertain")||previous.active);
+          if(held&&!same)break;
+          if(!same){
+            lanRecovery.begin(jobId,plan,printerEpoch.load());jobBegin(jobId,"lan",true);jobMetadata(jobTitle,jobClient,jobOS);
+            jobProgress(plan.size(),0);jobRecoveryProgress(lanRecovery);jobFinish("waiting_printer");
+          }
+          auto u=readUSB();unsigned offset=0xFFFFFFFF;
+          if(!strcmp(previous.request,"pause_requested")){const uint8_t paused[10]={5,0xF0,10,0,0,1,255,255,255,255};client.write(paused,10);break;}
+          if(u.connected&&u.responsive&&!u.recovering&&captFresh()&&!captFault()&&lanRecovery.restart(printerEpoch.load())){
+            recoverable=true;resumeBase=lanRecovery.base;offset=resumeBase;
+          }
+          uint8_t ack[10]={5,0xF0,10,0,0,1};
+          for(unsigned i=0;i<4;++i)ack[6+i]=offset>>(8*i);
+          if(client.write(ack,10)!=10||offset==0xFFFFFFFF)break;
+          continue;
+        }
         if(opcode==0xF004) {
           if(!cooperative||printJob||length<6||length>1028||!tcpRead(client,buffer+4,length-4))break;
           buffer[length]=0;auto *meta=cJSON_Parse((char *)buffer+4);bool valid=cJSON_IsObject(meta);
@@ -119,10 +157,11 @@ static void captTCPTask(void *) {
           unsigned total=uint32_t(buffer[4])|(uint32_t(buffer[5])<<8)|(uint32_t(buffer[6])<<16)|(uint32_t(buffer[7])<<24);
           if(!total || total>9900){captTCPError.store(ESP_ERR_INVALID_ARG);break;}
           // Fault retries must not repeatedly turn the same failed job into printing.
-          if(captFault()){jobRejectBeforeStart(jobId,total,cooperative);if(jobSnapshot().matches(jobId))jobMetadata(jobTitle,jobClient,jobOS);captTCPError.store(ESP_FAIL);break;}
+          if(!recoverable&&captFault()){jobRejectBeforeStart(jobId,total,cooperative);if(jobSnapshot().matches(jobId))jobMetadata(jobTitle,jobClient,jobOS);captTCPError.store(ESP_FAIL);break;}
           captTCPTotal.store(total);
-          if(!printJob){if(!strcmp(jobSnapshot().state,"uncertain"))break;jobBegin(jobId,"lan",cooperative);jobMetadata(jobTitle,jobClient,jobOS);printJob=true;}
-          jobProgress(total,0);
+          if(recoverable&&total!=lanRecovery.flags.size())break;
+          if(!printJob){if(!recoverable&&(!strcmp(jobSnapshot().state,"uncertain")||!strcmp(jobSnapshot().state,"waiting_printer")))break;jobBegin(jobId,"lan",cooperative);jobMetadata(jobTitle,jobClient,jobOS);printJob=true;}
+          jobProgress(total,resumeBase);if(recoverable)jobRecoveryProgress(lanRecovery);
           const uint8_t ack[6]={1,0xF0,6,0,0,1};
           if(client.write(ack,6)!=6)break;
           continue;
@@ -133,7 +172,7 @@ static void captTCPTask(void *) {
             group == 0xD0 || group == 0xE0 || group == 0xE1)) {
           captTCPError.store(ESP_ERR_INVALID_ARG); break;
         }
-        if(printJob && (opcode==0xA3A2 || group==0xC0 || group==0xD0))mayPrint=true;
+        if(printJob && (opcode==0xA3A2 || group==0xC0 || group==0xD0)){mayPrint=true;if(recoverable)lanRecovery.started=true;}
         unsigned remaining = length - 4;
         int first = min(remaining, 4092U);
         int received = 0;
@@ -162,11 +201,25 @@ static void captTCPTask(void *) {
               captRecordFrame(service,CaptStatus::word(service+2));
           }
         }
-        if(opcode==0xA0A8 && replyLength>=40){captTCPCompleted.store(CaptStatus::decode(buffer).completed);if(printJob)jobProgress(captTCPTotal.load(),captTCPCompleted.load());}
+        if(printJob&&opcode==0xA0A8&&replyLength>=40){
+          auto fault=CaptStatus::decode(buffer);bool blocked=fault.service||fault.jam||fault.cover||fault.paper;
+          portENTER_CRITICAL(&jobLock);
+          if(blocked&&strcmp(currentJob.state,"paused"))strcpy(currentJob.state,"waiting_printer");
+          else if(!blocked&&!strcmp(currentJob.state,"waiting_printer"))strcpy(currentJob.state,"printing");
+          portEXIT_CRITICAL(&jobLock);
+        }
+        if(opcode==0xA0A8 && replyLength>=40){unsigned count=CaptStatus::decode(buffer).completed;captTCPCompleted.store(resumeBase+count);if(printJob){if(recoverable&&lanRecovery.started&&!lanRecovery.observe(count)){captTCPError.store(ESP_ERR_INVALID_RESPONSE);break;}jobProgress(captTCPTotal.load(),recoverable?lanRecovery.confirmed:captTCPCompleted.load());if(recoverable)jobRecoveryProgress(lanRecovery);}}
         if(opcode==0xE0A9 && replyLength>=6 && !(buffer[4]&128))released=true;
         if(client.write(buffer,replyLength)!=replyLength)break;
       }
-      if(printJob)jobFinish(released && captTCPCompleted.load()>=captTCPTotal.load()?"completed":mayPrint?"uncertain":"failed");
+      if(printJob){
+        bool done=released&&captTCPCompleted.load()>=captTCPTotal.load();
+        auto j=jobSnapshot();bool cancelled=!strcmp(j.request,"cancel_requested");
+        jobFinish(done?"completed":cancelled?"cancelled":recoverable&&mayPrint?"waiting_printer":mayPrint?"uncertain":"failed");
+        if(recoverable&&(done||cancelled))rememberLanResult(jobId,cancelled);
+        if(cancelled&&j.deleteAfterStop)jobCommand(jobId,"delete");
+        if(cancelled)lanRecovery=PrintRecovery::Checkpoint();
+      }
       releaseCapt(1);
     }
     client.stop();

@@ -78,13 +78,14 @@ function Get-DeviceView($s) {
   if ($s.capt.paper_required) {$errors+='Kiểm tra giấy, khổ giấy và khay giấy đã chọn.'}
   if ($s.capt.toner_warning) {$errors+='Cảnh báo mực.'}
   if ($errors.Count) {$title=if ($s.capt.service_error) {"Canon $($s.capt.service_code)"} else {'Máy in cần xử lý'};$detail=$errors -join "`r`n";$kind=if ($s.capt.service_error -or $s.capt.paper_jam) {'error'} else {'warning'}}
+  elseif ($s.job_control.state -eq 'waiting_printer') {$title='Đang chờ khôi phục';$detail='Xử lý lỗi, đóng nắp/nạp giấy; máy sẵn sàng sẽ tự tiếp tục.';$kind='warning'}
   elseif ($s.job_control.state -eq 'uncertain') {$title='Lệnh cần đối soát';$detail='Chưa rõ kết quả lệnh trước; không tự in lại.';$kind='warning'}
   elseif ($s.job_control.state -eq 'paused') {$title='Đã tạm dừng';$detail='Lệnh đang tạm dừng gửi.';$kind='warning'}
   elseif ($s.active) {$title='Đang in';$detail='Máy in đang xử lý lệnh.';$kind='busy'}
  }
  $j=$s.job_control
- $phases=@{printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
- $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif ($j.id -and $j.state -eq 'uncertain') {'Lệnh cần đối soát — chưa rõ kết quả in'} elseif (!$j.id -or !$j.active) {'Trạm hiện không có lệnh đang chạy'} else {
+ $phases=@{cancelled='Đã hủy gửi';waiting_printer='Chờ máy in để tự in tiếp';printing='Đang in';paused='Đã tạm dừng';failed='Lệnh lỗi';uncertain='Chưa rõ kết quả';completed='Đã hoàn tất';resolved='Đã đối soát'}
+ $progress=if (!$s) {'Mất kết nối — chưa có tiến trình mới'} elseif ($j.id -and $j.state -eq 'uncertain') {'Lệnh cần đối soát — chưa rõ kết quả in'} elseif (!$j.id -or (!$j.active -and $j.state -ne 'waiting_printer')) {'Trạm hiện không có lệnh đang chạy'} else {
   $phase=if ($phases.ContainsKey([string]$j.state)) {$phases[[string]$j.state]} else {$j.state}
   if ($j.total -gt 0) {"$phase · Đã ghi nhận $($j.completed) / $($j.total) mặt in"} else {"$phase · Chưa có tổng số mặt in"}
  }
@@ -390,11 +391,22 @@ public static class Esp32CaptBridge {
   b=ReadExact(s,4);Need(U16(b,0)==op && U16(b,2)>=4 && U16(b,2)<=4096,"Invalid CAPT reply");return ReadExact(s,U16(b,2)-4);
  }
  static byte[] Ack(Stream s,int op,byte[] data) { byte[] b=Command(s,op,data,true);Need(b.Length>=2 && (b[0]&128)==0,"Printer rejected "+op.ToString("X4"));return b; }
+ static string activeJobId;static bool statusWaited;
  static ushort[] Status(Stream s) {
+  bool blocked=false;
+  while(true){
   byte[] b=Ack(s,0xA0A8,null);Need(b.Length>=36,"Truncated printer status");
   if((b[2]&8)!=0){byte[] e=Ack(s,0xA2A2,null);string code=e.Length>=8&&e[1]>0?"E"+U16(e,4).ToString("X3")+" "+U16(e,6).ToString("X4"):"service fault";
-   throw new IOException("Canon "+code+"; inspect printer before resuming");}
+   Note("Canon "+code+"; chờ xử lý lỗi máy in");}
+  bool fault=(b[2]&8)!=0 || (U16(b,12)&(0x100|0x4000))!=0 || (U16(b,8)&0x4000)!=0;
+  if(fault){
+   blocked=true;
+   if(activeJobId!=null && !(s is TestPrinter) && ControlSnapshot(activeJobId).Contains("\"request\":\"cancel_requested\""))throw new IOException("Operator cancelled submission; buffered sheets may still print.");
+   Thread.Sleep(250);continue;
+  }
+  if(blocked)statusWaited=true;
   return new ushort[]{U16(b,14),U16(b,16),U16(b,18),U16(b,20)};
+  }
  }
  static byte[] Info(int id,int stage,int page) {
   byte[] b=new byte[72];DateTime t=DateTime.Now;Put32(b,4,(uint)page);b[16]=(byte)stage;b[17]=1;Put16(b,18,id);Put16(b,20,65116);Put16(b,22,65116);Put16(b,24,t.Year);
@@ -424,13 +436,17 @@ public static class Esp32CaptBridge {
   return result;
  }
  // ponytail: two decoded pages ahead of engine start; validate before enlarging window.
- static void CheckControl(Stream s,string jobId) {
-  if(jobId==null)return;
-  bool paused=false;
-  while(true){
+ static string ControlSnapshot(string jobId) {
    HttpWebRequest request=(HttpWebRequest)WebRequest.Create("http://__STATION_IP__/printer/status");request.Proxy=null;request.Timeout=1200;request.ReadWriteTimeout=1200;
    string json;using(WebResponse response=request.GetResponse())using(StreamReader reader=new StreamReader(response.GetResponseStream())){char[] data=new char[8193];int n=0,k;while(n<data.Length && (k=reader.Read(data,n,data.Length-n))>0)n+=k;Need(n<=8192,"Job control response too large");json=new string(data,0,n);}
    Need(json.Contains("\"id\":\""+jobId+"\""),"Active job identity changed; result uncertain");
+   return json;
+ }
+ static void CheckControl(Stream s,string jobId) {
+  if(jobId==null || s is TestPrinter)return;
+  bool paused=false;
+  while(true){
+   string json=ControlSnapshot(jobId);
    if(json.Contains("\"request\":\"cancel_requested\""))throw new IOException("Operator cancelled submission; buffered pages may still print. Inspect before retry.");
    if(json.Contains("\"request\":\"resume_requested\"")){Ack(s,0xF003,new byte[]{2});return;}
    if(!json.Contains("\"request\":\"pause_requested\""))return;
@@ -439,36 +455,47 @@ public static class Esp32CaptBridge {
   }
  }
  static void PrintJob(Stream s,Job job,Action<int,string> progress,string jobId=null) {
+  activeJobId=jobId;statusWaited=false;
   if(jobId!=null){Ack(s,0xF002,System.Text.Encoding.UTF8.GetBytes(jobId));
    if(__METADATA_SUPPORTED__){string host=Environment.MachineName;while(System.Text.Encoding.UTF8.GetByteCount(host)>96)host=host.Substring(0,host.Length-1);
    host=host.Replace("\\","\\\\").Replace("\"","\\\"");
    Ack(s,0xF004,System.Text.Encoding.UTF8.GetBytes("{\"title\":\"\",\"client_name\":\""+host+"\",\"client_os\":\"windows\"}"));}}
-  Ack(s,0xF001,BitConverter.GetBytes(job.Pages.Count*job.Copies));
+  List<Page> plan=Plan(job);int resumeBase=0;
+  if(__RECOVERY_SUPPORTED__ && jobId!=null){
+   byte[] flags=new byte[plan.Count];for(int i=0;i<flags.Length;i++)flags[i]=(byte)(plan[i].Parameters[9]&6);
+   byte[] checkpoint=Ack(s,0xF005,flags);Need(checkpoint.Length==6,"Invalid ESP recovery checkpoint");
+   uint offset=U32(checkpoint,2);if(offset==UInt32.MaxValue-2){progress(plan.Count,"Completed");return;}if(offset==UInt32.MaxValue-1)throw new IOException("Operator cancelled submission; inspect buffered sheets.");if(offset==UInt32.MaxValue)throw new IOException("RECOVERY_WAIT: waiting for printer restart / ready");
+   Need(offset<=(uint)plan.Count,"Invalid recovery offset");resumeBase=(int)offset;
+  }
+  Ack(s,0xF001,BitConverter.GetBytes(plan.Count));
+  plan.RemoveRange(0,resumeBase);
   byte[] model=Ack(s,0xA1A1,null);Need(model.Length>=4 && U16(model,2)==0x2A94,"Wrong printer model");
   ushort[] counters=Status(s);Need(counters[0]==counters[1] && counters[0]==counters[2] && counters[0]==counters[3],"Printer has an unresolved page");
   progress(0,"Starting job");
   Ack(s,0xA3A2,null);byte[] reservation=new byte[8];Put16(reservation,2,30);byte[] r=Ack(s,0xA2A0,reservation);Need(r.Length==4,"Invalid reservation");int id=U16(r,2);
   Ack(s,0xE1A1,Info(id,1,0));Ack(s,0xE0A3,null);Ack(s,0xE0A2,null);Ack(s,0xE0A4,null);
   byte[] init=new byte[16];Put32(init,0,0xADEADBEE);Ack(s,0xE0A5,init);
-  List<Page> plan=Plan(job);int total=plan.Count;
+  int total=plan.Count;
   for(int number=1;number<=total;number++){
    CheckControl(s,jobId);
    // Bound decoded pages ahead of engine start, not sheets awaiting output.
    Stopwatch timer=Stopwatch.StartNew();
-   while(number>2){counters=Status(s);if(counters[1]>=number-2)break;if(timer.Elapsed.TotalSeconds>60)throw new IOException("Page completion uncertain; inspect printer before retry");Thread.Sleep(200);}
+   while(number>2){counters=Status(s);if(statusWaited){timer.Restart();statusWaited=false;}if(counters[1]>=number-2)break;if(timer.Elapsed.TotalSeconds>60)throw new IOException("Page completion uncertain; inspect printer before retry");Thread.Sleep(200);}
+   CheckControl(s,jobId);
    Page page=plan[number-1];
    byte[] source=new byte[]{2,1,0xB0,9,0xB3,13,1,(byte)(page.Parameters[9]&8)};r=Ack(s,0xE1A9,source);Need(r.Length==2 && r[0]==0 && r[1]==1,"A4 cassette 1 unavailable");
    byte[] parameters=(byte[])page.Parameters.Clone();parameters[10]=1;Command(s,0xD0A9,parameters,false);
    foreach(byte[] band in page.Bands)for(int p=0;p<band.Length;p+=4092)Command(s,0xC0A0,Part(band,p,Math.Min(4092,band.Length-p)),false);
    Command(s,0xC0A4,null,false);progress(number,"Raster sent");timer.Restart();
-   while(true){counters=Status(s);if(counters[0]>=number)break;if(timer.Elapsed.TotalSeconds>20)throw new IOException("Page decode timeout; outcome uncertain");Thread.Sleep(200);}
+   while(true){counters=Status(s);if(statusWaited){timer.Restart();statusWaited=false;}if(counters[0]>=number)break;if(timer.Elapsed.TotalSeconds>20)throw new IOException("Page decode timeout; outcome uncertain");Thread.Sleep(200);}
    Need(counters[0]==number,"Unexpected decoded page count; inspect printer before retry");
+   CheckControl(s,jobId);
    Ack(s,0xE1A1,Info(id,2,number));byte[] pageNumber=new byte[2];Put16(pageNumber,0,number);Ack(s,0xE0A7,pageNumber);Ack(s,0xE1A1,Info(id,6,number));
    progress(number,"Submitted");
   }
   Stopwatch completion=Stopwatch.StartNew();
   int lastCompleted=-1;
-  while(true){counters=Status(s);if(counters[3]!=lastCompleted){progress(counters[3],"Printer completed");lastCompleted=counters[3];}if(counters[3]>=total)break;if(completion.Elapsed.TotalSeconds>60)throw new IOException("Job completion uncertain; inspect printer before retry");Thread.Sleep(200);}
+  while(true){counters=Status(s);if(statusWaited){completion.Restart();statusWaited=false;}if(counters[3]!=lastCompleted){progress(counters[3],"Printer completed");lastCompleted=counters[3];}if(counters[3]>=total)break;if(completion.Elapsed.TotalSeconds>60)throw new IOException("Job completion uncertain; inspect printer before retry");Thread.Sleep(200);}
   Ack(s,0xE1A1,Info(id,4,total));byte[] release=new byte[2];Put16(release,0,id);Ack(s,0xE0A9,release);
   progress(total,"Completed");
  }
@@ -518,14 +545,19 @@ public static class Esp32CaptBridge {
   while(true){
    try{
     using(TcpClient c=Connect())PrintJob(c.GetStream(),job,delegate(int number,string state){
-     if(number==0){using(FileStream marker=new FileStream(Pending,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){
+     if(number==0 && !File.Exists(Pending)){using(FileStream marker=new FileStream(Pending,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){
       byte[] text=System.Text.Encoding.UTF8.GetBytes(file+" job started; no automatic retry.\r\n");marker.Write(text,0,text.Length);marker.Flush(true);
      }}
      string message=state+" page "+number+" at "+elapsed.Elapsed.TotalSeconds.ToString("F2")+"s";
      File.AppendAllText(file+".progress",message+"\r\n");Note(message);
     },Path.GetFileNameWithoutExtension(file));
     File.Delete(Pending);break;
-   }catch(Exception e){if(File.Exists(Pending) || e is InvalidDataException)throw;Note("Waiting for ESP: "+e.Message);Thread.Sleep(3000);}
+   }catch(Exception e){
+    bool recover=__RECOVERY_SUPPORTED__ && (File.Exists(Pending)||e.Message.StartsWith("RECOVERY_WAIT:"));
+    if(e.Message.StartsWith("Operator cancelled")){File.Delete(Pending);File.AppendAllText(file+".progress","Cancelled by operator\r\n");Note("Cancelled by operator");return;}
+    if(e is InvalidDataException || (File.Exists(Pending)&&!recover))throw;
+    Note(recover?"ESP giữ điểm khôi phục; chờ máy in bật lại và hết lỗi.":"Waiting for ESP: "+e.Message);Thread.Sleep(1000);
+   }
   }
   Note("Completed "+job.Pages.Count*job.Copies+" page(s) in "+elapsed.Elapsed.TotalSeconds.ToString("F2")+"s");
  }
@@ -541,9 +573,11 @@ public static class Esp32CaptBridge {
  }
  sealed class TestPrinter : Stream {
   readonly Queue<byte> replies=new Queue<byte>();
+  public uint ResumeBase;public int FaultReads;
   public int Reservations,Releases,Decoded,Printing,Printed,MaxAhead,MaxWaiting,StatusReads;public List<int> Raster=new List<int>();
   public override void Write(byte[] b,int offset,int count){
    int op=U16(b,offset);byte[] data=new byte[2];data[1]=1;
+   if(op==0xF005){data=new byte[6];data[1]=1;Put32(data,2,ResumeBase);}
    if(op==0xA1A1){data=new byte[4];Put16(data,2,0x2A94);}
    if(op==0xA2A0){Reservations++;data=new byte[4];Put16(data,2,7);}
    if(op==0xE0A9)Releases++;
@@ -552,8 +586,8 @@ public static class Esp32CaptBridge {
    if(op==0xA0A8){
     // Page one starts before it exits; page three must arrive before any exit.
     Need(++StatusReads<32,"Pipeline waited for paper exit instead of engine start");
-    Printing=Math.Max(0,Decoded-1);if(Decoded>=3)Printed=Decoded;
-    data=new byte[36];Put16(data,14,Decoded);Put16(data,16,Printing);Put16(data,18,Printed);Put16(data,20,Printed);
+    Printing=Math.Max(0,Decoded-1);if(Decoded>=3 || ResumeBase>0)Printed=Decoded;
+    data=new byte[36];Put16(data,14,Decoded);Put16(data,16,Printing);Put16(data,18,Printed);Put16(data,20,Printed);if(FaultReads>0){Put16(data,12,0x100);FaultReads--;}
    }
    if((op>>8)==0xC0 || (op>>8)==0xD0)return;
    foreach(byte v in Packet(op,data))replies.Enqueue(v);
@@ -582,10 +616,24 @@ public static class Esp32CaptBridge {
    Need(printer.Reservations==1 && printer.Releases==1 && printer.Decoded==4 && printer.MaxAhead==3 && printer.MaxWaiting==2,"Job session/pipeline regression");
    Need(String.Join(",",printer.Raster.ToArray())==(collate?"11,22,11,22":"11,11,22,22"),"Copy order regression");
   }
+  TestPrinter faultPrinter=new TestPrinter();faultPrinter.FaultReads=2;
+  PrintJob(faultPrinter,pipeline,delegate(int n,string state){});
+  Need(faultPrinter.Reservations==1 && faultPrinter.Releases==1 && faultPrinter.FaultReads==0,"Clear fault in same session without power cycle");
   pipeline.Duplex=2;pipeline.Collate=true;
   List<Page> duplexPlan=Plan(pipeline);
   Need(duplexPlan.Count==4 && duplexPlan[0].Bands[0][0]==22 && duplexPlan[1].Bands[0][0]==11,"Duplex back/front order failed");
   Need((duplexPlan[0].Parameters[9]&6)==4 && (duplexPlan[1].Parameters[9]&6)==2,"Duplex side flags failed");
+  if(__RECOVERY_SUPPORTED__){
+   TestPrinter resumed=new TestPrinter();resumed.ResumeBase=2;
+   PrintJob(resumed,pipeline,delegate(int n,string state){},"retry-job");
+   Need(resumed.Decoded==2 && String.Join(",",resumed.Raster.ToArray())=="22,11","Recovery must skip completed sheet and resend duplex pair");
+   TestPrinter done=new TestPrinter();done.ResumeBase=UInt32.MaxValue-2;
+   PrintJob(done,pipeline,delegate(int n,string state){},"completed-job");
+   Need(done.Reservations==0 && done.Raster.Count==0,"Lost final ACK must not print again");
+   TestPrinter wait=new TestPrinter();wait.ResumeBase=UInt32.MaxValue;bool waiting=false;
+   try{PrintJob(wait,pipeline,delegate(int n,string state){},"waiting-job");}catch(IOException e){waiting=e.Message.StartsWith("RECOVERY_WAIT:");}
+   Need(waiting && wait.Reservations==0,"Waiting printer must not receive raster");
+  }
   pipeline.Pages.Add(pipeline.Pages[0]);pipeline.Copies=1;duplexPlan=Plan(pipeline);
   Need(duplexPlan.Count==3 && (duplexPlan[2].Parameters[9]&6)==0,"Odd final sheet failed");
   Console.WriteLine("PASS: parser, A4, truncation, one job session, two-page pipeline, copy ordering");
@@ -621,7 +669,7 @@ public static class Esp32CaptBridge {
  }
 }
 '@
-$sourceCode=$sourceCode.Replace('__METADATA_SUPPORTED__',$(if ($profile.lan_metadata_version -ge 1) {'true'} else {'false'})).Replace('__STATION_IP__',$StationIP).Replace('__STATION_ID__',$stationId).Replace('__LOCAL_PORT__',[string]$localPort).Replace('__PRINTER_NAME_BASE64__',[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PrinterName)))
+$sourceCode=$sourceCode.Replace('__RECOVERY_SUPPORTED__',$(if ($profile.lan_recovery_version -ge 1) {'true'} else {'false'})).Replace('__METADATA_SUPPORTED__',$(if ($profile.lan_metadata_version -ge 1) {'true'} else {'false'})).Replace('__STATION_IP__',$StationIP).Replace('__STATION_ID__',$stationId).Replace('__LOCAL_PORT__',[string]$localPort).Replace('__PRINTER_NAME_BASE64__',[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PrinterName)))
 [IO.File]::WriteAllText("$root\bridge.cs",$sourceCode)
 $staged=Join-Path $root 'bridge.new.exe'
 if (Test-Path $staged) { Remove-Item $staged }

@@ -23,6 +23,7 @@ struct USBStatus {
   char details[1536];
 };
 static USBStatus usbStatus = {};
+static std::atomic<uint32_t> printerEpoch{0};
 static bool usbTaskStarted = false;
 static portMUX_TYPE usbLock = portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<int> usbDaemonError{0};
@@ -221,6 +222,7 @@ static void usbTask(void *) {
     }
     serviceCapt(context);
     if (context.gone && status.connected) {
+      printerEpoch.fetch_add(1);
       status.connected = false;
       status.responsive = false;
       snprintf(status.details, sizeof(status.details), "Thiết bị USB đã ngắt kết nối. Đang thu hồi giao dịch USB.");

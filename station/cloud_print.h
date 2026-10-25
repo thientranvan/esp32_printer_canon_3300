@@ -9,7 +9,7 @@
 #include "prepared_job.h"
 
 // ponytail: one prepared job in PSRAM, <=4 MiB; VPS retains durable queue/files.
-// No PDF renderer on ESP. Never retry a job after first possible USB side effect.
+// No PDF renderer on ESP. Restart only after USB disconnect, from confirmed sheets.
 static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
@@ -84,7 +84,7 @@ static std::atomic<uint32_t> cloudCommandSeq{0};
 static std::atomic<int> cloudCommandResult{0};
 static bool cloudHeartbeat(bool force=false) {return cloudOnline.load();}
 static String jobStatusJSON(const PrintControl::Job &j) {
-  return String("{\"title\":")+jsonString(j.title)+",\"client_name\":"+jsonString(j.client)+",\"client_os\":"+jsonString(j.os)+",\"progress_known\":"+(j.total?"true":"false")+",\"progress_unit\":\"impressions\",\"actions\":{\"pause\":"+(j.canPause()?"true":"false")+",\"resume\":"+(j.canResume()?"true":"false")+",\"cancel\":"+(j.canCancel()?"true":"false")+",\"delete\":"+(j.canDelete()?"true":"false")+"},\"id\":"+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
+  return String("{\"recovery\":{\"automatic\":")+(j.automaticRecovery?"true":"false")+",\"confirmed_sheets\":"+(j.automaticRecovery?String(j.completedSheets):String("null"))+",\"next_sheet\":"+(j.automaticRecovery&&strcmp(j.state,"completed")?String(j.completedSheets+1):String("null"))+"},\"title\":"+jsonString(j.title)+",\"client_name\":"+jsonString(j.client)+",\"client_os\":"+jsonString(j.os)+",\"progress_known\":"+(j.total?"true":"false")+",\"progress_unit\":\"impressions\",\"actions\":{\"pause\":"+(j.canPause()?"true":"false")+",\"resume\":"+(j.canResume()?"true":"false")+",\"cancel\":"+(j.canCancel()?"true":"false")+",\"delete\":"+(j.canDelete()?"true":"false")+"},\"id\":"+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
     ",\"request\":"+jsonString(j.request)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
     ",\"total\":"+j.total+",\"completed\":"+j.completed+"}";
 }
@@ -174,17 +174,35 @@ static bool captExchange(uint8_t *buffer,size_t capacity,uint32_t owner,unsigned
 static bool cloudCommand(unsigned op,const uint8_t *payload=nullptr,size_t size=0,bool reply=true) {
   return captExchange(cloudBuffer,sizeof(cloudBuffer),CloudOwner,op,payload,size,reply);
 }
+static PrintRecovery::Checkpoint cloudRecovery;
+static bool cloudTracking=false;static uint32_t cloudFaultTime=0;
 static bool cloudCounters(unsigned *c) {
-  if(!cloudCommand(0xA0A8) || Prepared::u16(cloudBuffer+2)<40)return false;
-  for(int i=0;i<4;++i)c[i]=Prepared::u16(cloudBuffer+18+i*2);
-  portENTER_CRITICAL(&cloudLock);cloudView.completed=c[3];portEXIT_CRITICAL(&cloudLock);
-  auto j=jobSnapshot();if(j.active && !strcmp(j.source,"cloud"))jobProgress(j.total,c[3]);
-  if(CaptStatus::decode(cloudBuffer).service){cloudCommand(0xA2A2);return false;}
-  return true;
+  uint32_t waitStart=millis();bool waited=false;
+  while(true){
+    if(!strcmp(jobSnapshot().request,"cancel_requested"))return false;
+    if(!cloudCommand(0xA0A8)||Prepared::u16(cloudBuffer+2)<40)return false;
+    for(int i=0;i<4;++i)c[i]=Prepared::u16(cloudBuffer+18+i*2);
+    if(cloudTracking&&!cloudRecovery.observe(c[3]))return false;
+    unsigned done=cloudRecovery.confirmed;
+    portENTER_CRITICAL(&cloudLock);cloudView.completed=done;portEXIT_CRITICAL(&cloudLock);
+    auto j=jobSnapshot();if(j.active&&!strcmp(j.source,"cloud")){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
+    auto flags=CaptStatus::decode(cloudBuffer);bool blocked=flags.service||flags.jam||flags.cover||flags.paper;
+    if(flags.service)cloudCommand(0xA2A2);
+    if(!blocked){
+      if(waited)cloudFaultTime+=uint32_t(millis()-waitStart);
+      if(!strcmp(j.state,"waiting_printer")){
+        portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"printing");portEXIT_CRITICAL(&jobLock);cloudState("printing");
+      }
+      return true;
+    }
+    portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
+    waited=true;cloudState("waiting_printer","Fix printer fault; printing continues automatically when ready");
+    cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));
+  }
 }
 static bool cloudWait(unsigned counter,unsigned value,uint32_t limit,bool exact=false) {
   uint32_t start=millis();unsigned c[4];
-  do { if(!cloudCounters(c))return false;if(c[counter]>=value)return !exact || c[counter]==value;
+  do { uint32_t before=cloudFaultTime;if(!cloudCounters(c))return false;start+=uint32_t(cloudFaultTime-before);if(c[counter]>=value)return !exact || c[counter]==value;
     cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));
   }while(uint32_t(millis()-start)<limit);
   return false;
@@ -207,10 +225,11 @@ static bool cloudCheckpoint() {
     if(strcmp(j.request,"pause_requested"))return true;
     portENTER_CRITICAL(&jobLock);if(currentJob.matches(j.id))strcpy(currentJob.state,"paused");portEXIT_CRITICAL(&jobLock);
     cloudState("paused");unsigned c[4];if(!cloudCounters(c))return false;
-    jobProgress(j.total,c[3]);vTaskDelay(pdMS_TO_TICKS(250));
+    jobProgress(j.total,cloudRecovery.confirmed);vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
-static bool cloudPrint(const Prepared::Job &job) {
+static bool cloudPrint(const Prepared::Job &job,unsigned base=0) {
+  cloudTracking=false;
   if(!cloudCommand(0xA1A1) || Prepared::u16(cloudBuffer+2)<8 || Prepared::u16(cloudBuffer+6)!=0x2A94)return false;
   unsigned c[4];if(!cloudCounters(c)||c[0]!=c[1]||c[0]!=c[2]||c[0]!=c[3])return false;
   uint8_t reservation[8]={0,0,30};
@@ -218,10 +237,13 @@ static bool cloudPrint(const Prepared::Job &job) {
   unsigned id=Prepared::u16(cloudBuffer+6);
   uint8_t init[16]={};cloudPut32(init,0xADEADBEE);
   if(!cloudInfo(id,1,0)||!cloudCommand(0xE0A3)||!cloudCommand(0xE0A2)||!cloudCommand(0xE0A4)||!cloudCommand(0xE0A5,init,16))return false;
+  cloudRecovery.started=true;cloudTracking=true;
   unsigned number=0;
-  for(auto side:job.plan) {
+  for(size_t index=base;index<job.plan.size();++index) {
+    auto side=job.plan[index];
     if(!cloudCheckpoint())return false;
     ++number;if(number>2 && !cloudWait(1,number-2,60000))return false;
+    if(!cloudCheckpoint())return false;
     const auto &page=job.pages[side.page];uint8_t params[64];memcpy(params,page.parameters,64);
     params[8]=2;params[9]=(params[9]&~6)|side.flag;params[10]=1;params[40]=1;
     uint8_t source[8]={2,1,0xB0,9,0xB3,13,1,uint8_t(params[9]&8)};
@@ -230,9 +252,10 @@ static bool cloudPrint(const Prepared::Job &job) {
     for(auto band:page.bands) for(size_t p=0;p<band.size;p+=4092)
       if(!cloudCommand(0xC0A0,band.data+p,min(size_t(4092),band.size-p),false))return false;
     if(!cloudCommand(0xC0A4,nullptr,0,false)||!cloudWait(0,number,20000,true)||!cloudInfo(id,2,number))return false;
+    if(!cloudCheckpoint())return false;
     uint8_t n[2];cloudPut16(n,number);
     if(!cloudCommand(0xE0A7,n,2)||!cloudInfo(id,6,number))return false;
-    portENTER_CRITICAL(&cloudLock);cloudView.submitted=number;portEXIT_CRITICAL(&cloudLock);cloudHeartbeat();
+    portENTER_CRITICAL(&cloudLock);cloudView.submitted=base+number;portEXIT_CRITICAL(&cloudLock);cloudHeartbeat();
   }
   if(!cloudWait(3,number,60000)||!cloudInfo(id,4,number))return false;
   uint8_t release[2];cloudPut16(release,id);return cloudCommand(0xE0A9,release,2);
@@ -240,7 +263,7 @@ static bool cloudPrint(const Prepared::Job &job) {
 static void cloudTask(void *) {
   Preferences journal;
   if(!journal.begin("print-cloud",false)){cloudState("blocked","Cannot open durable journal");vTaskDelete(nullptr);return;}
-  String id,lease,state,error;
+  String id,lease,state,error;bool deleteAfterAck=false;
   auto persist=[&]() {
     auto v=cloudSnapshot();String value="{\"id\":"+jsonString(id)+",\"lease\":"+jsonString(lease)+",\"state\":"+jsonString(state)+
       ",\"error\":"+jsonString(error)+",\"total\":"+v.total+",\"completed\":"+v.completed+"}";
@@ -255,10 +278,15 @@ static void cloudTask(void *) {
     auto total=cJSON_GetObjectItem(j,"total"),completed=cJSON_GetObjectItem(j,"completed");
     portENTER_CRITICAL(&cloudLock);strlcpy(cloudView.job,id.c_str(),sizeof(cloudView.job));
     cloudView.progressKnown=state=="completed";cloudView.total=cJSON_IsNumber(total)?total->valueint:0;cloudView.completed=cJSON_IsNumber(completed)?completed->valueint:0;portEXIT_CRITICAL(&cloudLock);
-    cloudNeedsInspection.store(state=="uncertain");jobBegin(id.c_str(),"cloud");jobFinish(state.c_str());cJSON_Delete(j);
+    cloudNeedsInspection.store(state=="uncertain");jobBegin(id.c_str(),"cloud",true);jobProgress(cloudSnapshot().total,cloudSnapshot().completed);jobFinish(state.c_str());cJSON_Delete(j);
   }
 
   while(true) {
+      if(state=="uncertain" && (cloudResolve.exchange(false)||jobSnapshot().stopping())) {
+        auto old=jobSnapshot();deleteAfterAck=old.deleteAfterStop;
+        cloudNeedsInspection.store(false);jobFinish(old.stopping()?"cancelled":"resolved");state="resolved";error=old.stopping()?"Operator discarded interrupted job; no data resent; buffered paper may still print":"Operator inspected printer; no automatic reprint";
+        if(!persist()){cloudState("blocked","Cannot persist resolution");vTaskDelete(nullptr);return;}
+      }
     if(!stationSettings.cloudEnabled){vTaskDelay(pdMS_TO_TICKS(1500));continue;}
     if(WiFi.status()!=WL_CONNECTED || time(nullptr)<1700000000){cloudState("connecting","Waiting for Wi-Fi / trusted clock");vTaskDelay(pdMS_TO_TICKS(1000));continue;}
     if(id.length())cloudState(state.c_str(),error.c_str());
@@ -271,19 +299,16 @@ static void cloudTask(void *) {
         cloudState("idle");
     }
     if(id.length()) {
-      if(state=="uncertain" && cloudResolve.exchange(false)) {
-        cloudNeedsInspection.store(false);jobFinish("resolved");state="resolved";error="Operator inspected printer; no automatic reprint";
-        if(!persist()){cloudState("blocked","Cannot persist resolution");vTaskDelete(nullptr);return;}
-      }
       auto v=cloudSnapshot();String response;
       String event="{\"schema\":1,\"state\":"+jsonString(state)+",\"error\":"+jsonString(error)+",\"progress_known\":"+(v.progressKnown?"true":"false")+",\"total\":"+v.total+",\"completed\":"+v.completed+"}";
       int code=cloudPost("/jobs/"+id+"/events",event,response,lease);
       if(code==204 && state!="uncertain") {
         if(!journal.remove("job")){cloudState("blocked","Cannot clear acknowledged journal");vTaskDelete(nullptr);return;}
+        if(deleteAfterAck){jobCommand(id,"delete");deleteAfterAck=false;}
         id="";lease="";state="";error="";
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
-    }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain")) {
+    }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
       String response,detail;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",nullptr,&detail);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256"),title=cloudText(j,"title");if(title.length()>128)title="";
@@ -308,9 +333,34 @@ static void cloudTask(void *) {
           cloudNeedsInspection.store(true);state="uncertain";error="USB submission may have started; inspect before reprinting";
           if(!persist()){free(data);releaseCapt(CloudOwner);cloudState("blocked","Cannot persist before USB");vTaskDelete(nullptr);return;}
           jobBegin(id.c_str(),"cloud",true);jobMetadata(title.c_str(),"Web server","web");jobProgress(job.plan.size(),0);
+          std::vector<uint8_t> flags;for(auto side:job.plan)flags.push_back(side.flag);
+          cloudRecovery.begin(id.c_str(),flags,printerEpoch.load());jobRecoveryProgress(cloudRecovery);
           cloudState("printing");bool done=cloudPrint(job);
+          while(!done){
+            cloudTracking=false;releaseCapt(CloudOwner);
+            auto control=jobSnapshot();if(!strcmp(control.request,"cancel_requested"))break;
+            portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
+            cloudState("waiting_printer","Printer interrupted; waiting for restart to reprint incomplete sheet");
+            bool ready=false;
+            while(!ready){
+              control=jobSnapshot();if(!strcmp(control.request,"cancel_requested"))break;
+              auto usb=readUSB();
+              ready=printerEpoch.load()!=cloudRecovery.epoch&&usb.connected&&usb.responsive&&!usb.recovering&&captFresh()&&!captFault();
+              if(!ready){cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));}
+            }
+            if(!ready)break;
+            while(!claimCapt(CloudOwner)){cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(50));}
+            if(!cloudRecovery.restart(printerEpoch.load()))break;
+            portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"printing");portEXIT_CRITICAL(&jobLock);
+            cloudState("printing");done=cloudPrint(job,cloudRecovery.base);
+          }
+          cloudTracking=false;
           if(done){cloudNeedsInspection.store(false);state="completed";error="";}
-          jobFinish(done?"completed":"uncertain");
+          auto stopped=jobSnapshot();
+          if(!done&&stopped.stopping()){
+            state="resolved";error="Operator cancelled submission; buffered paper may still print";cloudNeedsInspection.store(false);deleteAfterAck=stopped.deleteAfterStop;
+          }
+          jobFinish(done?"completed":stopped.stopping()?"cancelled":"uncertain");
           releaseCapt(CloudOwner);
         }else {state="failed";error="Download, checksum, memory or format validation failed; no pages sent";}
         free(data);
