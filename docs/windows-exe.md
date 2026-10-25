@@ -44,3 +44,7 @@ Triển khai 25/10/2026: EXE và SHA-256 đã lên GitHub, tải lại từ raw 
 khớp. Máy 1 đã nạp giao diện mới qua COM, đúng MAC `98:C3:77:A1:36:B0`, hash
 verified; boot `STATION: PASS`, Wi-Fi status 3, AP `ESP32-Printer-May1`.
 Người dùng yêu cầu Máy 2/3 để nạp sau; chưa cập nhật giao diện EXE trên hai bo đó.
+
+Cả hai cách cài được giữ trên ESP: EXE là nút chính; mục thu gọn **Cài bằng
+PowerShell (cách cũ)** có link PS1, hướng dẫn mở PowerShell quản trị, lệnh chọn
+file đã tải với IP của trạm và nút sao chép. Không cần dùng EXE nếu chọn cách cũ.
