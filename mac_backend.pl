@@ -8,7 +8,8 @@ use POSIX qw(strftime uname);
 use Encode qw(encode decode FB_CROAK);
 
 # ponytail: A4/cassette 1 and <=100 pages, <=20 MiB. Validate other paper sources before extending.
-my $socket;
+my $socket;my $activeJob;my $faultElapsed=0;
+sub active_time {return time-$faultElapsed;}
 my $stationHost;my $stationPort=9100;my $metadataSupported=0;my $recoverySupported=0;my $resumeBase=0;
 my @completedSheets=(0);my $lastCompleted=-1;
 my $cache = '/Library/Caches/ESP32Printer';
@@ -51,6 +52,8 @@ sub ack {
     return $result;
 }
 sub status {
+    my $faultStart;
+    while(1){
     my $s = ack(0xA0A8);
     fail('Truncated extended status') unless length($s) >= 36;
     my $flags=unpack('x12v',$s);
@@ -64,7 +67,7 @@ sub status {
         my ($code,$sub)=unpack('x4vv',$service);
         print STDERR sprintf("ERROR: Canon service E%03X %04X\n",$code,$sub);
       }
-      fail('Canon service fault; inspect printer before resuming');
+
     }
     my @c=unpack('x14v4',$s);
     if($c[3]!=$lastCompleted && @completedSheets>1){
@@ -74,7 +77,15 @@ sub status {
       $lastCompleted=$c[3];
     }
     print STDERR "INFO: Printer completed $c[3] image(s)\n" unless $flags&(0x100|0x4000);
+    if((ord(substr($s,2,1))&8)||($flags&(0x100|0x4000))||(unpack('x8v',$s)&0x4000)){
+      $faultStart//=time;
+      my $control=control_snapshot($activeJob);
+      fail('Operator cancelled submission; buffered sheets may still print.') if ($control->{job_control}{request}//'') eq 'cancel_requested';
+      select(undef,undef,undef,0.25);next;
+    }
+    $faultElapsed+=time-$faultStart if defined $faultStart;
     return @c;
+    }
 }
 sub info {
     my ($id, $stage, $page) = @_;
@@ -150,15 +161,19 @@ sub plan_pages {
     }
     return @plan;
 }
+sub control_snapshot {
+    my ($job)=@_;require JSON::PP;
+        open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2',"http://$stationHost/printer/status") or fail('Cannot read job control');
+        local $/; my $body=<$curl>;close($curl) or fail('ESP job control unavailable; outcome uncertain');
+        my $s=eval { JSON::PP::decode_json($body) };fail('Invalid job control response') unless $s && ($s->{job_control}{id}//'') eq $job;
+    return $s;
+}
 sub check_control {
     my ($job) = @_; my $paused=0;
     require JSON::PP;
     while (1) {
-        open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2',"http://$stationHost/printer/status") or fail('Cannot read job control');
-        local $/; my $body=<$curl>;close($curl) or fail('ESP job control unavailable; outcome uncertain');
-        my $s=eval { JSON::PP::decode_json($body) };fail('Invalid job control response') unless $s && ($s->{job_control}{id}//'') eq $job;
+        my $s=control_snapshot($job);
         my $request=$s->{job_control}{request}//'';
-        if($resumeBase==0xFFFFFFFD){unlink($pending) if -e $pending;return;}
         fail('Operator cancelled submission; buffered pages may still print. Inspect before retry.') if $request eq 'cancel_requested';
         if ($request eq 'resume_requested') {ack(0xF003,pack('C',2));return;}
         return unless $request eq 'pause_requested';
@@ -167,7 +182,7 @@ sub check_control {
     }
 }
 sub print_pages_attempt {
-    my ($job,@pages) = @_;
+    my ($job,@pages) = @_;$activeJob=$job;
     @completedSheets=(0);$lastCompleted=-1;
     for my $p (@pages){push @completedSheets,$completedSheets[-1]+((ord(substr($p->[0],9,1))&4)?0:1);}
     ack(0xF002,$job);
@@ -180,6 +195,7 @@ sub print_pages_attempt {
         my $r=ack(0xF005,join('',map {chr(ord(substr($_->[0],9,1))&6)} @pages));
         fail('Invalid recovery checkpoint') unless length($r)==6;
         $resumeBase=unpack('x2V',$r);
+        if($resumeBase==0xFFFFFFFD){unlink($pending) if -e $pending;return;}
         fail('Operator cancelled submission; inspect buffered sheets.') if $resumeBase==0xFFFFFFFE;
         fail('RECOVERY_WAIT: ESP waiting for printer restart / ready') if $resumeBase==0xFFFFFFFF;
         fail('Invalid recovery offset') if $resumeBase>@pages;
@@ -208,8 +224,9 @@ sub print_pages_attempt {
         check_control($job);
         my ($parameters, $bands) = @$entry;
         ++$page;
-        my $deadline = time + 60;
-        while ($page > 2) { @c = status(); last if $c[1] >= $page - 2; fail('Engine start uncertain') if time > $deadline; select(undef, undef, undef, 0.2); }
+        my $deadline = active_time() + 60;
+        while ($page > 2) { @c = status(); last if $c[1] >= $page - 2; fail('Engine start uncertain') if active_time() > $deadline; select(undef, undef, undef, 0.2); }
+        check_control($job);
         my ($w, $h) = unpack('vv', substr($parameters, 0x22, 4));
         my $shift = ord(substr($parameters, 0x11, 1));
         my $source = ack(0xE1A9, pack('CCvvCC', ord(substr($parameters, 8, 1)),
@@ -224,16 +241,17 @@ sub print_pages_attempt {
             }
         }
         command(0xC0A4, '', 0);
-        $deadline = time + 20;
-        while (1) { @c = status(); last if $c[0] >= $page; fail('Decode timeout') if time > $deadline; select(undef, undef, undef, 0.5); }
+        $deadline = active_time() + 20;
+        while (1) { @c = status(); last if $c[0] >= $page; fail('Decode timeout') if active_time() > $deadline; select(undef, undef, undef, 0.5); }
         fail('Unexpected decoded page count') unless $c[0] == $page;
+        check_control($job);
         ack(0xE1A1, info($id, 2, $page));
         ack(0xE0A7, pack('v', $page));
         ack(0xE1A1, info($id, 6, $page));
         print STDERR "INFO: Submitted image $page/", scalar(@pages), "\n";
     }
-    my $deadline = time + 60;
-    while (1) { @c = status(); last if $c[3] >= $page; fail('Completion uncertain') if time > $deadline; sleep 1; }
+    my $deadline = active_time() + 60;
+    while (1) { @c = status(); last if $c[3] >= $page; fail('Completion uncertain') if active_time() > $deadline; sleep 1; }
     ack(0xE1A1, info($id, 4, $page));
     ack(0xE0A9, pack('v', $id));
     unlink($pending) or fail('Cannot clear pending marker');
@@ -379,4 +397,4 @@ sub main {
     print_pages(@plan);
     close($socket);
 }
-eval { main(); 1 } or do { print STDERR 'ERROR: ', ($@ || 'Unknown print failure'); exit 4; };
+eval { main(); 1 } or do { my $error=$@||'Unknown print failure'; print STDERR 'ERROR: ', $error; if($error =~ /^Operator cancelled/){unlink($pending) if -e $pending;exit 5;}exit 4; };

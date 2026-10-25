@@ -13,13 +13,13 @@ function deviceView(s) {
     if(c.paper_required)errors.push('Kiểm tra giấy, khổ giấy và khay giấy đã chọn.');
     if(c.toner_warning)errors.push('Cảnh báo mực.');
     if(errors.length)return statusView(c.service_error?'Canon '+c.service_code:'Máy in cần xử lý',errors.join('\n'),c.service_error||c.paper_jam?'error':'warning');
-    if(s.job_control&&s.job_control.state==='waiting_printer')return statusView('Đang chờ khôi phục','Bật lại máy in và xử lý lỗi; ESP tự in lại từ tờ chưa hoàn tất.','warning');
+    if(s.job_control&&s.job_control.state==='waiting_printer')return statusView('Đang chờ khôi phục','Xử lý lỗi, đóng nắp/nạp giấy; máy sẵn sàng sẽ tự tiếp tục.','warning');
     if(s.job_control&&s.job_control.state==='uncertain')return statusView('Lệnh cần đối soát','Chưa rõ kết quả lệnh trước; không tự in lại.','warning');
     if(s.job_control&&s.job_control.state==='paused')return statusView('Đã tạm dừng','Lệnh đang tạm dừng gửi.','warning');
     return statusView(s.active?'Đang in':'Sẵn sàng',s.active?'Máy in đang xử lý lệnh.':'CAPT phản hồi, không có cờ lỗi đã giải mã.',s.active?'busy':'ready');
 }
 function jobView(s) {
-    var j=s&&s.job_control, states={waiting_printer:'Chờ máy in để tự in tiếp',printing:'Đang in',paused:'Đã tạm dừng',failed:'Lệnh lỗi',uncertain:'Chưa rõ kết quả',completed:'Đã hoàn tất',resolved:'Đã đối soát'};
+    var j=s&&s.job_control, states={cancelled:'Đã hủy gửi',waiting_printer:'Chờ máy in để tự in tiếp',printing:'Đang in',paused:'Đã tạm dừng',failed:'Lệnh lỗi',uncertain:'Chưa rõ kết quả',completed:'Đã hoàn tất',resolved:'Đã đối soát'};
     if(!s)return {text:'Mất kết nối — chưa có tiến trình mới',value:0};
     if(j && j.id && j.state==='uncertain')return {text:'Lệnh cần đối soát — chưa rõ kết quả in'+(j.total>0?' · Đã ghi nhận '+j.completed+' / '+j.total+' mặt in':''),value:j.total>0?Math.max(0,Math.min(100,100*j.completed/j.total)):0};
     if(!j || !j.id || (!j.active&&j.state!=='waiting_printer'))return {text:'Trạm hiện không có lệnh đang chạy',value:0};
