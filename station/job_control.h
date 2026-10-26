@@ -7,6 +7,7 @@ namespace PrintControl {
 struct Job {
  char id[65]={}, source[8]={}, state[24]={}, request[24]={};
  char title[129]={}, client[97]={}, os[9]={};
+ char printerCancel[16]={};uint16_t printerSession=0;uint32_t sessionEpoch=0;
  bool waiting() const {return !std::strcmp(state,"waiting_printer");}
  bool unresolved() const {return !std::strcmp(state,"uncertain");}
  bool stopping() const {return !std::strcmp(request,"cancel_requested");}

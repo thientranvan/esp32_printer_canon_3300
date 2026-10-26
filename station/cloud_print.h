@@ -13,17 +13,17 @@
 static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
-struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; };
+struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; char waitReason[32]; };
 static CloudView cloudView={"disabled","","",0,0,0,0,0,0,0,false};
 static bool cloudBusy() { return cloudWorking.load(); }
 static CloudView cloudSnapshot() { portENTER_CRITICAL(&cloudLock); auto v=cloudView; portEXIT_CRITICAL(&cloudLock); return v; }
-static void cloudState(const char *state,const char *error="") {
-  portENTER_CRITICAL(&cloudLock); strlcpy(cloudView.state,state,sizeof(cloudView.state)); strlcpy(cloudView.error,error,sizeof(cloudView.error)); portEXIT_CRITICAL(&cloudLock);
+static void cloudState(const char *state,const char *error="",const char *waitReason="") {
+  portENTER_CRITICAL(&cloudLock); strlcpy(cloudView.state,state,sizeof(cloudView.state)); strlcpy(cloudView.error,error,sizeof(cloudView.error)); strlcpy(cloudView.waitReason,waitReason,sizeof(cloudView.waitReason)); portEXIT_CRITICAL(&cloudLock);
 }
 static String cloudStatusJSON() {
   auto v=cloudSnapshot();
   return String("{\"enabled\":")+(stationSettings.cloudEnabled?"true":"false")+",\"state\":"+jsonString(v.state)+
-    ",\"error\":"+jsonString(v.error)+",\"http\":"+v.http+",\"heartbeat_http\":"+v.heartbeatHttp+",\"claim_http\":"+v.claimHttp+",\"event_http\":"+v.eventHttp+",\"job\":"+jsonString(v.job)+
+    ",\"error\":"+jsonString(v.error)+",\"wait_reason\":"+jsonString(v.waitReason)+",\"http\":"+v.http+",\"heartbeat_http\":"+v.heartbeatHttp+",\"claim_http\":"+v.claimHttp+",\"event_http\":"+v.eventHttp+",\"job\":"+jsonString(v.job)+
     ",\"progress_known\":"+(v.progressKnown?"true":"false")+",\"total\":"+v.total+",\"submitted\":"+v.submitted+",\"completed\":"+v.completed+"}";
 }
 static String cloudText(cJSON *object,const char *key) {
@@ -85,7 +85,7 @@ static std::atomic<int> cloudCommandResult{0};
 static bool cloudHeartbeat(bool force=false) {return cloudOnline.load();}
 static String jobStatusJSON(const PrintControl::Job &j) {
   return String("{\"recovery\":{\"automatic\":")+(j.automaticRecovery?"true":"false")+",\"confirmed_sheets\":"+(j.automaticRecovery?String(j.completedSheets):String("null"))+",\"next_sheet\":"+(j.automaticRecovery&&strcmp(j.state,"completed")?String(j.completedSheets+1):String("null"))+"},\"title\":"+jsonString(j.title)+",\"client_name\":"+jsonString(j.client)+",\"client_os\":"+jsonString(j.os)+",\"progress_known\":"+(j.total?"true":"false")+",\"progress_unit\":\"impressions\",\"actions\":{\"pause\":"+(j.canPause()?"true":"false")+",\"resume\":"+(j.canResume()?"true":"false")+",\"cancel\":"+(j.canCancel()?"true":"false")+",\"delete\":"+(j.canDelete()?"true":"false")+"},\"id\":"+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
-    ",\"request\":"+jsonString(j.request)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
+    ",\"request\":"+jsonString(j.request)+",\"printer_cancel\":"+jsonString(j.printerCancel)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
     ",\"total\":"+j.total+",\"completed\":"+j.completed+"}";
 }
 static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
@@ -174,10 +174,37 @@ static bool captExchange(uint8_t *buffer,size_t capacity,uint32_t owner,unsigned
 static bool cloudCommand(unsigned op,const uint8_t *payload=nullptr,size_t size=0,bool reply=true) {
   return captExchange(cloudBuffer,sizeof(cloudBuffer),CloudOwner,op,payload,size,reply);
 }
+// Canon LBP3300: GoOffline(1), ClearMisprint, ClearError, DiscardData,
+// cancelled job info (stage 4), release reservation. No engine/USB power reset.
+static bool cancelCapt(uint32_t owner,bool report) {
+  auto j=jobSnapshot();uint8_t buffer[80],offline[2]={1,0},id[2];
+  bool ok=!j.printerSession&&!j.unresolved();
+  bool acquired=false;
+  if(j.printerSession&&j.sessionEpoch==printerEpoch.load()&&readUSB().connected){
+    for(unsigned i=0;i<20&&!(acquired=claimCapt(owner));++i)vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  if(acquired){
+    auto command=[&](unsigned op,const uint8_t *p=nullptr,size_t n=0){return captExchange(buffer,sizeof(buffer),owner,op,p,n);};
+    ok=command(0xE0A6,offline,2)&&command(0xE0A3)&&command(0xE0A2)&&command(0xE0A4);
+    // Discard leaves historical counters. Canon GoOnline(page 0) starts an empty
+    // buffer; stop it again so existing LAN clients also see a clean baseline.
+    uint8_t online[16]={};cloudPut32(online,0xADEADBEE);
+    if(ok)ok=command(0xE0A5,online,sizeof(online))&&command(0xE0A6,offline,2);
+    uint8_t info[72]={};info[16]=4;info[17]=1;cloudPut16(info+18,j.printerSession);cloudPut16(info+20,65116);cloudPut16(info+22,65116);
+    cloudPut16(id,j.printerSession);
+    // Release even when an earlier cleanup command fails; never report cleared then.
+    bool ended=command(0xE1A1,info,sizeof(info));bool released=command(0xE0A9,id,2);
+    bool idle=command(0xA0A8)&&Prepared::u16(buffer+2)>=40&&!(Prepared::u16(buffer+12)&0x84);
+    ok=ok&&ended&&released&&idle;
+  }
+  portENTER_CRITICAL(&jobLock);
+  if(report&&currentJob.matches(j.id))strcpy(currentJob.printerCancel,ok?(j.printerSession?"cleared":"not_started"):"unverified");
+  portEXIT_CRITICAL(&jobLock);return ok;
+}
 static PrintRecovery::Checkpoint cloudRecovery;
-static bool cloudTracking=false;static uint32_t cloudFaultTime=0;
+static bool cloudTracking=false,cloudPreflight=false;static uint32_t cloudFaultTime=0;
 static bool cloudCounters(unsigned *c) {
-  uint32_t waitStart=millis();bool waited=false;
+  uint32_t waitStart=millis(),clearAt=0;bool waited=false,cleared=false;
   while(true){
     if(!strcmp(jobSnapshot().request,"cancel_requested"))return false;
     if(!cloudCommand(0xA0A8)||Prepared::u16(cloudBuffer+2)<40)return false;
@@ -186,17 +213,31 @@ static bool cloudCounters(unsigned *c) {
     unsigned done=cloudRecovery.confirmed;
     portENTER_CRITICAL(&cloudLock);cloudView.completed=done;portEXIT_CRITICAL(&cloudLock);
     auto j=jobSnapshot();if(j.active&&!strcmp(j.source,"cloud")){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
-    auto flags=CaptStatus::decode(cloudBuffer);bool blocked=flags.service||flags.jam||flags.cover||flags.paper;
+    auto flags=CaptStatus::decode(cloudBuffer);
+    bool misprint=cloudBuffer[16]&0x80;
+    bool blocked=flags.service||flags.jam||flags.cover||flags.paper||misprint;
+    // Canon ClearErrorMisprint: acknowledge latched errors even while the
+    // jam flag remains set. Printer sensors decide whether recovery can proceed.
+    // ponytail: cloud session only; LAN CAPT driver owns its recovery commands.
+    bool clearError=cloudBuffer[13]&0x4f;
+    bool clearMisprint=misprint&&!(cloudBuffer[12]&4);
+    if(cloudTracking&&j.printerSession&&j.sessionEpoch==printerEpoch.load()&&
+       !flags.service&&!flags.cover&&(clearError||clearMisprint)&&
+       (!cleared||uint32_t(millis()-clearAt)>=1000)){
+      clearAt=millis();cleared=true;
+      if((clearError&&!cloudCommand(0xE0A2))||(clearMisprint&&!cloudCommand(0xE0A3)))return false;
+      // Re-read status; an ACK alone never means paper is available or ready.
+    }
     if(flags.service)cloudCommand(0xA2A2);
     if(!blocked){
       if(waited)cloudFaultTime+=uint32_t(millis()-waitStart);
-      if(!strcmp(j.state,"waiting_printer")){
+      if(waited&&!strcmp(j.state,"waiting_printer")){
         portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"printing");portEXIT_CRITICAL(&jobLock);cloudState("printing");
       }
       return true;
     }
     portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
-    waited=true;cloudState("waiting_printer","Fix printer fault; printing continues automatically when ready");
+    waited=true;cloudState("waiting_printer","Fix printer fault; printing continues automatically when ready","printer_fault");
     cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
@@ -228,13 +269,47 @@ static bool cloudCheckpoint() {
     jobProgress(j.total,cloudRecovery.confirmed);vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
+// Same-USB replay requires verified buffer cleanup, not merely a Ready flag.
+static bool cloudResetInterruptedSession() {
+  auto j=jobSnapshot();auto usb=readUSB();
+  if(!j.active||strcmp(j.source,"cloud")||j.stopping()||!j.printerSession||
+     j.sessionEpoch!=printerEpoch.load()||!usb.connected||!usb.responsive||usb.recovering)return false;
+  if(!cloudCommand(0xA0A8)||Prepared::u16(cloudBuffer+2)<40)return false;
+  auto f=CaptStatus::decode(cloudBuffer);
+  if(f.service||f.jam||f.cover||f.paper||(Prepared::u16(cloudBuffer+12)&0x84))return false;
+  if(!cloudRecovery.observe(Prepared::u16(cloudBuffer+24)))return false;
+  jobProgress(j.total,cloudRecovery.confirmed);jobRecoveryProgress(cloudRecovery);
+  // The interrupted reservation may have expired; acquire a fresh one before
+  // discarding this job's remaining buffer under the exclusive cloud owner.
+  uint8_t reservation[8]={0,0,30};
+  if(!cloudCommand(0xA3A2)||!cloudCommand(0xA2A0,reservation,8)||Prepared::u16(cloudBuffer+2)!=8)return false;
+  jobPrinterSession(Prepared::u16(cloudBuffer+6));
+  if(!cancelCapt(CloudOwner,false)||!cloudCommand(0xA0A8)||Prepared::u16(cloudBuffer+2)<40)return false;
+  f=CaptStatus::decode(cloudBuffer);
+  if(f.service||f.jam||f.cover||f.paper||(Prepared::u16(cloudBuffer+12)&0x84))return false;
+  for(unsigned i=0;i<4;++i)if(Prepared::u16(cloudBuffer+18+i*2))return false;
+  return true;
+}
 static bool cloudPrint(const Prepared::Job &job,unsigned base=0) {
-  cloudTracking=false;
+  cloudTracking=false;cloudPreflight=true;
   if(!cloudCommand(0xA1A1) || Prepared::u16(cloudBuffer+2)<8 || Prepared::u16(cloudBuffer+6)!=0x2A94)return false;
-  unsigned c[4];if(!cloudCounters(c)||c[0]!=c[1]||c[0]!=c[2]||c[0]!=c[3])return false;
+  // Read-only preflight: an unfinished old session is not a paper/cover fault.
+  // Keep observing it; no USB epoch change is needed if its counters catch up.
+  unsigned c[4];bool waiting=false;
+  while(true){
+    if(!cloudCheckpoint()||!cloudCounters(c))return false;
+    if((c[0]==c[1]&&c[0]==c[2]&&c[0]==c[3])||!(Prepared::u16(cloudBuffer+12)&0x84))break;
+    char message[128];snprintf(message,sizeof(message),"Previous CAPT session unfinished (%u/%u/%u/%u); if stalled, power-cycle printer only; keep ESP powered",c[0],c[1],c[2],c[3]);
+    portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
+    cloudState("waiting_printer",message,"previous_session");waiting=true;
+    cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));
+  }
+  if(waiting){portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"printing");portEXIT_CRITICAL(&jobLock);cloudState("printing");}
+  cloudPreflight=false;
   uint8_t reservation[8]={0,0,30};
   if(!cloudCommand(0xA3A2)||!cloudCommand(0xA2A0,reservation,8)||Prepared::u16(cloudBuffer+2)!=8)return false;
   unsigned id=Prepared::u16(cloudBuffer+6);
+  jobPrinterSession(id);
   uint8_t init[16]={};cloudPut32(init,0xADEADBEE);
   if(!cloudInfo(id,1,0)||!cloudCommand(0xE0A3)||!cloudCommand(0xE0A2)||!cloudCommand(0xE0A4)||!cloudCommand(0xE0A5,init,16))return false;
   cloudRecovery.started=true;cloudTracking=true;
@@ -284,7 +359,8 @@ static void cloudTask(void *) {
   while(true) {
       if(state=="uncertain" && (cloudResolve.exchange(false)||jobSnapshot().stopping())) {
         auto old=jobSnapshot();deleteAfterAck=old.deleteAfterStop;
-        cloudNeedsInspection.store(false);jobFinish(old.stopping()?"cancelled":"resolved");state="resolved";error=old.stopping()?"Operator discarded interrupted job; no data resent; buffered paper may still print":"Operator inspected printer; no automatic reprint";
+        if(old.stopping()){cancelCapt(CloudOwner);releaseCapt(CloudOwner);}
+        cloudNeedsInspection.store(false);jobFinish(old.stopping()?"cancelled":"resolved");state="resolved";error=old.stopping()?"Operator discarded interrupted job; no data resent; inspect CAPT cleanup result":"Operator inspected printer; no automatic reprint";
         if(!persist()){cloudState("blocked","Cannot persist resolution");vTaskDelete(nullptr);return;}
       }
     if(!stationSettings.cloudEnabled){vTaskDelay(pdMS_TO_TICKS(1500));continue;}
@@ -340,17 +416,22 @@ static void cloudTask(void *) {
             cloudTracking=false;releaseCapt(CloudOwner);
             auto control=jobSnapshot();if(!strcmp(control.request,"cancel_requested"))break;
             portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
-            cloudState("waiting_printer","Printer interrupted; waiting for restart to reprint incomplete sheet");
-            bool ready=false;
+            cloudState("waiting_printer",cloudPreflight?"USB/CAPT preflight unavailable; waiting for printer response; no new page sent":"CAPT session interrupted; waiting for Ready and verified buffer cleanup to recover incomplete sheet",cloudPreflight?"preflight_unavailable":"session_interrupted");
+            bool ready=false,bufferCleared=false;uint32_t resetAt=millis()-5000;
             while(!ready){
               control=jobSnapshot();if(!strcmp(control.request,"cancel_requested"))break;
               auto usb=readUSB();
-              ready=printerEpoch.load()!=cloudRecovery.epoch&&usb.connected&&usb.responsive&&!usb.recovering&&captFresh()&&!captFault();
+              bool available=usb.connected&&usb.responsive&&!usb.recovering&&captFresh()&&!captFault();
+              if(available&&!cloudPreflight&&printerEpoch.load()==cloudRecovery.epoch&&uint32_t(millis()-resetAt)>=5000){
+                resetAt=millis();
+                if(claimCapt(CloudOwner)){bufferCleared=cloudResetInterruptedSession();releaseCapt(CloudOwner);}
+              }
+              ready=available&&(cloudPreflight||bufferCleared||printerEpoch.load()!=cloudRecovery.epoch);
               if(!ready){cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));}
             }
             if(!ready)break;
             while(!claimCapt(CloudOwner)){cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(50));}
-            if(!cloudRecovery.restart(printerEpoch.load()))break;
+            if(!cloudRecovery.restart(printerEpoch.load(),bufferCleared))break;
             portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"printing");portEXIT_CRITICAL(&jobLock);
             cloudState("printing");done=cloudPrint(job,cloudRecovery.base);
           }
@@ -358,7 +439,8 @@ static void cloudTask(void *) {
           if(done){cloudNeedsInspection.store(false);state="completed";error="";}
           auto stopped=jobSnapshot();
           if(!done&&stopped.stopping()){
-            state="resolved";error="Operator cancelled submission; buffered paper may still print";cloudNeedsInspection.store(false);deleteAfterAck=stopped.deleteAfterStop;
+            bool cleared=cancelCapt(CloudOwner);
+            state="resolved";error=cleared?"Operator cancelled; CAPT buffer cleanup acknowledged; fed paper may still exit":"Operator cancelled; CAPT cleanup unverified; inspect printer before retry";cloudNeedsInspection.store(false);deleteAfterAck=stopped.deleteAfterStop;
           }
           jobFinish(done?"completed":stopped.stopping()?"cancelled":"uncertain");
           releaseCapt(CloudOwner);
@@ -377,6 +459,10 @@ static void captStatusTask(void *) {
   uint8_t buffer[80];unsigned previous=~0U;
   while(true){
     if(readUSB().responsive && claimCapt(CaptStatusOwner)){
+      auto pending=jobSnapshot();
+      if(!pending.active&&!strcmp(pending.source,"lan")&&pending.stopping()){
+        cancelCapt(CaptStatusOwner);jobFinish("cancelled");if(pending.deleteAfterStop)jobCommand(pending.id,"delete");
+      }
       if(captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A8) && CaptStatus::word(buffer+2)>=40){
         auto f=CaptStatus::decode(buffer);unsigned code=0,sub=0;char service[24]="unknown";
         if(f.service && captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA2A2) && CaptStatus::word(buffer+2)>=12 && buffer[5]){

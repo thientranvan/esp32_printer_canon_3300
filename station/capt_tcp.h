@@ -101,7 +101,8 @@ static void captTCPTask(void *) {
             const uint8_t completed[10]={5,0xF0,10,0,0,1,253,255,255,255};
             client.write(completed,10);break;
           }
-          if(same&&!strcmp(previous.request,"cancel_requested")){
+          if(same&&(previous.stopping()||!strcmp(previous.state,"cancelled"))){
+            if(previous.stopping())cancelCapt(1);
             const uint8_t cancelled[10]={5,0xF0,10,0,0,1,254,255,255,255};
             client.write(cancelled,10);rememberLanResult(jobId,true);jobFinish("cancelled");if(previous.deleteAfterStop)jobCommand(jobId,"delete");lanRecovery=PrintRecovery::Checkpoint();break;
           }
@@ -192,6 +193,7 @@ static void captTCPTask(void *) {
         }
         unsigned replyLength=CaptStatus::word(buffer+2);
         captRecordFrame(buffer,replyLength);
+        if(printJob&&opcode==0xA2A0&&replyLength>=8&&!(buffer[4]&128))jobPrinterSession(CaptStatus::word(buffer+6));
         if(opcode==0xA0A8 && replyLength>=40 && CaptStatus::decode(buffer).service){
           portENTER_CRITICAL(&captTelemetryLock);bool query=!captServiceAt||uint32_t(millis()-captServiceAt)>=1500;portEXIT_CRITICAL(&captTelemetryLock);
           if(query){
@@ -215,6 +217,7 @@ static void captTCPTask(void *) {
       if(printJob){
         bool done=released&&captTCPCompleted.load()>=captTCPTotal.load();
         auto j=jobSnapshot();bool cancelled=!strcmp(j.request,"cancel_requested");
+        if(cancelled&&!done)cancelCapt(1);
         jobFinish(done?"completed":cancelled?"cancelled":recoverable&&mayPrint?"waiting_printer":mayPrint?"uncertain":"failed");
         if(recoverable&&(done||cancelled))rememberLanResult(jobId,cancelled);
         if(cancelled&&j.deleteAfterStop)jobCommand(jobId,"delete");

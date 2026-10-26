@@ -36,7 +36,7 @@ máy không lỗi: trường này là lỗi USB, không phải mã dịch vụ C
   Pause: không gửi mặt tiếp theo, giữ TCP/USB bằng lệnh status trong lúc đợi.
   Trang đã đệm vẫn có thể ra. Resume chỉ tiếp tục phiên sống, không tái phát job.
   Cancel: ngừng gửi thêm và giữ kết quả `uncertain`, không tự phát lại/khẳng định
-  đã xóa bộ nhớ máy in. Chưa xác minh lệnh CAPT abort/purge vật lý, không tự gửi.
+  đã xóa bộ nhớ máy in. Bản mới có chuỗi cleanup đã đối chiếu driver Canon; xem [capt-cancel.md](capt-cancel.md). Chỉ xác nhận bỏ dữ liệu đệm khi `printer_cancel=cleared`.
 - Metadata TCP `F002`: ID ASCII `[A-Za-z0-9_-]`, 1..64 byte. ACK như CAPT
   (opcode F002, length 6, payload 00 01). Gửi trước F001.
   `F003`: payload một byte 1 xác nhận paused, 2 xác nhận resumed; ACK tương tự.

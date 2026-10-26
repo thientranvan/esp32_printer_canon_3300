@@ -21,19 +21,26 @@ harness = r'''
 #include <algorithm>
 using std::min;
 static unsigned decoded=0, started=0, submitted=0, completed=0, reservations=0, releases=0;
-static bool rejectPaper=false;
-static bool cloudTracking=false;static PrintRecovery::Checkpoint cloudRecovery;
+static bool rejectPaper=false,processing=true;
+static bool cloudTracking=false,cloudPreflight=false;static PrintRecovery::Checkpoint cloudRecovery;
 static uint8_t cloudBuffer[4096];
-static int cloudLock=0;
+static int cloudLock=0,jobLock=0;
 #define portENTER_CRITICAL(x) (void)(x)
 #define portEXIT_CRITICAL(x) (void)(x)
 static struct { unsigned submitted; } cloudView;
+static struct {char state[24];} currentJob;
+static bool cancelled=false,catchUp=false,failRead=false;
+static unsigned waits=0,previousSessionWaits=0;
+static void cloudState(const char *,const char * = "",const char *reason = "") {if(!strcmp(reason,"previous_session"))++previousSessionWaits;}
+#define pdMS_TO_TICKS(x) (x)
+static void vTaskDelay(unsigned){++waits;if(catchUp)decoded=started=submitted=completed=0;else cancelled=true;}
 static std::vector<int> flags;
 static void cloudHeartbeat(){}
-static bool cloudCheckpoint(){return true;}
+static void jobPrinterSession(unsigned){}
+static bool cloudCheckpoint(){return !cancelled;}
 static void cloudPut16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
 static void cloudPut32(uint8_t *p,uint32_t n){cloudPut16(p,n);cloudPut16(p+2,n>>16);}
-static bool cloudCounters(unsigned *c){c[0]=decoded;c[1]=started;c[2]=completed;c[3]=completed;return true;}
+static bool cloudCounters(unsigned *c){c[0]=decoded;c[1]=started;c[2]=completed;c[3]=completed;cloudPut16(cloudBuffer+12,processing&&decoded!=completed?0x80:0);return !failRead;}
 static bool cloudWait(unsigned index,unsigned target,unsigned,bool=false){
  if(index==1){assert(target<=submitted);started=target;return true;}
  if(index==0){assert(decoded==target);return true;}
@@ -44,6 +51,7 @@ static bool cloudCommand(unsigned op,const uint8_t *p=nullptr,size_t n=0,bool re
  memset(cloudBuffer,0,sizeof(cloudBuffer));cloudPut16(cloudBuffer+2,6);cloudBuffer[5]=1;
  if(op==0xA1A1){cloudPut16(cloudBuffer+2,8);cloudPut16(cloudBuffer+6,0x2A94);}
  if(op==0xA2A0){++reservations;cloudPut16(cloudBuffer+2,8);cloudPut16(cloudBuffer+6,7);}
+ if(op==0xE0A5)decoded=started=submitted=completed=0;
  if(op==0xE1A9){assert(n==8 && p[0]==2 && p[1]==1);if(rejectPaper)return false;}
  if(op==0xD0A9){assert(n==64 && !reply && decoded-started<2);flags.push_back(p[9]&6);}
  if(op==0xC0A0)assert(n && !reply);
@@ -65,6 +73,20 @@ int main(){
  decoded=started=submitted=completed=reservations=releases=0;rejectPaper=false;flags.clear();
  assert(cloudPrint(j,2));assert(decoded==1 && completed==1 && reservations==1 && releases==1);
  assert((flags==std::vector<int>{0}));assert(cloudView.submitted==3);
+ // Old session drains without any USB disconnect: wait, then submit once.
+ decoded=4;started=3;completed=2;submitted=reservations=releases=0;flags.clear();catchUp=true;
+ assert(cloudPrint(j));assert(waits==1&&previousSessionWaits==1&&reservations==1&&releases==1);
+ assert((flags==std::vector<int>{4,2,0}));assert(!cloudPreflight);
+ // Operator can cancel while old counters remain unfinished; send no raster/reservation.
+ decoded=4;started=3;completed=2;submitted=reservations=releases=0;flags.clear();catchUp=false;
+ assert(!cloudPrint(j));assert(cancelled&&cloudPreflight&&reservations==0&&flags.empty());
+ // Preflight transport failure remains safe to retry without a new USB epoch.
+ cancelled=false;failRead=true;assert(!cloudPrint(j));assert(cloudPreflight&&reservations==0);
+ failRead=false;decoded=started=completed=0;assert(cloudPrint(j));assert(reservations==1&&releases==1);
+ // Cleared buffer may retain unequal historical counters; do not lock the next job.
+ cancelled=false;processing=false;decoded=4;started=3;completed=2;submitted=reservations=releases=0;catchUp=true;
+ // Fake fresh-session initialization resets counters, as Canon GoOnline(page 0) does.
+ unsigned oldWaits=waits;assert(cloudPrint(j));assert(waits==oldWaits&&reservations==1&&releases==1);
  puts("PASS: production cloud engine, duplex order, pipeline, one reservation/release, no retry on failure");
 }
 '''
@@ -153,19 +175,24 @@ static PrintControl::Job currentJob;
 static PrintControl::Job jobSnapshot(){return currentJob;}
 static void jobProgress(unsigned,unsigned n){currentJob.completed=n;}
 static void jobRecoveryProgress(const PrintRecovery::Checkpoint &p){currentJob.completed=p.confirmed;}
-static void cloudState(const char *,const char * = ""){}
+static void cloudState(const char *,const char * = "",const char * = ""){}
 static void cloudHeartbeat(){}
-static bool cancelOnWait=false;static unsigned queries=0,serviceQueries=0;
+static bool cancelOnWait=false,latched=false,rejectClear=false,latchedJam=false;
+static unsigned queries=0,serviceQueries=0,errorClears=0,misprintClears=0;
+static struct {unsigned load(){return 1;}} printerEpoch;
 static void vTaskDelay(unsigned n){tick+=n;if(cancelOnWait)strcpy(currentJob.request,"cancel_requested");}
 static void put16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
 static bool cloudCommand(unsigned op){
  if(op==0xA2A2){++serviceQueries;return true;}
+ if(op==0xE0A2){assert(queries>=4);++errorClears;return !rejectClear;}
+ if(op==0xE0A3){assert(queries>=4);++misprintClears;if(!rejectClear)latched=false;return !rejectClear;}
  assert(op==0xA0A8);memset(cloudBuffer,0,sizeof(cloudBuffer));put16(cloudBuffer+2,60);
  ++queries;
  if(queries==1)cloudBuffer[6]=8; // Service fault also waits, retaining session.
  if(queries==2)put16(cloudBuffer+16,0x100);
  if(queries==3)put16(cloudBuffer+16,0x4000);
  if(queries==4)put16(cloudBuffer+12,0x4000);
+ if(latched){put16(cloudBuffer+12,0x4000);put16(cloudBuffer+16,Prepared::u16(cloudBuffer+16)|0x80|(latchedJam?0x100:0));}
  for(int i=0;i<4;++i)put16(cloudBuffer+18+i*2,2);
  return true;
 }
@@ -175,6 +202,16 @@ int main(){
  cloudRecovery.begin("job",{4,2,0},1);cloudRecovery.started=true;currentJob.begin("job","cloud",true);currentJob.total=3;
  unsigned c[4];assert(cloudCounters(c));assert(queries==5&&serviceQueries==1&&tick==800&&cloudFaultTime==800);
  assert(currentJob.completed==2&&cloudRecovery.confirmed==2&&!strcmp(currentJob.state,"printing"));
+ // A good sensor response must not erase a wait for an unfinished CAPT session.
+ strcpy(currentJob.state,"waiting_printer");assert(cloudCounters(c));assert(!strcmp(currentJob.state,"waiting_printer"));
+ // Captured post-jam flags: paper request + JAM + misprint, cover closed.
+ // JAM remains latched until ClearErrorMisprint; waiting for JAM=false deadlocks.
+ currentJob.printerSession=7;currentJob.sessionEpoch=1;latched=true;latchedJam=true;
+ queries=10;assert(cloudCounters(c));assert(queries==12);
+ assert(errorClears==1&&misprintClears==1&&currentJob.completed==2);
+ // Rejected acknowledgement cannot produce a false Ready or replay.
+ latched=true;rejectClear=true;assert(!cloudCounters(c));assert(errorClears==2&&misprintClears==1);
+ latched=false;rejectClear=false;
  queries=serviceQueries=0;cancelOnWait=true;assert(!cloudCounters(c));assert(queries==1&&currentJob.stopping());
  puts("PASS: production cloud service/jam/cover/paper wait, ready in same session, preserved progress, cancellation during fault");
 }

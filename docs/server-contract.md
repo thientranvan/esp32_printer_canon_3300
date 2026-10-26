@@ -1,3 +1,5 @@
+> Bổ sung 25/10/2026: [Hủy phiên CAPT và `job.printer_cancel`](capt-cancel.md). ESP cleanup dữ liệu đệm; server đợi kết quả, không bắt tắt/bật sau mọi lần Hủy.
+
 # Bổ sung khôi phục kẹt giấy (25/10/2026)
 
 Xem [paper-jam-recovery.md](paper-jam-recovery.md): `job.state=waiting_printer`, `job.recovery`, tự gửi lại phần chưa hoàn tất sau máy in ngắt/kết nối lại, trong cùng lần thực thi. Không requeue/claim lại hoặc replay journal sau ESP reset. Quy tắc đối soát bên dưới vẫn áp dụng nếu không có checkpoint hợp lệ.

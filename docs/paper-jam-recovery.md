@@ -1,4 +1,30 @@
+## Bổ sung 26/10/2026: lỗi còn lưu sau khi đóng nắp
+
+Máy 1 vẫn trả CAPT mới sau khi người dùng xử lý kẹt giấy: jam=false,
+cover=false, service=false nhưng frame STATUS1 high byte `0x40` và
+STATUS2 low byte `0x80`. Firmware cũ chỉ poll, không gửi ClearErrorMisprint.
+Vì vậy web tiếp tục waiting_printer và RGB vàng hai nhịp.
+
+Cloud hiện xác nhận lỗi còn lưu bằng `E0A2` (ClearError), `E0A3`
+(ClearMisprint), theo bit trong reply, tối đa một lượt mỗi giây khi còn lỗi.
+Chỉ gửi trong reservation/USB epoch hiện tại, không gửi khi còn jam, hở nắp
+hoặc service error. Không DiscardData/GoOnline/FIRE trong nhánh tiếp tục.
+Phải đọc lại A0A8; ACK không tự được coi là Ready. Command lỗi/reject không
+được coi là đã phục hồi và không tự replay dữ liệu đã gửi.
+
+Lệnh web 64 mặt đã hủy theo yêu cầu ở mốc xác nhận 16 mặt. Cleanup lần đầu
+trả unverified; đã lấy reservation mới cho thao tác dọn lệnh đã hủy,
+ClearError/ClearMisprint/DiscardData/phiên rỗng đều ACK, counter về 0.
+Không tắt/bật máy in. Không tự gửi lại lệnh này.
+
+Kiểm thử mô phỏng dùng cờ sau kẹt thực tế, giữ lỗi cho đến khi nhận clear,
+kiểm tra không clear khi jam/cover/service, không tăng progress, reject không
+báo Ready. Máy 1 cập nhật OTA; phục hồi tự động sau kẹt thực tế cần nghiệm thu
+bằng lượt in tiếp theo. Máy 2/3 chưa nhận bổ sung ngày 26/10.
+
 # Tự khôi phục sau kẹt giấy / tắt bật máy in
+
+**Cập nhật Hủy:** xem [capt-cancel.md](capt-cancel.md). Bản mới có cleanup CAPT; các ghi nhận trước bản này bên dưới là lịch sử. Không bắt tắt/bật chỉ vì counter lệch hoặc vừa hủy.
 
 Firmware và bộ gửi LAN mới giữ điểm hoàn tất theo **tờ**, do ESP xác định từ phản hồi CAPT. Không dùng số trang đã gửi, số trang Word/spool hoặc dữ liệu từ agent máy tính làm xác nhận đã in.
 
@@ -7,7 +33,48 @@ Firmware và bộ gửi LAN mới giữ điểm hoàn tất theo **tờ**, do ES
 - Lỗi nhưng USB vẫn nối: giữ nguyên phiên CAPT và dữ liệu trong máy, chuyển `waiting_printer`, tiếp tục đọc trạng thái. Mở nắp lấy giấy/đóng nắp, nạp giấy đúng khay là đủ nếu CAPT hết lỗi. Tự tiếp tục **cùng phiên**, không gửi trùng raster, không bắt tắt nguồn. Thời gian xử lý lỗi không tính vào timeout kéo/đẩy giấy.
 - USB thực sự ngắt: giữ job/checkpoint; khi nhận lại LBP3300 và CAPT mới hết lỗi, mở phiên mới, gửi lại từ tờ chưa chốt. Giữ ESP có nguồn. Chỉ nhánh này cần chờ bằng chứng USB ngắt trước khi gửi lại dữ liệu.
 - Timeout hoặc mất TCP đơn thuần không chứng minh bộ nhớ máy in đã sạch: vẫn chờ một lần USB ngắt/kết nối lại. Mã service, nắp mở, thiếu giấy và kẹt giấy tiếp tục chặn khôi phục.
-- Dừng/Tiếp tục/Hủy/Xóa vẫn dùng được trong lúc chờ theo bảng thao tác bên dưới. Dừng không thu hồi mặt đã đệm; Tiếp tục không tự xóa lỗi cảm biến. Hủy/Xóa ngừng gửi thêm, không thu hồi giấy/dữ liệu còn trong bộ nhớ máy in.
+- Dừng/Tiếp tục/Hủy/Xóa vẫn dùng được trong lúc chờ theo bảng thao tác bên dưới. Dừng không thu hồi mặt đã đệm; Tiếp tục không tự xóa lỗi cảm biến. Hủy/Xóa ngừng gửi thêm và cleanup CAPT theo `printer_cancel`; không thu hồi tờ đã kéo vào đường giấy.
+
+## Phiên CAPT trước chưa khép (25/10/2026)
+
+Quan sát Máy 1: USB/CAPT mới có phản hồi, không cờ service/kẹt giấy/nắp/thiếu giấy,
+nhưng counter `decoded/started/exiting/completed = 4/3/3/2`. Lệnh web mới 8 mặt
+chưa gửi trang nào. Đây là phiên CAPT còn dở, không phải bằng chứng lỗi cảm biến.
+Firmware cũ trả lỗi ngay rồi chờ USB epoch đổi; đóng nắp không giải phóng nhánh chờ.
+
+Firmware sửa: trước khi mở phiên mới, tiếp tục đọc counter và nhận Dừng/Tiếp tục/Hủy.
+Counter khép lại thì tự bắt đầu, không cần USB ngắt. Lỗi đọc USB trước khi mở phiên
+cũng được thử lại khi phản hồi trở lại, không bắt buộc epoch đổi. Sau khi bắt đầu
+phiên, mất kết quả vẫn cần bằng chứng USB ngắt trước khi phát lại raster.
+Phản hồi cảm biến bình thường không tự xóa trạng thái chờ phiên cũ.
+
+`cloud.wait_reason` trong `/status`, SSE và heartbeat cho server:
+
+| Giá trị | Hiển thị / xử lý |
+| --- | --- |
+| `previous_session` | Phiên trước chưa khép; trạm theo dõi bộ đếm, chưa gửi trang mới |
+| `preflight_unavailable` | Chưa đọc được USB/CAPT trước khi mở phiên; đang thử lại |
+| `printer_fault` | Lỗi CAPT thật; hiển thị mã/cờ cảm biến cụ thể |
+| `session_interrupted` | Phiên đã bắt đầu nhưng bị gián đoạn; chờ máy in khởi động lại |
+| Chuỗi rỗng | Không có lý do chờ đang áp dụng |
+
+Server không đổi tất cả `waiting_printer` thành “Chờ xử lý lỗi giấy”.
+Đọc `cloud.error` cùng `cloud.wait_reason` và `printer.capt` để hiển thị đúng.
+ESP dùng đèn vàng chớp khi chờ, không dùng xanh dương như đang gửi/in.
+
+Nếu counter phiên trước đứng yên, tắt/bật **riêng máy in**, giữ nguồn ESP để giữ
+artifact/checkpoint. Không tự gửi lệnh purge/abort CAPT chưa kiểm chứng. Mở/đóng nắp
+chỉ đủ khi lỗi vật lý hết và phiên tiếp tục tiến triển; không bảo đảm xóa phiên dở.
+Không nạp/reset ESP khi còn job trong PSRAM; chờ job kết thúc hoặc người dùng hủy rõ ràng.
+Kiểm thử mô phỏng đã bao gồm phiên cũ khép lại không ngắt USB, hủy lúc chờ,
+lỗi đọc preflight và retry. Chưa xác minh lại bằng giấy cho bản sửa này.
+
+Đã nạp bản sửa qua COM/UART0 vào Máy 1 (`98:C3:77:A1:36:B0`), kiểm tra hash đạt.
+Log `STATION: PASS`; USB/CAPT phản hồi và heartbeat server HTTP 200 sau khởi động.
+Lệnh 8 mặt đã được người dùng hủy trước khi nạp, không tự gửi lại. Sau nạp,
+counter máy in còn `3/2/2/2` dù không có cờ lỗi vật lý: hủy lệnh ESP không đồng
+nghĩa xóa bộ nhớ máy in. Cần tắt/bật riêng máy in sau khi hủy để kiểm tra lại;
+chưa xác nhận bộ nhớ sạch hoặc giấy ra. Máy 2/3 chưa nạp bản sửa này.
 
 ## Phạm vi
 
@@ -76,7 +143,7 @@ Dùng `job.actions` từ heartbeat (ESP dùng `job_control.actions`), không t�
 | `uncertain`, mất phiên/checkpoint | Không | Không, không còn dữ liệu phiên để tiếp tục an toàn | Có, bỏ lệnh dở | Có, bỏ lệnh dở và xóa bản ghi sau ACK |
 | Hoàn tất/đã hủy/đã đối soát | Không | Không | Không | Có |
 
-Nhãn: **Dừng**, **Tiếp tục**, **Hủy lệnh**, **Xóa lệnh**. Khi Hủy/Xóa, xác nhận rõ: “Dừng gửi lệnh này; trang đã vào bộ nhớ máy in vẫn có thể được in. Không xóa bộ nhớ máy in.” Không mô tả là đã purge máy in.
+Nhãn: **Dừng**, **Tiếp tục**, **Hủy lệnh**, **Xóa lệnh**. Khi Hủy/Xóa, xác nhận rõ: “Trạm sẽ dừng gửi và yêu cầu bỏ dữ liệu đệm của phiên này. Tờ đã kéo vào máy vẫn có thể ra giấy.” Chỉ báo cleanup thành công khi `printer_cancel=cleared`; xem [capt-cancel.md](capt-cancel.md).
 
 `actions.delete=true` không có nghĩa xóa ngay. Với job đang chạy/chờ/uncertain, `delete` đặt `request=cancel_requested`, `deleteAfterStop` nội bộ; dừng bộ gửi trước, cloud lưu outcome bền vững và gửi terminal event, sau server ACK mới bỏ bản ghi hiện tại. Với lịch sử terminal, xóa bản ghi ESP trực tiếp. Không tự xóa file spool của thiết bị LAN khác.
 

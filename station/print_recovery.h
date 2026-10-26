@@ -32,8 +32,8 @@ struct Checkpoint {
   return true;
  }
  unsigned sheets() const {unsigned n=0;for(unsigned i=0;i<confirmed;++i)if(flags[i]!=4)++n;return n;}
- bool restart(uint32_t generation) {
-  if(started&&generation==epoch)return false;
+ bool restart(uint32_t generation,bool bufferCleared=false) {
+  if(started&&generation==epoch&&!bufferCleared)return false;
   base=confirmed;observed=0;epoch=generation;started=false;return true;
  }
 };

@@ -10,6 +10,7 @@ int main(){
  assert(r.observe(1)&&r.confirmed==1);
  assert(r.observe(2)&&r.confirmed==1); // Back image alone is not a complete sheet.
  assert(!r.restart(7)); // Timeout/network loss cannot prove printer memory cleared.
+ assert(r.restart(7,true)&&r.base==1); // Verified cleanup permits same-USB recovery.
  assert(r.restart(8)&&r.base==1);
  r.started=true;assert(r.observe(1)&&r.confirmed==1);
  assert(r.observe(2)&&r.confirmed==3);
