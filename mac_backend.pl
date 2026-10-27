@@ -333,11 +333,31 @@ sub monitor {
       last if $once;sleep 3;
     }
 }
+# CUPS runs this backend as root. Reopen the named user app for each job,
+# including after a deliberate Cmd+Q; never keep it alive against Quit/shutdown.
+sub status_launch_args {
+    my ($id,$uid)=@_;
+    return unless defined($id) && $id =~ /\Aesp32-[0-9a-f]{12}\z/ && $uid>0;
+    return ('/bin/launchctl','asuser',$uid,'/usr/bin/sudo','-u',"#$uid",'/usr/bin/open',
+        "/Library/Printers/ESP32Printer/Status-$id.app");
+}
+sub open_status_window {
+    my ($id)=@_;my $uid=(stat('/dev/console'))[4];return unless defined($uid) && $>==0;
+    my @args=status_launch_args($id,$uid);return unless @args && -d $args[-1];
+    my $pid=fork();return unless defined($pid);
+    if(!$pid){
+        open(STDIN,'<','/dev/null');open(STDOUT,'>','/dev/null');open(STDERR,'>','/dev/null');
+        exec {$args[0]} @args or POSIX::_exit(1);
+    }
+}
 sub main {
     if(@ARGV>=3 && ($ARGV[0] eq '--monitor' || $ARGV[0] eq '--monitor-once')){
       monitor($ARGV[1],$ARGV[2],$ARGV[0] eq '--monitor-once');return 0;
     }
     if (@ARGV == 1 && $ARGV[0] eq '--self-test') {
+        my @launch=status_launch_args('esp32-98c377a136b0',501);
+        fail('Status app launch plan') unless @launch==8 && $launch[2]==501 && $launch[5] eq '#501' && $launch[7] =~ /Status-esp32-98c377a136b0\.app\z/;
+        fail('Invalid status app target') if status_launch_args('../bad',501) || status_launch_args('esp32-98c377a136b0',0);
         my $page = "\0" x 40; substr($page, 2, 3, "\x94\x2a\x02");
         my $body = packet(0xD0A0, $page) . packet(0xD0A4, "\0" x 8) . packet(0xD0A1) .
             pack('vvV', 0x8200, 256, 11) . 'abc' . packet(0xC0A4) . packet(0xD0A2) . packet(4, "\0" x 4);
@@ -367,6 +387,7 @@ sub main {
     my ($host, $port, $id) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?(?:/(esp32-[0-9a-f]{12}))?/?\z};
     if ($id) { $cache .= "/$id"; $pending = "$cache/pending.txt"; }
     fail('Invalid device URI') unless $host;
+    open_status_window($id);
     $stationHost=$host;$stationPort=$port||9100;
     eval {
         require JSON::PP;

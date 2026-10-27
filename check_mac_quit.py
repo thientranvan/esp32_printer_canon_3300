@@ -12,6 +12,20 @@ agent=installer.split('cat > "$work/window.plist" <<EOF\n',1)[1].split('\nEOF',1
 settings=plistlib.loads(agent.encode())
 assert settings['RunAtLoad'] and settings['KeepAlive']=={'SuccessfulExit':False}
 assert '-replace OSAAppletStayOpen -bool true' in installer
+import os,json
+key_result=Path('/tmp')/('esp32-key-check-'+str(os.getpid()))
+keyboard_check=r'''            if(!checkedShortcut){checkedShortcut=true;
+                var verdict='PASS';
+                try{
+                    if(ObjC.unwrap(closeItem.keyEquivalent)!=='w'||Number(closeItem.keyEquivalentModifierMask)!==Number($.NSEventModifierFlagCommand))throw Error('Missing Cmd+W binding');
+                    app.sendActionToFrom(closeItem.action,target,closeItem);
+                    if(window.visible)throw Error('Close menu action did not hide window');
+                    reopenStatus();if(!window.visible)throw Error('Cannot reopen window');
+                }catch(e){verdict=e.toString();}
+                $(verdict).writeToFileAtomicallyEncodingError($(__RESULT__),true,$.NSUTF8StringEncoding,null);
+            }
+'''.replace('__RESULT__',json.dumps(str(key_result)))
+source=source.replace('var quitting=false;','var quitting=false,checkedShortcut=false;').replace('            if(quitting)return;','            if(quitting)return;\n'+keyboard_check)
 source=source.replace('function run(argv) {','function startStatus(argv) {')+'\nfunction run(){startStatus(["127.0.0.1","ESP32_QUIT_CHECK","Printer quit check"]);}\n'
 with tempfile.TemporaryDirectory(prefix='.esp32-quit-',dir=Path.home()/'Applications') as folder:
     root=Path(folder);script=root/'status.js';script.write_text(source);app=root/'PrinterQuitCheck.app'
@@ -23,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix='.esp32-quit-',dir=Path.home()/'Applicat
         process=subprocess.Popen(['/usr/bin/open','-W','-n',str(app),'--stdout',str(root/'output'),'--stderr',str(root/'output')],stdout=subprocess.DEVNULL,stderr=output)
         try:
             time.sleep(2)
+            assert key_result.exists() and key_result.read_text()=="PASS",key_result.read_text() if key_result.exists() else "Shortcut check not run"
             if process.poll() is not None:
                 output.seek(0);raise AssertionError('Status app exited before Quit: '+output.read())
             processes=subprocess.check_output(['ps','-axo','pid=,command='],text=True).splitlines()
@@ -41,4 +56,5 @@ with tempfile.TemporaryDirectory(prefix='.esp32-quit-',dir=Path.home()/'Applicat
                 if len(fields)==2 and fields[1]==str(app/'Contents/MacOS/applet'):
                     try:os.kill(int(fields[0]),15)
                     except ProcessLookupError:pass
-print('PASS: native status app accepts Quit AppleEvent and exits normally; no shutdown/reboot performed')
+key_result.unlink(missing_ok=True)
+print('PASS: Cmd+W closes and window reopens; native status app accepts Quit AppleEvent and exits normally; no shutdown/reboot performed')

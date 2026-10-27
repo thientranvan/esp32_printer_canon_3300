@@ -57,6 +57,12 @@ function run(argv) {
     app.setActivationPolicy($.NSApplicationActivationPolicyRegular);app.applicationIconImage=printerAppIcon();
     var window=$.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0,0,760,540),15,$.NSBackingStoreBuffered,false);
     window.title=$(name+' — Canon LBP3300');window.releasedWhenClosed=false;window.center;
+    // The applet menu has Quit but no native window Close shortcut.
+    var windowsMenu=$.NSMenu.alloc.initWithTitle($('Cửa sổ'));windowsMenu.autoenablesItems=false;
+    var closeItem=$.NSMenuItem.alloc.initWithTitleActionKeyEquivalent($('Đóng cửa sổ'),'close:',$('w'));
+    windowsMenu.addItem(closeItem);
+    var windowsItem=$.NSMenuItem.alloc.initWithTitleActionKeyEquivalent($('Cửa sổ'),null,$(''));
+    windowsItem.submenu=windowsMenu;app.mainMenu.addItem(windowsItem);app.windowsMenu=windowsMenu;
     var content=window.contentView;
     function label(text,x,y,w,h,size,bold) {
         var l=$.NSTextField.alloc.initWithFrame($.NSMakeRect(x,540-y-h,w,h));l.stringValue=$(text);l.editable=false;l.selectable=true;l.bezeled=false;l.drawsBackground=false;
@@ -155,11 +161,12 @@ function run(argv) {
         'queue:':{types:['void',['id']],implementation:function(){ task('/usr/bin/open',['-a','/System/Applications/Utilities/Print Center.app']); }},
         'settings:':{types:['void',['id']],implementation:function(){ $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($('x-apple.systempreferences:com.apple.Print-Scan-Settings.extension'))); }},
         'web:':{types:['void',['id']],implementation:function(){ $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($('http://'+host))); }},
+        'close:':{types:['void',['id']],implementation:function(){window.orderOut(null);}},
         'hide:':{types:['void',['id']],implementation:function(){window.orderOut(null);}},
         'applicationWillTerminate:':{types:['void',['id']],implementation:function(){shutdownStatus();}},
 
     }});
-    var activeOnly=null;target=$.ESP32PrinterStatusActions.alloc.init;table.dataSource=target;reopenStatus=show;
+    var activeOnly=null;target=$.ESP32PrinterStatusActions.alloc.init;table.dataSource=target;closeItem.target=target;closeItem.enabled=true;reopenStatus=show;
     $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject(target,'applicationWillTerminate:',$.NSApplicationWillTerminateNotification,app);
     function button(text,x,width,selector){var b=$.NSButton.alloc.initWithFrame($.NSMakeRect(x,22,width,34));b.title=$(text);b.bezelStyle=$.NSBezelStyleRounded;b.target=target;b.action=selector;content.addSubview(b);return b;}
     function jobButton(title,x,width,selector,symbol){var b=button(title,x,width,selector);b.setFrameOrigin($.NSMakePoint(x,98));b.image=$.NSImage.imageWithSystemSymbolNameAccessibilityDescription($(symbol),$(title));b.imagePosition=$.NSImageLeft;b.enabled=false;return b;}
