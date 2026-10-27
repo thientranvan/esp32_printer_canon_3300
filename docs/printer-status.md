@@ -300,3 +300,11 @@ faults such as E100 remain visible independently of queue deletion.
 Cửa sổ dùng applet stay-open và vòng lặp macOS; `run()` trả về, giữ delegate mặc định để macOS xử lý Quit/logout/shutdown. Khi thoát, dừng timer và các tiến trình con chỉ đọc trạng thái; không hủy job hoặc dừng backend in. LaunchAgent chỉ khởi động lại khi lỗi (`SuccessfulExit=false`), không bật lại sau Quit bình thường; lần đăng nhập sau vẫn RunAtLoad. Bộ cài đặt rõ `OSAAppletStayOpen=true` cả khi cập nhật app cũ.
 
 `python3 check_mac_quit.py` kiểm thử Quit native trên app tạm, không shutdown/reboot. Đã kiểm thử app đang cài trên Mac này thoát thành công, không tự bật lại sau throttle 10 giây, rồi mở lại cửa sổ.
+
+### Mac: đóng cửa sổ và mở lại sau Quit
+
+Command+W hoặc nút Ẩn cửa sổ chỉ đóng/ẩn giao diện; ứng dụng vẫn theo dõi trạng thái.
+Command+Q thoát ứng dụng bình thường, không cản shutdown/reboot. Mỗi lệnh in LAN
+mới gọi mở lại app đúng station ID qua phiên GUI người dùng đang đăng nhập;
+không cần agent mới hoặc ép KeepAlive sau Quit. Cần cài lại bộ cài Mac để nhận
+cả bản UI và CUPS backend mới. Không thay đổi firmware ESP cho sửa đổi này.

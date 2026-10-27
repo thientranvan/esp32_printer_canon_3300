@@ -28,8 +28,8 @@ uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=6869473df00eb0317782a44edb1794f3992951fd5eef35beab34571f5dec0f6a
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/2749829bc41fad0e840a78c3ecf2ce5b3b55f7d2/mac_backend.pl
+backend_sha=58e9f8f3d5615b429d42667803f96d9e4a21b18698773db9aa090af6e549f7d7
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/94e1dbd528538b48a8064a6cea72c20f8ab4aa3e/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
@@ -128,11 +128,11 @@ EOF
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."
 # Desktop monitor runs as the logged-in user, never as the CUPS/root daemon.
 status_script="$source_dir/installers/esp32-printer-status-mac.js"
-status_sha=0422d23e0a3baaf560de086c72a1e27b63ef75b89ab62e2bcdfb94b248539547
+status_sha=23d5c53814bca6de1d50210179c66b51267245232f67a4dfec0267f9211caf4f
 if [ ! -f "$status_script" ]; then
   status_script="$work/esp32-printer-status-mac.js"
   /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
-    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/e34e0f64036ef2283b91ea464aa3b149b6c13c6e/installers/esp32-printer-status-mac.js -o "$status_script"
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/94e1dbd528538b48a8064a6cea72c20f8ab4aa3e/installers/esp32-printer-status-mac.js -o "$status_script"
 fi
 [ "$(/usr/bin/shasum -a 256 "$status_script" | /usr/bin/cut -d' ' -f1)" = "$status_sha" ] || { echo 'Status monitor checksum mismatch.' >&2; exit 1; }
 /usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"
