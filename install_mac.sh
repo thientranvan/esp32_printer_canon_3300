@@ -28,8 +28,8 @@ uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=58e9f8f3d5615b429d42667803f96d9e4a21b18698773db9aa090af6e549f7d7
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/94e1dbd528538b48a8064a6cea72c20f8ab4aa3e/mac_backend.pl
+backend_sha=6869473df00eb0317782a44edb1794f3992951fd5eef35beab34571f5dec0f6a
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/d8c1d6b994b0459a2c3155942c0fb1f04c6f3873/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
@@ -177,6 +177,38 @@ if [ "$console_uid" -ne 0 ]; then
     /bin/rm -f "$console_dir/Library/LaunchAgents/$window_label.plist"
   fi
   /bin/launchctl bootout "gui/$console_uid/$window_label" 2>/dev/null || true
-  /bin/launchctl bootstrap "gui/$console_uid" "$window_plist"
+  /bin/launchctl asuser "$console_uid" /usr/bin/sudo -u "#$console_uid" /bin/launchctl bootstrap "gui/$console_uid" "$window_plist"
 fi
 echo 'Native status window installed; opens for new print jobs and new printer faults.'
+
+# Shared user watcher survives Cmd+Q without keeping any status app alive.
+watcher="$source_dir/mac_status_watch.pl"
+watcher_sha=bff2f6e72285f07885aaef348fbd7495b2c9a150fe7bc6b5ac77b1f0407f1fbb
+if [ ! -f "$watcher" ]; then
+  watcher="$work/mac_status_watch.pl"
+  /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/d8c1d6b994b0459a2c3155942c0fb1f04c6f3873/mac_status_watch.pl -o "$watcher"
+fi
+[ "$(/usr/bin/shasum -a 256 "$watcher" | /usr/bin/cut -d' ' -f1)" = "$watcher_sha" ] || { echo 'Status watcher checksum mismatch.' >&2; exit 1; }
+/usr/bin/perl "$watcher" --self-test
+/usr/bin/install -o root -g wheel -m 644 "$watcher" "$target_dir/mac_status_watch.pl"
+watcher_label=com.esp32printer.status-watcher
+watcher_plist=/Library/LaunchAgents/$watcher_label.plist
+cat > "$work/watcher.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>$watcher_label</string>
+<key>ProgramArguments</key><array><string>/usr/bin/perl</string><string>$target_dir/mac_status_watch.pl</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>ThrottleInterval</key><integer>10</integer><key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>
+EOF
+/usr/bin/plutil -lint "$work/watcher.plist"
+/usr/bin/install -o root -g wheel -m 644 "$work/watcher.plist" "$watcher_plist"
+if [ "$console_uid" -ne 0 ]; then
+  if [ -n "${console_dir:-}" ] && [ "$console_dir" != / ]; then
+    /bin/rm -f "$console_dir/Library/LaunchAgents/$watcher_label.plist"
+  fi
+  /bin/launchctl asuser "$console_uid" /usr/bin/sudo -u "#$console_uid" /bin/launchctl bootout "gui/$console_uid/$watcher_label" 2>/dev/null || true
+  /bin/launchctl asuser "$console_uid" /usr/bin/sudo -u "#$console_uid" /bin/launchctl bootstrap "gui/$console_uid" "$watcher_plist"
+fi
+echo 'Shared status watcher installed; new jobs reopen status windows after Quit.'

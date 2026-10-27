@@ -304,7 +304,12 @@ Cửa sổ dùng applet stay-open và vòng lặp macOS; `run()` trả về, gi�
 ### Mac: đóng cửa sổ và mở lại sau Quit
 
 Command+W hoặc nút Ẩn cửa sổ chỉ đóng/ẩn giao diện; ứng dụng vẫn theo dõi trạng thái.
-Command+Q thoát ứng dụng bình thường, không cản shutdown/reboot. Mỗi lệnh in LAN
-mới gọi mở lại app đúng station ID qua phiên GUI người dùng đang đăng nhập;
-không cần agent mới hoặc ép KeepAlive sau Quit. Cần cài lại bộ cài Mac để nhận
+Command+Q thoát ứng dụng bình thường, không cản shutdown/reboot. Một LaunchAgent nền dùng chung (`com.esp32printer.status-watcher`) theo dõi
+lệnh CUPS mới và mở lại app đúng station ID trong phiên GUI người dùng.
+Không gọi GUI từ CUPS/root; không ép app chạy lại ngay sau Quit. Watcher không
+gửi dữ liệu lên server, không giữ USB, không gửi lệnh in hoặc điều khiển hàng đợi. Cần cài lại bộ cài Mac để nhận
 cả bản UI và CUPS backend mới. Không thay đổi firmware ESP cho sửa đổi này.
+
+Kiểm thử 27/10/2026: sau khi Quit, tạo một job CUPS ở trạng thái hold cho Máy 2;
+cửa sổ tự mở lại. Đã hủy riêng job thử khi vẫn giữ, không gửi dữ liệu tới máy in.
+Kiểm thử cũ mở app từ phiên quản trị không đại diện ngữ cảnh sandbox CUPS.

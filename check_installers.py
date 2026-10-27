@@ -78,3 +78,8 @@ if sys.platform == 'darwin':
         assert json.loads(encoded)==args
         assert 'function run()' in result and 'function startStatus(argv)' in result
         subprocess.run(['osacompile','-l','JavaScript','-o',str(Path(folder)/'Status.app'),str(configured)],check=True)
+
+watcher=Path('mac_status_watch.pl').read_bytes()
+assert hashlib.sha256(watcher).hexdigest()==re.search(r'^watcher_sha=([0-9a-f]{64})$',mac,re.M)[1]
+assert 'watcher_label=com.esp32printer.status-watcher' in mac
+subprocess.run(['/usr/bin/perl','mac_status_watch.pl','--self-test'],check=True)
