@@ -12,7 +12,7 @@
 #ifndef ESP32_PUBLIC_OTA_BUILD
 #include "device_secret.h"
 #endif
-static std::atomic<bool> firmwareCheckPending{true};
+static std::atomic<bool> firmwareCheckPending{false},cloudClaiming{false};
 String devicePassword;
 #include "usb_monitor.h"
 #include "capt_tcp.h"
@@ -31,7 +31,7 @@ struct StationSettings {
 StationSettings stationSettings = {};
 
 bool healthy = false;
-bool uploadOK = false;
+bool uploadOK = false,uploadReserved=false;
 uint32_t rebootAt = 0;
 uint32_t connectionAt = 0;
 bool connecting = false;
@@ -84,6 +84,7 @@ String profileJSON() {
     ",\"name\":" + jsonString(stationName) + ",\"ap_ssid\":"+jsonString(stationAP)+",\"ip\":" + jsonString(WiFi.localIP().toString()) + "}";
 }
 
+static String firmwareJSON();
 #include "cloud_print.h"
 #include "firmware_update.h"
 #include "realtime.h"
@@ -685,18 +686,21 @@ void setup() {
     HTTPUpload &upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
       uploadOK = false;
-      if(firmwareCheckPending.load()||jobSnapshot().active||cloudBusy()||captTCPState.load())return;
-      if (!upload.filename.endsWith(".bin")) return;
+      if (!upload.filename.endsWith(".bin")||!firmwareReserve()) return;
+      uploadReserved=true;
       uploadOK = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
+      if(!uploadOK){firmwareRelease();uploadReserved=false;}
     } else if (upload.status == UPLOAD_FILE_WRITE && uploadOK) {
       if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
         uploadOK = false;
-        Update.abort();
+        Update.abort();if(uploadReserved){firmwareRelease();uploadReserved=false;}
       }
     } else if (upload.status == UPLOAD_FILE_END && uploadOK) {
       uploadOK = Update.end(true);
-    } else if (upload.status == UPLOAD_FILE_ABORTED) {
-      Update.abort();
+      if(uploadOK)rebootAt=millis()+2000;
+      if(!uploadOK&&uploadReserved){Update.abort();firmwareRelease();uploadReserved=false;}
+    } else if (upload.status == UPLOAD_FILE_ABORTED && uploadReserved) {
+      Update.abort();firmwareRelease();uploadReserved=false;
       uploadOK = false;
     }
   });

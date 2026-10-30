@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess,tempfile
 s=Path('station/firmware_update.h').read_text()
 policy=s[s.index('static bool validFirmwareManifest('):s.index('static esp_http_client_handle_t firmwareClient(')]
-download=s[s.index('static bool firmwareDownload('):s.index('static void firmwareUpdateTask(')]
+download=s[s.index('static bool firmwareDownload('):s.index('static bool firmwareIdle(')]
 prefix=r'''
 #include <algorithm>
 #include <cassert>
@@ -45,8 +45,36 @@ static int mbedtls_sha256_update(mbedtls_sha256_context *s,const uint8_t*p,size_
 static int mbedtls_sha256_finish(mbedtls_sha256_context *s,uint8_t*p){memset(p,s->sum,32);return 0;}
 static void mbedtls_sha256_free(mbedtls_sha256_context*){}
 '''
+gate=s[s.index('static bool firmwareIdle('):s.index('static void firmwareUpdateTask(')]
+prefix+=r'''
+#include <atomic>
+static bool healthy=true,busy=false;
+static std::atomic<bool> firmwareCheckPending{false},cloudClaiming{false},cloudNeedsInspection{false};
+static std::atomic<int> captTCPState{0};
+static struct {bool active=false;char state[24]={},printerCancel[24]={};} job;
+static struct {char job[65]={};} cloud;
+static auto jobSnapshot()->decltype(job){return job;}
+static auto cloudSnapshot()->decltype(cloud){return cloud;}
+static bool cloudBusy(){return busy;}
+static const unsigned CaptFirmwareOwner=0xffffffff;
+static unsigned owner=0;
+static struct {std::atomic<int> state{0};} captCommand;
+static bool claimCapt(unsigned n){if(owner&&owner!=n)return false;owner=n;return true;}
+static void releaseCapt(unsigned n){if(owner==n)owner=0;}
+'''
 main=r'''
 int main(){
+ assert(firmwareIdle()&&firmwareReserve()&&owner==CaptFirmwareOwner&&firmwareCheckPending);
+ assert(!firmwareReserve()&&owner==CaptFirmwareOwner);firmwareRelease();assert(!owner&&!firmwareCheckPending);
+ job.active=true;assert(!firmwareReserve()&&!owner&&!firmwareCheckPending);job.active=false;
+ strcpy(job.state,"uncertain");assert(!firmwareReserve());job.state[0]=0;
+ strcpy(job.printerCancel,"unverified");assert(!firmwareReserve());job.printerCancel[0]=0;
+ cloudClaiming=true;assert(!firmwareReserve());cloudClaiming=false;
+ cloudNeedsInspection=true;assert(!firmwareReserve());cloudNeedsInspection=false;
+ captTCPState=1;assert(!firmwareReserve());captTCPState=0;
+ owner=7;assert(!firmwareReserve()&&owner==7&&!firmwareCheckPending);owner=0;
+ captCommand.state=2;assert(!firmwareReserve()&&!owner&&!firmwareCheckPending);captCommand.state=3;
+ assert(firmwareReserve());firmwareRelease();
  std::string hash(64,'a');
  assert(validFirmwareManifest(1,FirmwareVersion+1,FirmwareBoard,5000,hash.c_str(),3145728));
  for(unsigned version:{0u,FirmwareVersion-1,FirmwareVersion})assert(!validFirmwareManifest(1,version,FirmwareBoard,5000,hash.c_str(),3145728));
@@ -71,6 +99,6 @@ assert 'cfg.crt_bundle_attach=esp_crt_bundle_attach' in s and 'cfg.disable_auto_
 assert 'firmwareCheckPending.load() && captFresh()' in Path('station/cloud_print.h').read_text()
 assert '!firmwareCheckPending.load()&&claimCapt(1)' in Path('station/capt_tcp.h').read_text()
 with tempfile.TemporaryDirectory() as tmp:
- p=Path(tmp)/'check.cpp';p.write_text(prefix+policy+download+main);out=Path(tmp)/'check'
+ p=Path(tmp)/'check.cpp';p.write_text(prefix+policy+download+gate+main);out=Path(tmp)/'check'
  subprocess.run(['/Library/Developer/CommandLineTools/usr/bin/clang++','-std=c++11','-isysroot','/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk',str(p),'-o',str(out)],check=True)
  subprocess.run([str(out)],check=True)

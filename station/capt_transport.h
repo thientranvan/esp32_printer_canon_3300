@@ -78,7 +78,7 @@ static String captTelemetryJSON() {
 }
 
 static portMUX_TYPE captOwnerLock = portMUX_INITIALIZER_UNLOCKED;
-static constexpr uint32_t CaptCloudOwner=0xFFFFFFFE;
+static constexpr uint32_t CaptCloudOwner=0xFFFFFFFE,CaptFirmwareOwner=0xFFFFFFFF;
 static uint32_t captOwner = 0; // 1 = TCP session; >=2 = authenticated HTTP client
 static uint32_t captOwnerAt = 0;
 
@@ -89,7 +89,7 @@ static bool captInUse() {
 static bool claimCapt(uint32_t owner) {
   portENTER_CRITICAL(&captOwnerLock);
   int state = captCommand.state.load();
-  if (captOwner >= 2 && captOwner != CaptCloudOwner && uint32_t(millis() - captOwnerAt) >= 30000 && (state == 0 || state == 3))
+  if (captOwner >= 2 && captOwner != CaptCloudOwner && captOwner != CaptFirmwareOwner && uint32_t(millis() - captOwnerAt) >= 30000 && (state == 0 || state == 3))
     captOwner = 0;
   bool acquired = owner && (!captOwner || captOwner == owner);
   if (acquired) { captOwner = owner; captOwnerAt = millis(); }

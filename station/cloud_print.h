@@ -92,7 +92,7 @@ static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
   auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
   String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
-  String body="{\"schema\":1,\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
+  String body="{\"schema\":1,\"firmware\":"+firmwareJSON()+",\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
     ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt_transport\":"+captTransportJSON()+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
@@ -399,6 +399,9 @@ static void cloudTask(void *) {
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
     }else if(!firmwareCheckPending.load() && captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
+      cloudClaiming.store(true);
+      struct ClaimGuard {~ClaimGuard(){cloudClaiming.store(false);}} claimGuard;
+      if(firmwareCheckPending.load()){vTaskDelay(pdMS_TO_TICKS(100));continue;}
       String response,detail;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",nullptr,&detail);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256"),title=cloudText(j,"title");if(title.length()>128)title="";
