@@ -16,6 +16,22 @@ struct CaptCommand {
   usb_transfer_t *transfer = nullptr;
 };
 static CaptCommand captCommand;
+static std::atomic<unsigned> captLastOpcode{0},captFailureOpcode{0},captFailureEndpoint{0},captFailureAt{0},captFailures{0};
+static std::atomic<int> captLastError{0},captFirstError{0};
+static std::atomic<unsigned> captFirstOpcode{0},captFirstEndpoint{0};
+static void captTransferFailed(int error,unsigned endpoint) {
+  captLastError.store(error);captFailureOpcode.store(captLastOpcode.load());
+  captFailureEndpoint.store(endpoint);captFailureAt.store(millis());
+  if(captFailures.fetch_add(1)==0){captFirstError.store(error);captFirstOpcode.store(captLastOpcode.load());captFirstEndpoint.store(endpoint);}
+  Serial.printf("CAPT transport error=%d opcode=%04x endpoint=%02x\n",error,captLastOpcode.load(),endpoint);
+}
+static String captTransportJSON() {
+  return String("{\"repair_state\":")+printerRepair.load()+",\"repair_error\":"+printerRepairError.load()+",\"state\":"+captCommand.state.load()+",\"failures\":"+captFailures.load()+
+    ",\"first_error\":"+captFirstError.load()+",\"first_opcode\":"+captFirstOpcode.load()+",\"first_endpoint\":"+captFirstEndpoint.load()+
+    ",\"last_error\":"+captLastError.load()+",\"opcode\":"+captFailureOpcode.load()+
+    ",\"endpoint\":"+captFailureEndpoint.load()+",\"error_age_ms\":"+
+    (captFailures.load()?String(uint32_t(millis()-captFailureAt.load())):String("null"))+"}";
+}
 static portMUX_TYPE captTelemetryLock=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t captRawStatus[64]={};
 static size_t captRawSize=0;
@@ -110,6 +126,7 @@ static void serviceCapt(USBContext &context) {
       command.state.store(3);
       return;
     }
+    if(!command.input&&command.size>=4)captLastOpcode.store(CaptStatus::word(command.data));
     command.done = false;
     command.cancelled = false;
     command.received = 0;
@@ -123,6 +140,7 @@ static void serviceCapt(USBContext &context) {
     if (!command.input) memcpy(transfer->data_buffer, command.data, command.size);
     command.error = usb_host_transfer_submit(transfer);
     if (command.error != ESP_OK) {
+      captTransferFailed(command.error,transfer->bEndpointAddress);
       usb_host_transfer_free(transfer);
       command.transfer = nullptr;
       command.state.store(3);
@@ -149,6 +167,7 @@ static void serviceCapt(USBContext &context) {
       esp_err_t cleared = usb_host_endpoint_clear(context.device, transfer->bEndpointAddress);
       if (cleared != ESP_OK && command.error == ESP_OK) command.error = cleared;
     }
+    if(command.error!=ESP_OK)captTransferFailed(command.error,transfer->bEndpointAddress);
     usb_host_transfer_free(transfer);
     command.transfer = nullptr;
     command.state.store(3);

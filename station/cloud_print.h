@@ -95,7 +95,7 @@ static String cloudHeartbeatBody() {
   String body="{\"schema\":1,\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
-    ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
+    ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt_transport\":"+captTransportJSON()+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
     ",\"total\":"+String(lanJob?j.total:0)+",\"completed\":"+String(lanJob?j.completed:0)+"},\"cloud\":"+cloudStatusJSON()+",\"job\":"+jobStatusJSON(j)+",\"queue_command\":"+queueCommandJSON()+"}";
   return body;
 }
@@ -270,14 +270,28 @@ static bool cloudCheckpoint() {
   }
 }
 // Same-USB replay requires verified buffer cleanup, not merely a Ready flag.
-static bool cloudResetInterruptedSession() {
+static bool cloudRequestUSBRepair() {
+  if(!claimCapt(CloudOwner))return false;
+  int state=captCommand.state.load();
+  bool queued=(state==0||state==3)&&captCommand.state.compare_exchange_strong(state,6);
+  if(queued){printerRepairError.store(0);printerRepair.store(1);}
+  releaseCapt(CloudOwner);return queued;
+}
+static bool cloudResetInterruptedSession(bool transportReset=false) {
   auto j=jobSnapshot();auto usb=readUSB();
   if(!j.active||strcmp(j.source,"cloud")||j.stopping()||!j.printerSession||
      j.sessionEpoch!=printerEpoch.load()||!usb.connected||!usb.responsive||usb.recovering)return false;
   if(!cloudCommand(0xA0A8)||Prepared::u16(cloudBuffer+2)<40)return false;
   auto f=CaptStatus::decode(cloudBuffer);
-  if(f.service||f.jam||f.cover||f.paper||(Prepared::u16(cloudBuffer+12)&0x84))return false;
-  if(!cloudRecovery.observe(Prepared::u16(cloudBuffer+24)))return false;
+  // An interrupted CAPT session can retain processing/printing bits even when
+  // the panel is Ready. GoOffline + verified cleanup below ends that session;
+  // requiring those bits to clear first deadlocks recovery.
+  if(f.service||f.jam||f.cover||f.paper)return false;
+  bool empty=!(Prepared::u16(cloudBuffer+12)&0x84);
+  for(unsigned i=0;i<4;++i)empty=empty&&!Prepared::u16(cloudBuffer+18+i*2);
+  // Acknowledged USB reset can clear counters. Require a fresh idle/empty
+  // engine before retaining the last confirmed whole-sheet checkpoint.
+  if(!cloudRecovery.observe(Prepared::u16(cloudBuffer+24))&&!(transportReset&&empty))return false;
   jobProgress(j.total,cloudRecovery.confirmed);jobRecoveryProgress(cloudRecovery);
   // The interrupted reservation may have expired; acquire a fresh one before
   // discarding this job's remaining buffer under the exclusive cloud owner.
@@ -299,7 +313,7 @@ static bool cloudPrint(const Prepared::Job &job,unsigned base=0) {
   while(true){
     if(!cloudCheckpoint()||!cloudCounters(c))return false;
     if((c[0]==c[1]&&c[0]==c[2]&&c[0]==c[3])||!(Prepared::u16(cloudBuffer+12)&0x84))break;
-    char message[128];snprintf(message,sizeof(message),"Previous CAPT session unfinished (%u/%u/%u/%u); if stalled, power-cycle printer only; keep ESP powered",c[0],c[1],c[2],c[3]);
+    char message[128];snprintf(message,sizeof(message),"Previous CAPT session unfinished (%u/%u/%u/%u); monitoring printer counters; keep power connected",c[0],c[1],c[2],c[3]);
     portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
     cloudState("waiting_printer",message,"previous_session");waiting=true;
     cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));
@@ -417,14 +431,21 @@ static void cloudTask(void *) {
             auto control=jobSnapshot();if(!strcmp(control.request,"cancel_requested"))break;
             portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
             cloudState("waiting_printer",cloudPreflight?"USB/CAPT preflight unavailable; waiting for printer response; no new page sent":"CAPT session interrupted; waiting for Ready and verified buffer cleanup to recover incomplete sheet",cloudPreflight?"preflight_unavailable":"session_interrupted");
-            bool ready=false,bufferCleared=false;uint32_t resetAt=millis()-5000;
+            bool ready=false,bufferCleared=false,repairRequested=false;uint32_t recoveryAt=millis(),resetAt=recoveryAt-5000;
             while(!ready){
               control=jobSnapshot();if(!strcmp(control.request,"cancel_requested"))break;
               auto usb=readUSB();
+              if(!captFresh()&&captLastError.load()==ESP_ERR_TIMEOUT)
+                cloudState("waiting_printer","USB/CAPT bulk timed out; physical printer fault not verified; waiting for transport recovery","capt_transport");
+              // ponytail: one class reset per interruption; unsupported/reset
+              // failures stay visible instead of cycling USB power indefinitely.
+              if(!repairRequested&&!cloudPreflight&&usb.connected&&usb.responsive&&!usb.recovering&&
+                 !captFresh()&&uint32_t(millis()-recoveryAt)>=15000&&captLastError.load()==ESP_ERR_TIMEOUT)
+                repairRequested=cloudRequestUSBRepair();
               bool available=usb.connected&&usb.responsive&&!usb.recovering&&captFresh()&&!captFault();
               if(available&&!cloudPreflight&&printerEpoch.load()==cloudRecovery.epoch&&uint32_t(millis()-resetAt)>=5000){
                 resetAt=millis();
-                if(claimCapt(CloudOwner)){bufferCleared=cloudResetInterruptedSession();releaseCapt(CloudOwner);}
+                if(claimCapt(CloudOwner)){bufferCleared=cloudResetInterruptedSession(repairRequested&&printerRepair.load()==3);releaseCapt(CloudOwner);}
               }
               ready=available&&(cloudPreflight||bufferCleared||printerEpoch.load()!=cloudRecovery.epoch);
               if(!ready){cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));}

@@ -291,7 +291,7 @@ async function controlJob(action){
 async function refresh(patch=null){try{
  let s;if(patch&&cached){s={...cached,...patch,usb:{...cached.usb,...patch.usb},tcp:{...cached.tcp,...patch.tcp}};}else{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();s=await r.json();}cached=s;const u=s.usb,c=s.cloud,t=s.tcp;renderQueue(s.server_queue,s.queue_command);
  const j=s.job_control||{};currentJobId=j.id||'';
- const waitNotes={previous_session:'Phiên CAPT trước chưa khép. Trạm đang theo dõi bộ đếm; nếu không tiến triển, tắt/bật riêng máy in, giữ nguồn ESP.',preflight_unavailable:'Chưa đọc được phản hồi USB/CAPT trước khi in. Trạm đang thử lại; chưa gửi trang mới.',session_interrupted:'Phiên CAPT bị gián đoạn. Khi máy hết lỗi, trạm xác minh xóa bộ đệm rồi khôi phục từ tờ chưa hoàn tất. Giữ nguyên nguồn.'};
+ const waitNotes={capt_transport:'Giao tiếp USB/CAPT bị timeout; chưa xác nhận lỗi cơ khí. Trạm đang đọc lại phản hồi, giữ nguyên nguồn.',previous_session:'Phiên CAPT trước chưa khép. Trạm đang theo dõi bộ đếm; giữ nguồn ESP và máy in để khôi phục.',preflight_unavailable:'Chưa đọc được phản hồi USB/CAPT trước khi in. Trạm đang thử lại; chưa gửi trang mới.',session_interrupted:'Phiên CAPT bị gián đoạn. Khi máy hết lỗi, trạm xác minh xóa bộ đệm rồi khôi phục từ tờ chưa hoàn tất. Giữ nguyên nguồn.'};
  const waitNote=j.source==='cloud'&&j.state==='waiting_printer'?waitNotes[c.wait_reason]:'';
  const cancelNote=j.state==='cancelled'?({cleared:'Đã hủy — máy in xác nhận bỏ dữ liệu đệm; tờ đã kéo vẫn có thể ra giấy',unverified:'Đã dừng gửi — chưa xác minh xóa dữ liệu đệm trong máy in',not_started:'Đã hủy trước khi mở phiên in'})[j.printer_cancel]:'';
  el('jobs-title').textContent=(j.active||j.state==='waiting_printer')?'Lệnh đang chạy trên trạm':'Lịch sử lệnh gần nhất trên trạm';
@@ -521,7 +521,7 @@ void setup() {
     if(!WiFi.isConnected() || (uint32_t(remote)&uint32_t(mask))!=(uint32_t(local)&uint32_t(mask))){server.send(403,"text/plain","LAN only");return;}
     auto u=readUSB();auto j=jobSnapshot();server.sendHeader("Cache-Control","no-store");
     server.send(200,"application/json",String("{\"schema\":1,\"job_control\":")+jobStatusJSON(j)+",\"connected\":"+(u.connected?"true":"false")+
-      ",\"responsive\":"+(u.responsive?"true":"false")+",\"capt\":"+captTelemetryJSON()+
+      ",\"responsive\":"+(u.responsive?"true":"false")+",\"capt_transport\":"+captTransportJSON()+",\"capt\":"+captTelemetryJSON()+
       ",\"active\":"+(j.active?"true":"false")+",\"total\":"+j.total+",\"completed\":"+j.completed+"}");
   });
   server.on("/printer/command", HTTP_GET, captResult);
@@ -603,7 +603,7 @@ void setup() {
       ",\"port_register\":" + usb.portRegister + ",\"devices\":" + usb.devices +
       ",\"descriptor_id\":" + usb.descriptorID + ",\"descriptor_class\":" + usb.descriptorClass + ",\"descriptor_count\":" + usb.descriptorCount +
       ",\"error\":" + usb.error + ",\"details\":" + jsonString(usb.details) + "}" +
-      ",\"capt\":" + captTelemetryJSON() + ",\"tcp\":{\"port\":9100,\"state\":" + captTCPState.load() +
+      ",\"capt_transport\":"+captTransportJSON()+",\"capt\":" + captTelemetryJSON() + ",\"tcp\":{\"port\":9100,\"state\":" + captTCPState.load() +
       ",\"error\":" + captTCPError.load() + ",\"last_header\":" + captTCPHeader.load() +
       ",\"commands\":" + captTCPCommands.load() + ",\"total\":" + captTCPTotal.load() + ",\"completed\":" + captTCPCompleted.load() + "}}";
     server.sendHeader("Cache-Control", "no-store");

@@ -24,6 +24,9 @@ struct USBStatus {
 };
 static USBStatus usbStatus = {};
 static std::atomic<uint32_t> printerEpoch{0};
+// Printer-class soft reset, then CLEAR_FEATURE(ENDPOINT_HALT) on both bulk pipes.
+// Requested only by interrupted cloud owner; USB client owns all lifecycle work.
+static std::atomic<int> printerRepair{0},printerRepairError{0}; // 0 idle, 1 queued, 2 active, 3 ACK, 4 failed
 static bool usbTaskStarted = false;
 static portMUX_TYPE usbLock = portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<int> usbDaemonError{0};
@@ -86,6 +89,7 @@ struct USBContext {
   bool probeDone;
   bool claimed;
   bool heartbeat;
+  unsigned repairStep;
   uint32_t probeAt;
 };
 
@@ -139,6 +143,60 @@ static esp_err_t startHeartbeat(usb_host_client_handle_t client, USBContext &con
 
 #include "capt_transport.h"
 
+static esp_err_t startPrinterRepair(usb_host_client_handle_t client,USBContext &context,unsigned step) {
+  esp_err_t error=usb_host_transfer_alloc(8,0,&context.probe);
+  if(error!=ESP_OK)return error;
+  auto *t=context.probe;
+  const uint8_t reset[]={0x21,2,0,0,0,0,0,0}; // Printer Class SOFT_RESET, interface 0.
+  const uint8_t clear[]={0x02,1,0,0,uint8_t(step==2?0x01:0x82),0,0,0};
+  memcpy(t->data_buffer,step==1?reset:clear,8);
+  t->device_handle=context.device;t->bEndpointAddress=0;t->num_bytes=8;
+  t->callback=printerProbeDone;t->context=&context;
+  context.probeDone=false;context.repairStep=step;
+  error=usb_host_transfer_submit_control(client,t);
+  if(error!=ESP_OK){usb_host_transfer_free(t);context.probe=nullptr;context.repairStep=0;}
+  return error;
+}
+static void finishPrinterRepair(USBContext &context,USBStatus &status,int error) {
+  // No in-flight bulk transfer: maintenance state was claimed before requesting.
+  if(!context.gone&&context.device){
+    for(unsigned ep:{0x01u,0x82u}){
+      esp_err_t result=usb_host_endpoint_clear(context.device,ep);
+      if(error==ESP_OK&&result!=ESP_OK)error=result;
+    }
+  }
+  context.repairStep=0;context.probeDone=false;
+  captFrames.reset();captCommand.error=error;captCommand.state.store(3);
+  printerRepairError.store(error);printerRepair.store(error==ESP_OK?3:4);
+  status.recovering=false;publishUSB(status);
+  Serial.printf("USB printer repair result=%d; CAPT verification still required\n",error);
+}
+static void servicePrinterRepair(usb_host_client_handle_t client,USBContext &context,USBStatus &status) {
+  if(context.repairStep){
+    if(!context.probeDone)return; // Never free or reuse an in-flight control request.
+    int error=context.gone?ESP_ERR_INVALID_STATE:
+      context.probe->status==USB_TRANSFER_STATUS_COMPLETED?ESP_OK:ESP_FAIL;
+    unsigned step=context.repairStep;
+    usb_host_transfer_free(context.probe);context.probe=nullptr;context.probeDone=false;
+    if(error==ESP_OK&&step<3){
+      error=startPrinterRepair(client,context,step+1);
+      if(error==ESP_OK)return;
+    }
+    finishPrinterRepair(context,status,error);return;
+  }
+  if(printerRepair.load()!=1)return;
+  if(context.gone||!context.device||!context.claimed){finishPrinterRepair(context,status,ESP_ERR_INVALID_STATE);return;}
+  if(context.probe||captCommand.transfer)return;
+  status.recovering=true;++status.recoveries;publishUSB(status);printerRepair.store(2);
+  int error=ESP_OK;
+  for(unsigned ep:{0x01u,0x82u}){
+    if(error==ESP_OK)error=usb_host_endpoint_halt(context.device,ep);
+    if(error==ESP_OK)error=usb_host_endpoint_flush(context.device,ep);
+  }
+  if(error==ESP_OK)error=startPrinterRepair(client,context,1);
+  if(error!=ESP_OK)finishPrinterRepair(context,status,error);
+}
+
 static void usbTask(void *) {
   USBStatus status = {};
   usb_host_config_t config = {};
@@ -189,7 +247,8 @@ static void usbTask(void *) {
       status.error = error;
       publishUSB(status);
     }
-    if (context.probe && context.probeDone) {
+    servicePrinterRepair(client,context,status);
+    if (context.probe && context.probeDone && !context.repairStep) {
       auto *transfer = context.probe;
       if (context.heartbeat) {
         status.responsive = false;
@@ -232,7 +291,7 @@ static void usbTask(void *) {
     // Power-off while SDK recycles a freed device aborts in root_port_recycle().
     // Add explicit recovery only with a serialized SDK lifecycle/state handshake.
     if (!status.recovering && context.device && !context.gone && !context.probe &&
-        !captCommand.transfer && uint32_t(millis() - lastHeartbeat) >= 3000) {
+        !captCommand.transfer && captCommand.state.load()!=6 && uint32_t(millis() - lastHeartbeat) >= 3000) {
       lastHeartbeat = millis();
       status.heartbeatError = startHeartbeat(client, context);
       if (status.heartbeatError != ESP_OK) status.responsive = false;

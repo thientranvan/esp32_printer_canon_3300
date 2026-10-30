@@ -1,3 +1,72 @@
+## Automatic USB printer-class repair, 30/10/2026
+
+After an interrupted cloud session has no fresh CAPT telemetry for 15 seconds,
+USB control still responds, and the bulk transport reports timeout, request
+one USB printer-class repair per interruption. Physical faults with fresh
+CAPT telemetry use the existing fault recovery, not this reset path.
+
+The exclusive cloud owner first atomically reserves maintenance state 6.
+The USB client waits for existing control probes and all bulk transfers to
+finish, halts/flushes empty bulk pipes, then serializes:
+
+1. Printer Class SOFT_RESET: `21 02 00 00 00 00 00 00` (interface 0).
+2. CLEAR_FEATURE(ENDPOINT_HALT): bulk OUT `01`, then bulk IN `82`.
+3. Clear host endpoint halts; resume read-only CAPT polling.
+
+No ESP reboot, root port power switch, interface release, or USB epoch
+fabrication. All control buffers remain allocated until completion callbacks.
+Disconnect, unsupported requests and submit failures remain failures, never
+proof of a repaired printer. Transport fields `repair_state` (0 idle,
+1 queued, 2 active, 3 acknowledged, 4 failed) and `repair_error` are included
+in `capt_transport` on ESP/LAN/cloud.
+
+A reset ACK alone does not resume raster transmission. Require fresh CAPT
+without physical faults, preserve complete-sheet progress, acquire reservation,
+perform CAPT buffer cleanup, and verify idle plus four zero counters. If the
+acknowledged USB reset already reset counters, accept a lower counter only
+when all four are zero and the engine is idle; retain the prior confirmed
+whole-sheet checkpoint. Unconfirmed buffered sheets can be printed again,
+as with existing printer-power-cycle recovery; actual physical output beyond
+the last confirmed counter is unknown.
+
+`check_usb_printer_repair.py` executes production asynchronous control code
+with fake USB callbacks: exact setup packets/order, maintenance ownership,
+pending callback lifetime, control/submit failures, and disconnect. The CAPT
+recovery regression verifies counter reset proof and rejects non-idle state.
+Hardware acceptance on LBP3300 remains pending; class support is not assumed
+from compilation or simulated ACKs.
+
+## CAPT bulk timeout / Ready panel, 30/10/2026
+
+Live Máy 1: active cloud job 60 impressions; confirmed complete sheets 4
+(8 impressions), submitted 11. USB control GET_DEVICE_ID still responds;
+A0A8 telemetry stopped updating for over 3 minutes. The last A0A8 had
+11/10/9/9 counters, no service/jam/cover/paper flags, and engine bits 0x84.
+Polling the already-owned status operation showed repeated error 263
+(ESP_ERR_TIMEOUT). This establishes loss of CAPT bulk responses, not a
+verified physical jam or a server outage. The exact first failed bulk
+command/direction was unavailable in that firmware.
+
+Recovery fix: no longer require engine processing/printing bits to clear
+*before* GoOffline/cleanup. An interrupted session itself can retain them.
+Still require a fresh A0A8 without physical faults and monotonic counters;
+only restart after acknowledged cleanup, a second no-fault/idle A0A8 and
+all four counters zero. No blind raster resend on USB timeout.
+
+Added `capt_transport` in local `/status`, LAN `/printer/status`, and cloud
+heartbeat `printer.capt_transport`: state, failures, last_error, opcode,
+endpoint, error_age_ms, first_error, first_opcode, first_endpoint. The first
+failed transfer since boot remains available after repeated status queries.
+Numeric opcode/endpoint only; no document payload
+or credentials. `cloud.wait_reason=capt_transport` means bulk timeout with
+stale CAPT telemetry. Server must describe communication timeout / waiting
+for response, not instruct power cycling or assert a physical printer fault
+from this reason alone. Existing freshness requirements still apply.
+
+This fixes the processing-flag recovery gate. It does not establish the
+root cause of the observed bulk timeout. A firmware build/test is not
+physical validation of automatic recovery; live diagnosis remains required.
+
 ## Same-USB interrupted-session recovery, 26/10/2026
 
 Captured job `job_7edfa38c31df137ab82150462c112bf7`: 0/4 confirmed,
