@@ -45,8 +45,20 @@ static const unsigned CloudOwner=42;
 static bool claimCapt(unsigned owner){assert(owner==42);return ownerAvailable;}
 static void releaseCapt(unsigned owner){assert(owner==42);++released;}
 '''
+fresh=Path('station/capt_transport.h').read_text()
+fresh=fresh[fresh.index('static bool captFresh('):fresh.index('static bool captFault(')]
+prefix+=r'''
+static unsigned captRawSize=60,captRawAt=0,tick=0;
+static int captTelemetryLock=0;
+#define portENTER_CRITICAL(x) (void)(x)
+#define portEXIT_CRITICAL(x) (void)(x)
+static uint32_t millis(){return tick;}
+'''
 main=r'''
 int main(){
+ tick=2999;assert(captFresh(3000));tick=3000;assert(!captFresh(3000)&&captFresh());
+ tick=10000;assert(!captFresh());captRawAt=UINT32_MAX-999;tick=1999;assert(captFresh(3000));
+ tick=2000;assert(!captFresh(3000));captRawSize=0;assert(!captFresh());
  begin();captCommand.state=2;assert(!cloudRequestUSBRepair()&&captCommand.state==2);
  captCommand.state=3;ownerAvailable=false;assert(!cloudRequestUSBRepair()&&captCommand.state==3);
  ownerAvailable=true;assert(cloudRequestUSBRepair()&&captCommand.state==6&&printerRepair==1);
@@ -76,6 +88,6 @@ int main(){
 }
 '''
 with tempfile.TemporaryDirectory() as tmp:
- p=Path(tmp)/'check.cpp';p.write_text(prefix+block+request+main);out=Path(tmp)/'check'
+ p=Path(tmp)/'check.cpp';p.write_text(prefix+block+request+fresh+main);out=Path(tmp)/'check'
  subprocess.run(['/Library/Developer/CommandLineTools/usr/bin/clang++','-std=c++11','-isysroot','/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk',str(p),'-o',str(out)],check=True)
  subprocess.run([str(out)],check=True)

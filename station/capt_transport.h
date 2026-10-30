@@ -52,8 +52,8 @@ static void captRecordFrame(const uint8_t *p,size_t n) {
 static void captObserve(const uint8_t *data,size_t size) {
   captFrames.feed(data,size,[](const uint8_t *p,size_t n){captRecordFrame(p,n);});
 }
-static bool captFresh() {
-  portENTER_CRITICAL(&captTelemetryLock);bool fresh=captRawSize>=40 && uint32_t(millis()-captRawAt)<10000;portEXIT_CRITICAL(&captTelemetryLock);return fresh;
+static bool captFresh(uint32_t maxAge=10000) {
+  portENTER_CRITICAL(&captTelemetryLock);bool fresh=captRawSize>=40 && uint32_t(millis()-captRawAt)<maxAge;portEXIT_CRITICAL(&captTelemetryLock);return fresh;
 }
 static bool captFault() {
   uint8_t data[64];size_t n;uint32_t at;

@@ -440,7 +440,7 @@ static void cloudTask(void *) {
               // ponytail: one class reset per interruption; unsupported/reset
               // failures stay visible instead of cycling USB power indefinitely.
               if(!repairRequested&&!cloudPreflight&&usb.connected&&usb.responsive&&!usb.recovering&&
-                 !captFresh()&&uint32_t(millis()-recoveryAt)>=15000&&captLastError.load()==ESP_ERR_TIMEOUT)
+                 !captFresh(3000)&&uint32_t(millis()-recoveryAt)>=3000&&captLastError.load()==ESP_ERR_TIMEOUT)
                 repairRequested=cloudRequestUSBRepair();
               bool available=usb.connected&&usb.responsive&&!usb.recovering&&captFresh()&&!captFault();
               if(available&&!cloudPreflight&&printerEpoch.load()==cloudRecovery.epoch&&uint32_t(millis()-resetAt)>=5000){

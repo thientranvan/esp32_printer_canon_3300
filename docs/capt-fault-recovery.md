@@ -1,6 +1,14 @@
 ## Automatic USB printer-class repair, 30/10/2026
 
-After an interrupted cloud session has no fresh CAPT telemetry for 15 seconds,
+Recovery grace reduced from 15 to 3 seconds after a cloud session interruption.
+The repair trigger also requires no CAPT status in the last 3 seconds;
+normal UI/claim freshness stays at 10 seconds. This is additional grace,
+not total time from the first missing reply: an in-flight bulk operation
+still has a 5-second timeout, and repair cannot preempt an active transfer.
+No promised fixed total recovery duration; control requests and subsequent
+CAPT verification must complete.
+
+After an interrupted cloud session satisfies this grace and quiet interval,
 USB control still responds, and the bulk transport reports timeout, request
 one USB printer-class repair per interruption. Physical faults with fresh
 CAPT telemetry use the existing fault recovery, not this reset path.
