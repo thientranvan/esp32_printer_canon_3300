@@ -7,7 +7,13 @@
 #include <esp_core_dump.h>
 #include <esp_partition.h>
 #include <esp_mac.h>
+#include <atomic>
+#include <esp_ota_ops.h>
+#ifndef ESP32_PUBLIC_OTA_BUILD
 #include "device_secret.h"
+#endif
+static std::atomic<bool> firmwareCheckPending{true};
+String devicePassword;
 #include "usb_monitor.h"
 #include "capt_tcp.h"
 #include "usb_trace.h"
@@ -79,6 +85,7 @@ String profileJSON() {
 }
 
 #include "cloud_print.h"
+#include "firmware_update.h"
 #include "realtime.h"
 #include "status_led.h"
 
@@ -97,7 +104,8 @@ void connectSaved() {
 }
 
 bool authorized() {
-  if (server.authenticate("admin", DEVICE_PASSWORD)) return true;
+  if(devicePassword.length()<8||devicePassword.length()>63){server.send(503,"text/plain","Private provisioning required");return false;}
+  if (server.authenticate("admin", devicePassword.c_str())) return true;
   server.requestAuthentication(DIGEST_AUTH, "ESP32 printer");
   return false;
 }
@@ -147,6 +155,7 @@ void captResult() {
 void captSubmit() {
   if (!authorized()) return;
   if (!validPost()) { server.send(403, "text/plain", "Invalid token"); return; }
+  if(firmwareCheckPending.load()){server.send(503,"text/plain","Firmware update check in progress");return;}
   if (readUSB().recovering) { server.send(409, "text/plain", "USB recovering; no command accepted"); return; }
   String data = server.arg("data"), readSize = server.arg("read");
   bool input = !readSize.isEmpty();
@@ -218,7 +227,8 @@ void home() {
 <tr><td><span class="led-dot" style="--led:#0891b2"></span>Xanh ngọc</td><td>Sáng 0,5 giây mỗi 1,6 giây</td><td>Lệnh đang tạm dừng hoặc đã yêu cầu dừng.</td></tr>
 <tr><td><span class="led-dot" style="--led:#9333ea"></span>Tím</td><td>Chớp đôi mỗi 1,6 giây</td><td>Lệnh cần đối soát hoặc trạm cloud đang bị khóa; không tự in lại.</td></tr>
 <tr><td><span class="led-dot" style="--led:#dc2626"></span>Đỏ</td><td>Rất nhanh: sáng/tắt 0,1 giây</td><td>Tự kiểm tra phần cứng/khởi tạo firmware không đạt.</td></tr>
-</tbody></table></div><p class="meta">Ưu tiên lần lượt: lỗi phần cứng, mất Wi-Fi, lỗi máy in, cần đối soát, tạm dừng, nhận/in, lỗi cloud, chưa có máy in, CAPT cũ, rảnh. Đèn không xác nhận giấy đã ra. Cloud tắt thì không dùng Internet/server để xét đèn.</p></details>
+<tr><td><span class="led-dot" style="--led:#9333ea"></span>Tím</td><td>Nháy nhanh: 100 ms sáng / 100 ms tắt</td><td>Đang tải, xác minh và nạp firmware tự động.</td></tr>
+</tbody></table></div><p class="meta">Ưu tiên lần lượt: lỗi phần cứng, cập nhật firmware, mất Wi-Fi, lỗi máy in, cần đối soát, tạm dừng, nhận/in, lỗi cloud, chưa có máy in, CAPT cũ, rảnh. Đèn không xác nhận giấy đã ra. Cloud tắt thì không dùng Internet/server để xét đèn.</p></details>
 <details id="install"><summary>Cài máy in Windows / Mac / Ubuntu · bộ cài mới nhất trên GitHub</summary><p>Cài một lần trên từng máy. Windows/Mac tự tải driver Canon nếu chưa có; Ubuntu dùng CUPS và bộ nén CAPT nguồn mở.</p>
 <div class="grid"><section><h2>Windows 10 / 11 x64</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/ESP32PrinterSetup.exe" download>Tải bộ cài Windows (.exe)</a><p class="meta">Mở file, cho phép quyền quản trị, chọn IP trạm, bấm Đọc trạm, đặt tên rồi bấm Cài đặt. Không cần copy lệnh. EXE chưa ký số nên Windows có thể cảnh báo nhà phát hành.</p><p class="meta">IP trạm này: <strong>__STATION_IP__</strong></p><details><summary>Cài bằng PowerShell (cách cũ)</summary><a href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/installers/esp32-printer-setup-v3.ps1" download>Tải bộ cài PowerShell (.ps1)</a><p class="meta">Tải file, mở PowerShell quản trị, sao chép lệnh rồi chọn file vừa tải. Dùng cùng bộ cài như EXE, giữ cách đặt tên và cập nhật theo ID trạm.</p><textarea id="windows-command" aria-label="Lệnh cài Windows bằng PowerShell" readonly rows="4">Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'PowerShell (*.ps1)|*.ps1'; if ($f.ShowDialog() -eq 'OK') { powershell -NoProfile -ExecutionPolicy Bypass -File $f.FileName -StationIP __STATION_IP__ }</textarea><button type="button" onclick="copyField('windows-command')">Sao chép lệnh PowerShell</button></details></section>
 <section><h2>macOS</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_mac.sh" download>Tải bộ cài Mac</a><p class="meta">Tải file, mở Terminal, sao chép lệnh rồi chọn file vừa tải.</p><textarea id="mac-command" aria-label="Lệnh cài Mac" readonly rows="4">capt_installer=$(osascript -e 'POSIX path of (choose file with prompt "Chon install_mac.sh")') &amp;&amp; sudo /bin/sh "$capt_installer" __STATION_IP__</textarea><button type="button" onclick="copyField('mac-command')">Sao chép lệnh Mac</button></section><section><h2>Ubuntu 22.04 / 24.04</h2><a class="button" href="https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/install_ubuntu.py" download>Tải bộ cài Ubuntu</a><p class="meta">Tải file, mở Terminal tại thư mục chứa file rồi chạy lệnh. Có thể đặt tên khi cài; cài lại dùng ID trạm để tránh trùng máy. A4, cassette 1, 600 dpi; bố cục do CUPS xử lý.</p><textarea id="ubuntu-command" aria-label="Lệnh cài Ubuntu" readonly rows="3">sudo python3 ./install_ubuntu.py __STATION_IP__</textarea><button type="button" onclick="copyField('ubuntu-command')">Sao chép lệnh Ubuntu</button></section></div>
@@ -303,7 +313,7 @@ async function refresh(patch=null){try{
  el('job-resolve').disabled=!j.id||j.active||j.state!=='uncertain';
  el('job-delete').disabled=j.actions?!j.actions.delete:!j.id||j.active||j.state==='uncertain'||j.state==='waiting_printer';
  el('support').hidden=!s.support_command||s.support_command.startsWith('#');el('support-command').value=s.support_command||'';
- el('name').textContent=s.station.name;el('connection').textContent=s.healthy?'Trạm hoạt động':'Trạm cần kiểm tra';el('connection').dataset.tone=s.healthy?'ok':'error';
+ el('name').textContent=s.station.name;el('connection').textContent=s.healthy?'Trạm hoạt động':'Trạm cần kiểm tra';el('connection').dataset.tone=s.healthy?'ok':'error';if(s.firmware)el('connection').textContent+=' · FW '+s.firmware.version+' · '+s.firmware.state;
  el('wifi').textContent=s.connected?s.ssid:s.connecting?'Đang kết nối…':'Chưa kết nối Wi-Fi';el('network').textContent=s.connected?'IP '+s.ip+' · '+s.rssi+' dBm':'Kết nối Wi-Fi để in qua LAN và web.';
  el('cloud').textContent='Web: '+(cloudNames[c.state]||c.state)+(c.error?' · '+c.error:'');
  let title='Chưa kết nối máy in',note='Kiểm tra nguồn máy in và dây USB–OTG.';
@@ -375,6 +385,15 @@ void setup() {
     free(const_cast<uint8_t *>(memory));
   }
   bool storageOK = prefs.begin("printer", false);
+  if(storageOK)devicePassword=prefs.getString("password","");
+#ifndef ESP32_PUBLIC_OTA_BUILD
+  if(storageOK&&devicePassword.isEmpty()){
+    devicePassword=DEVICE_PASSWORD;
+    if(prefs.putString("password",devicePassword)!=devicePassword.length())devicePassword="";
+  }
+#endif
+  // ponytail: public OTA requires initial private provisioning; fail closed on blank NVS.
+  bool passwordOK=devicePassword.length()>=8&&devicePassword.length()<=63;
   if (storageOK) supportCommand = prefs.getString("supportcmd", supportCommand);
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
@@ -408,7 +427,7 @@ void setup() {
   String hostname = "esp32-" + stationID.substring(12);
   WiFi.setHostname(hostname.c_str());
   WiFi.setAutoReconnect(false);
-  bool apOK = WiFi.softAP(stationAP.c_str(), DEVICE_PASSWORD);
+  bool apOK = passwordOK&&WiFi.softAP(stationAP.c_str(), devicePassword.c_str());
   healthy = idOK && storageOK && wifiOK && staticOK && apOK && memoryOK &&
             ESP.getFlashChipSize() == 16777216 && ESP.getPsramSize() == 8388608;
   csrf = String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX) + String(esp_random(), HEX);
@@ -582,7 +601,7 @@ void setup() {
   server.on("/status", HTTP_GET, [] {
     if (!authorized()) return;
     USBStatus usb = readUSB();
-    String json = String("{\"status_source\":\"esp32\",\"server_queue\":")+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
+    String json = String("{\"firmware\":")+firmwareJSON()+",\"status_source\":\"esp32\",\"server_queue\":"+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
       ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
       ",\"connecting\":" + (connecting ? "true" : "false") +
       ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +
@@ -662,10 +681,11 @@ void setup() {
     server.send(ok ? 200 : 400, "text/plain; charset=utf-8", ok ? "Cập nhật thành công. Đang khởi động lại." : "Cập nhật thất bại. Firmware hiện tại được giữ.");
     if (ok) rebootAt = millis() + 2000;
   }, [] {
-    if (!server.authenticate("admin", DEVICE_PASSWORD) || !validPost()) return;
+    if (devicePassword.length()<8||devicePassword.length()>63||!server.authenticate("admin", devicePassword.c_str()) || !validPost()) return;
     HTTPUpload &upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
       uploadOK = false;
+      if(firmwareCheckPending.load()||jobSnapshot().active||cloudBusy()||captTCPState.load())return;
       if (!upload.filename.endsWith(".bin")) return;
       uploadOK = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
     } else if (upload.status == UPLOAD_FILE_WRITE && uploadOK) {
@@ -684,6 +704,7 @@ void setup() {
   server.begin();
   if(xTaskCreate(realtimeTask,"dashboard-events",12288,nullptr,1,nullptr)!=pdPASS)Serial.println("Dashboard SSE task failed");
   startCloud();
+  startFirmwareUpdate();
   const esp_reset_reason_t resetReason = esp_reset_reason();
   if (resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||
       resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT) {
@@ -705,6 +726,7 @@ static void __attribute__((noinline)) updateStatusLED() {
     if(captFresh()){portENTER_CRITICAL(&captTelemetryLock);tonerWarning=captRawSize>=40&&CaptStatus::decode(captRawStatus).toner;portEXIT_CRITICAL(&captTelemetryLock);}
     StatusLed::Mode mode=StatusLed::Idle;
     if(!healthy)mode=StatusLed::HardwareError;
+    else if(firmwareDownloading.load())mode=StatusLed::Updating;
     else if(WiFi.status()!=WL_CONNECTED)mode=StatusLed::NetworkError;
     else if(usb.error||captFault()||tonerWarning)mode=StatusLed::PrinterError;
     else if(!strcmp(job.state,"uncertain")||!strcmp(cloud.state,"blocked"))mode=StatusLed::Uncertain;

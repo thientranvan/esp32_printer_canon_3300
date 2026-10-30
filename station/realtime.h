@@ -4,7 +4,7 @@
 static WiFiServer eventServer(81);
 static String realtimeJSON() {
   auto u=readUSB();
-  return String("{\"status_source\":\"esp32\",\"server_queue\":")+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"capt\":"+captTelemetryJSON()+",\"job_control\":"+jobStatusJSON()+",\"cloud\":"+cloudStatusJSON()+
+  return String("{\"firmware\":")+firmwareJSON()+",\"status_source\":\"esp32\",\"server_queue\":"+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"capt\":"+captTelemetryJSON()+",\"job_control\":"+jobStatusJSON()+",\"cloud\":"+cloudStatusJSON()+
     ",\"usb\":{\"connected\":"+(u.connected?"true":"false")+",\"responsive\":"+(u.responsive?"true":"false")+
     ",\"recovering\":"+(u.recovering?"true":"false")+",\"error\":"+u.error+"},\"tcp\":{\"state\":"+captTCPState.load()+
     ",\"total\":"+captTCPTotal.load()+",\"completed\":"+captTCPCompleted.load()+"}}";

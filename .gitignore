@@ -10,3 +10,6 @@ build/
 *.elf
 *.map
 credential.rtf
+
+# Public OTA image only; build_firmware_release.py excludes private credentials.
+!firmware/station.bin

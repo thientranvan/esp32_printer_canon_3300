@@ -1,11 +1,12 @@
 #pragma once
 #include <stdint.h>
 namespace StatusLed {
-enum Mode { HardwareError, NetworkError, PrinterError, Disconnected, Unverified, Paused, Uncertain, Busy, Idle };
+enum Mode { Updating, HardwareError, NetworkError, PrinterError, Disconnected, Unverified, Paused, Uncertain, Busy, Idle };
 // Dim RGB values: status indicator, not illumination. All timing is nonblocking.
 inline uint32_t color(Mode mode,uint32_t now) {
   bool on=false;uint32_t rgb=0;
   switch(mode) {
+    case Updating:on=now%200<100;rgb=0x020003;break;
     case HardwareError:on=now%200<100;rgb=0x030000;break;
     case NetworkError:on=now%500<250;rgb=0x030000;break;
     case PrinterError:on=now%1600<120||(now%1600>=280&&now%1600<400);rgb=0x030200;break;

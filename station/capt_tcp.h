@@ -78,7 +78,7 @@ static void captTCPTask(void *) {
     uint32_t waiting = millis();
     bool acquired = false;
     while (client.connected() && uint32_t(millis() - waiting) < 60000) {
-      if (claimCapt(1)) { acquired = true; break; }
+      if (!firmwareCheckPending.load()&&claimCapt(1)) { acquired = true; break; }
       vTaskDelay(pdMS_TO_TICKS(20));
     }
     if (acquired) {

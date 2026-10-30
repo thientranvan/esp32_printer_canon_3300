@@ -398,7 +398,7 @@ static void cloudTask(void *) {
         id="";lease="";state="";error="";
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
-    }else if(captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
+    }else if(!firmwareCheckPending.load() && captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
       String response,detail;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",nullptr,&detail);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256"),title=cloudText(j,"title");if(title.length()>128)title="";

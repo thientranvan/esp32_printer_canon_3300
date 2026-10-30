@@ -835,3 +835,6 @@ trạm, đặt tên và cài/cập nhật; nhúng script hiện tại, không c�
 tải EXE trên trang từng ESP. [Build và giới hạn kiểm thử](docs/windows-exe.md).
 
 Khôi phục kẹt giấy/tắt bật máy in: [checkpoint theo tờ, LAN/cloud và giới hạn](docs/paper-jam-recovery.md). Cần firmware và bộ gửi LAN mới; job cũ `uncertain` không tự nâng cấp.
+
+Cập nhật firmware tự động từ bản `.bin` build sẵn trên GitHub:
+[phát hành, chuyển tiếp mật khẩu sang NVS và giới hạn OTA](docs/firmware-update.md).
