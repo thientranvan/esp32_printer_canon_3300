@@ -43,3 +43,20 @@ redirect/host tin cậy trước khi đổi cách phát hành.
 `check_firmware_update.py` chạy production validator và downloader với HTTP/
 flash/SHA giả lập để kiểm tra nhánh lỗi; SHA-256 thật do mbedTLS thực hiện trên ESP.
 Kiểm tra tải thật, reboot và giữ cấu hình cần ghi nhận riêng theo từng bo.
+
+## Kiểm chứng thực tế 30/10/2026
+
+Máy 2 (`esp32-1051db78a8fc`, `.200`): nạp riêng bootstrap version
+2026103003; quan sát ESP tự tải firmware công khai từ GitHub, báo xác minh/nạp
+thành công rồi reboot sang 2026103004. Sau boot, check kết thúc, self-test đạt,
+CAPT fresh và heartbeat HTTP 200. IP/tên/AP SSID giữ theo cấu hình, đăng nhập
+vẫn dùng mật khẩu cũ từ NVS. Không gửi trang in thử trong lượt kiểm chứng OTA.
+Máy 1: đợi counter job kết thúc 44/44 rồi mới nạp bootstrap. ESP tự lên
+2026103004, giữ `.199`, tên/AP SSID và đăng nhập; heartbeat 200. Sau boot chưa
+nhận được USB dù người dùng xác nhận máy in vẫn bật/cáp giữ nguyên. Nạp lại
+chính public image 2026103004 để reboot riêng ESP thêm một lần (không job),
+USB nhận đúng Canon LBP3300, CAPT fresh, cloud idle. Không tắt nguồn máy in.
+Đây là một lần enumeration chưa hoàn tất sau boot; chưa xác định nguyên nhân,
+không gọi đây là kiểm chứng in giấy hoặc khẳng định mọi lần OTA đều tái nhận
+USB thành công ngay. Không thêm reboot lặp vô hạn để che lỗi. Máy 3 chưa
+truy cập được qua LAN.
