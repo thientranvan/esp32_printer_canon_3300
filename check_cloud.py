@@ -37,6 +37,7 @@ static void vTaskDelay(unsigned){++waits;if(catchUp)decoded=started=submitted=co
 static std::vector<int> flags;
 static void cloudHeartbeat(){}
 static void jobPrinterSession(unsigned){}
+static void captSelectPaper(unsigned n){assert(n==1);}
 static bool cloudCheckpoint(){return !cancelled;}
 static void cloudPut16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
 static void cloudPut32(uint8_t *p,uint32_t n){cloudPut16(p,n);cloudPut16(p+2,n>>16);}
@@ -178,6 +179,8 @@ static void jobRecoveryProgress(const PrintRecovery::Checkpoint &p){currentJob.c
 static void cloudState(const char *,const char * = "",const char * = ""){}
 static void cloudHeartbeat(){}
 static bool cancelOnWait=false,latched=false,rejectClear=false,latchedJam=false;
+static bool cloudPollPaper(){return true;}
+static int captPaperPresent(unsigned n){assert(n==1);return 1;}
 static unsigned queries=0,serviceQueries=0,errorClears=0,misprintClears=0;
 static struct {unsigned load(){return 1;}} printerEpoch;
 static void vTaskDelay(unsigned n){tick+=n;if(cancelOnWait)strcpy(currentJob.request,"cancel_requested");}

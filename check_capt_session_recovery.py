@@ -18,7 +18,9 @@ static struct {bool connected=true,responsive=true,recovering=false;} usb;
 static uint8_t cloudBuffer[80];
 static const unsigned CloudOwner=42;
 static unsigned queries=0,failOp=0,mask=0,count=2,tail=0,processing=0,tailProcessing=0;
-static bool cleaned=false,rejectCleanup=false;
+static bool cleaned=false,rejectCleanup=false,paperLoaded=true;
+static bool cloudPollPaper(bool){return true;}
+static int captPaperPresent(unsigned source){assert(source==1);return paperLoaded;}
 static std::vector<unsigned> ops;
 static void put(uint8_t*p,unsigned n){p[0]=n;p[1]=n>>8;}
 static PrintControl::Job jobSnapshot(){return j;}
@@ -59,6 +61,7 @@ int main(){
  begin();processing=0x84;count=0;cloudRecovery.observed=3;assert(!cloudResetInterruptedSession(true)&&!cleaned);
  begin();j.sessionEpoch=6;assert(!cloudResetInterruptedSession()&&ops.empty());
  begin();j.command("job","cancel");assert(!cloudResetInterruptedSession()&&ops.empty());
+ begin();paperLoaded=false;assert(!cloudResetInterruptedSession()&&!cleaned&&ops.empty());paperLoaded=true;
  puts("PASS: production same-USB recovery requires Ready, valid counters, reservation and verified empty buffer; restarts only from complete sheets");
 }
 '''

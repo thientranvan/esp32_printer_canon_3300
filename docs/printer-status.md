@@ -1,5 +1,12 @@
 # Trạng thái Canon LBP3300: CAPT → ESP → máy tính/server
 
+## Bổ sung 31/10/2026
+
+A0A8 có thể mất cờ yêu cầu giấy trong khi Cassette 1 vẫn trống giữa lệnh web.
+Bản 2026103101 thêm A0A1 và `capt.paper_sources`, giữ phiên khi chờ giấy;
+xem [ca thật, contract và giới hạn nghiệm thu](paper-out-recovery.md).
+Các ghi chép thời điểm/chu kỳ và khả năng cũ bên dưới là lịch sử.
+
 ## Kiểm chứng trên Máy 1, 22/10/2026
 
 - Nạp/debug qua COM `/dev/cu.usbmodem5CF90462221`, MAC `98:c3:77:a1:36:b0`.

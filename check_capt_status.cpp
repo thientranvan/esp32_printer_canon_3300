@@ -23,5 +23,20 @@ int main(){
    else return false;
    ++step;return true;
  }));assert(step==3&&CaptStatus::decode(output).service);
+ // Real A0A1 Cassette 1 observations: 0xa2 empty; bit 0x40 marks paper.
+ uint8_t trays[54]={0xa1,0xa0,54,0,0,0x30};
+ trays[6]=0x80;trays[22]=0xa2;trays[24]=1;trays[38]=0x23;trays[40]=2;
+ CaptStatus::PaperSources paper;
+ assert(CaptStatus::paperSources(trays,sizeof(trays),paper));
+ assert(paper.present(0)==0&&paper.present(1)==0&&paper.present(2)==-1&&paper.present(8)==-1);
+ trays[22]|=0x40;assert(CaptStatus::paperSources(trays,sizeof(trays),paper)&&paper.present(1)==1);
+ assert(!CaptStatus::paperSources(trays,sizeof(trays)-1,paper));
+ trays[40]=1;assert(!CaptStatus::paperSources(trays,sizeof(trays),paper));trays[40]=2;
+ uint8_t maximum[134]={0xa1,0xa0,134,0};
+ for(unsigned i=0;i<8;++i){maximum[6+16*i]=0xc0;maximum[8+16*i]=i;}
+ for(unsigned split=1;split<134;++split){CaptStatus::Frames all;unsigned count=0;
+  auto check=[&](const uint8_t *p,size_t n){++count;CaptStatus::PaperSources full;assert(CaptStatus::paperSources(p,n,full)&&full.loaded==255);};
+  all.feed(maximum,split,check);all.feed(maximum+split,134-split,check);assert(count==1);
+ }
  puts("CAPT fragmented status, stale tail recovery and flags: OK");
 }

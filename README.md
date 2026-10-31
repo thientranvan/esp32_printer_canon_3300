@@ -2,6 +2,8 @@
 
 Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
+Hết giấy giữa lệnh web: [quan sát Máy 1 và bản sửa A0A1](docs/paper-out-recovery.md).
+
 ## Kết nối phần cứng và debug hiện tại — 22/10/2026
 
 - Ưu tiên **cổng COM → Mac** để nạp firmware và đọc log UART 115200 baud trực tiếp.

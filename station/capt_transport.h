@@ -37,6 +37,17 @@ static uint8_t captRawStatus[64]={};
 static size_t captRawSize=0;
 static uint32_t captRawAt=0, captServiceAt=0;
 static unsigned captServiceCode=0,captServiceSub=0;
+static CaptStatus::PaperSources captPaperSources;
+static uint32_t captPaperAt=0;
+static int captPaperSource=-1;
+static void captSelectPaper(unsigned source) {
+  portENTER_CRITICAL(&captTelemetryLock);captPaperSource=source<8?int(source):-1;portEXIT_CRITICAL(&captTelemetryLock);
+}
+static int captPaperPresent(unsigned source) {
+  portENTER_CRITICAL(&captTelemetryLock);
+  int present=captPaperAt&&uint32_t(millis()-captPaperAt)<10000?captPaperSources.present(source):-1;
+  portEXIT_CRITICAL(&captTelemetryLock);return present;
+}
 static CaptStatus::Frames captFrames;
 static void captRecordFrame(const uint8_t *p,size_t n) {
     unsigned op=CaptStatus::word(p);
@@ -46,6 +57,10 @@ static void captRecordFrame(const uint8_t *p,size_t n) {
       if(!CaptStatus::decode(p).service){captServiceAt=0;captServiceCode=captServiceSub=0;}
     }else if(op==0xA2A2 && n>=12 && p[5] && p[5]<=16){
       captServiceCode=CaptStatus::word(p+8);captServiceSub=CaptStatus::word(p+10);captServiceAt=millis();
+    }else if(op==0xA0A1 && CaptStatus::paperSources(p,n,captPaperSources)){
+      captPaperAt=millis();
+    }else if(op==0xE1A9 && n==6 && p[4]==0 && p[5]<8){
+      captPaperSource=p[5];
     }
     portEXIT_CRITICAL(&captTelemetryLock);
 }
@@ -59,7 +74,9 @@ static bool captFault() {
   uint8_t data[64];size_t n;uint32_t at;
   portENTER_CRITICAL(&captTelemetryLock);n=captRawSize;at=captRawAt;memcpy(data,captRawStatus,n);portEXIT_CRITICAL(&captTelemetryLock);
   if(n<40||uint32_t(millis()-at)>10000)return false;
-  auto f=CaptStatus::decode(data);return f.service||f.jam||f.cover||f.paper;
+  auto f=CaptStatus::decode(data);
+  portENTER_CRITICAL(&captTelemetryLock);int source=captPaperSource;portEXIT_CRITICAL(&captTelemetryLock);
+  return f.service||f.jam||f.cover||f.paper||(source>=0&&captPaperPresent(source)==0);
 }
 static String captTelemetryJSON() {
   uint8_t data[64];size_t size;uint32_t at,serviceAt;unsigned code,sub;
@@ -68,13 +85,17 @@ static String captTelemetryJSON() {
   for(size_t i=0;i<size;++i){hex+=digits[data[i]>>4];hex+=digits[data[i]&15];}
   bool fresh=size>=40 && uint32_t(millis()-at)<10000 && readUSB().connected;
   CaptStatus::Flags f={};if(size>=40)f=CaptStatus::decode(data);
+  portENTER_CRITICAL(&captTelemetryLock);int source=captPaperSource;uint32_t paperAt=captPaperAt;auto sources=captPaperSources;portEXIT_CRITICAL(&captTelemetryLock);
+  bool paperFresh=fresh&&paperAt&&uint32_t(millis()-paperAt)<10000;
+  if(paperFresh&&source>=0&&sources.present(source)==0)f.paper=true;
+  String paper=",\"paper_sources\":{\"fresh\":"+String(paperFresh?"true":"false")+",\"selected\":"+(source>=0?String(source):String("null"))+",\"cassette1_present\":"+(paperFresh&&sources.present(1)>=0?String(sources.present(1)?"true":"false"):String("null"))+"}";
   char service[24]="";if(fresh&&f.service&&serviceAt&&uint32_t(millis()-serviceAt)<10000)snprintf(service,sizeof(service),"E%03X %04X",code,sub);
   String capabilities=",\"capabilities\":{\"service_code\":true,\"paper_required\":true,\"paper_jam\":true,\"cover_open\":true,\"toner_warning\":true,\"toner_percent\":false,\"all_faults_verified\":false},\"progress_unit\":\"impressions\",\"data_source\":\"capt\"";
   String decoded=String(",\"fresh\":")+(fresh?"true":"false")+",\"service_error\":"+(f.service?"true":"false")+
     ",\"service_code\":\""+service+"\",\"paper_jam\":"+(f.jam?"true":"false")+",\"cover_open\":"+(f.cover?"true":"false")+
     ",\"toner_warning\":"+(f.toner?"true":"false")+",\"paper_required\":"+(f.paper?"true":"false")+
     ",\"toner_percent\":null,\"decoded\":"+f.decoded+",\"started\":"+f.started+",\"exiting\":"+f.exiting+",\"completed\":"+f.completed;
-  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+decoded+capabilities+"}";
+  return "{\"opcode\":\"a0a8\",\"frame_hex\":\""+hex+"\",\"age_ms\":"+(at?String(uint32_t(millis()-at)):String("null"))+decoded+capabilities+paper+"}";
 }
 
 static portMUX_TYPE captOwnerLock = portMUX_INITIALIZER_UNLOCKED;
@@ -109,6 +130,7 @@ static void serviceCapt(USBContext &context) {
   if(context.gone){
     captFrames.reset();portENTER_CRITICAL(&captTelemetryLock);
     captRawSize=0;captRawAt=captServiceAt=0;captServiceCode=captServiceSub=0;
+    captPaperAt=0;captPaperSources={};captPaperSource=-1;
     portEXIT_CRITICAL(&captTelemetryLock);
   }
   auto &command = captCommand;

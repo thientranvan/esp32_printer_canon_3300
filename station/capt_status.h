@@ -8,6 +8,23 @@ struct Flags {
   bool service, jam, cover, toner, paper;
   unsigned decoded, started, exiting, completed;
 };
+struct PaperSources {
+  uint8_t known=0, installed=0, loaded=0;
+  int present(unsigned source) const {
+    return source<8 && (known&(1U<<source)) && (installed&(1U<<source)) ? bool(loaded&(1U<<source)) : -1;
+  }
+};
+inline bool paperSources(const uint8_t *frame,size_t size,PaperSources &out) {
+  if(size<6||word(frame)!=0xA0A1||word(frame+2)!=size||(size-6)%16||size>134||(frame[4]&128))return false;
+  PaperSources parsed;
+  for(size_t offset=6;offset<size;offset+=16){
+    unsigned source=frame[offset+2];if(source>=8||(parsed.known&(1U<<source)))return false;
+    parsed.known|=1U<<source;
+    if(frame[offset]&128)parsed.installed|=1U<<source;
+    if(frame[offset]&64)parsed.loaded|=1U<<source;
+  }
+  out=parsed;return true;
+}
 inline Flags decode(const uint8_t *frame) {
   const uint8_t *p=frame+4;unsigned flags=word(p+12);
   return {bool(p[2]&8),bool(flags&0x100),bool(flags&0x4000),bool(flags&0x2000),
@@ -16,7 +33,7 @@ inline Flags decode(const uint8_t *frame) {
 // CAPT replies may arrive as several short USB transfers. Retain only telemetry
 // prefix, consume entire declared frame, never interpret a tail as a new header.
 struct Frames {
-  uint8_t data[80]={};size_t used=0, length=0;
+  uint8_t data[134]={};size_t used=0, length=0;
   void reset(){used=length=0;}
   template<class F> void feed(const uint8_t *p,size_t n,F complete){
     while(n--){uint8_t b=*p++;if(used<sizeof(data))data[used]=b;++used;

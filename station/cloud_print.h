@@ -203,6 +203,15 @@ static bool cancelCapt(uint32_t owner,bool report) {
 }
 static PrintRecovery::Checkpoint cloudRecovery;
 static bool cloudTracking=false,cloudPreflight=false;static uint32_t cloudFaultTime=0;
+static bool cloudPollPaper(bool force=false) {
+  static uint32_t queriedAt=0;
+  if(!force&&queriedAt&&uint32_t(millis()-queriedAt)<500)return true;
+  uint8_t buffer[134];
+  if(!captExchange(buffer,sizeof(buffer),CloudOwner,0xA0A1))return false;
+  CaptStatus::PaperSources sources;
+  if(!CaptStatus::paperSources(buffer,CaptStatus::word(buffer+2),sources))return false;
+  queriedAt=millis();return true;
+}
 static bool cloudCounters(unsigned *c) {
   uint32_t waitStart=millis(),clearAt=0;bool waited=false,cleared=false;
   while(true){
@@ -214,15 +223,19 @@ static bool cloudCounters(unsigned *c) {
     portENTER_CRITICAL(&cloudLock);cloudView.completed=done;portEXIT_CRITICAL(&cloudLock);
     auto j=jobSnapshot();if(j.active&&!strcmp(j.source,"cloud")){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
     auto flags=CaptStatus::decode(cloudBuffer);
+    if(!cloudPollPaper())return false;
+    // Cloud renderer selects Cassette 1. General A0A8 does not reliably keep
+    // paper_required set while this source is empty; A0A1 is authoritative.
+    int paper=captPaperPresent(1);bool paperBlocked=paper!=1;
     bool misprint=cloudBuffer[16]&0x80;
-    bool blocked=flags.service||flags.jam||flags.cover||flags.paper||misprint;
+    bool blocked=flags.service||flags.jam||flags.cover||flags.paper||misprint||paperBlocked;
     // Canon ClearErrorMisprint: acknowledge latched errors even while the
     // jam flag remains set. Printer sensors decide whether recovery can proceed.
     // ponytail: cloud session only; LAN CAPT driver owns its recovery commands.
     bool clearError=cloudBuffer[13]&0x4f;
     bool clearMisprint=misprint&&!(cloudBuffer[12]&4);
     if(cloudTracking&&j.printerSession&&j.sessionEpoch==printerEpoch.load()&&
-       !flags.service&&!flags.cover&&(clearError||clearMisprint)&&
+       !flags.service&&!flags.cover&&!paperBlocked&&(clearError||clearMisprint)&&
        (!cleared||uint32_t(millis()-clearAt)>=1000)){
       clearAt=millis();cleared=true;
       if((clearError&&!cloudCommand(0xE0A2))||(clearMisprint&&!cloudCommand(0xE0A3)))return false;
@@ -238,6 +251,7 @@ static bool cloudCounters(unsigned *c) {
     }
     portENTER_CRITICAL(&jobLock);strcpy(currentJob.state,"waiting_printer");portEXIT_CRITICAL(&jobLock);
     waited=true;cloudState("waiting_printer","Fix printer fault; printing continues automatically when ready","printer_fault");
+    if(paperBlocked)cloudState("waiting_printer",paper==0?"Cassette 1 empty; load paper and close tray; keeping current CAPT session":"Cassette 1 sensor unavailable; waiting for a fresh reading",paper==0?"paper_required":"paper_status_unknown");
     cloudHeartbeat();vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
@@ -281,6 +295,7 @@ static bool cloudResetInterruptedSession(bool transportReset=false) {
   auto j=jobSnapshot();auto usb=readUSB();
   if(!j.active||strcmp(j.source,"cloud")||j.stopping()||!j.printerSession||
      j.sessionEpoch!=printerEpoch.load()||!usb.connected||!usb.responsive||usb.recovering)return false;
+  if(!cloudPollPaper(true)||captPaperPresent(1)!=1)return false;
   if(!cloudCommand(0xA0A8)||Prepared::u16(cloudBuffer+2)<40)return false;
   auto f=CaptStatus::decode(cloudBuffer);
   // An interrupted CAPT session can retain processing/printing bits even when
@@ -306,6 +321,7 @@ static bool cloudResetInterruptedSession(bool transportReset=false) {
 }
 static bool cloudPrint(const Prepared::Job &job,unsigned base=0) {
   cloudTracking=false;cloudPreflight=true;
+  captSelectPaper(1); // Cloud jobs explicitly select Cassette 1 below.
   if(!cloudCommand(0xA1A1) || Prepared::u16(cloudBuffer+2)<8 || Prepared::u16(cloudBuffer+6)!=0x2A94)return false;
   // Read-only preflight: an unfinished old session is not a paper/cover fault.
   // Keep observing it; no USB epoch change is needed if its counters catch up.
@@ -480,7 +496,7 @@ static void cloudTask(void *) {
 }
 static constexpr uint32_t CaptStatusOwner=0xFFFFFFFD;
 static void captStatusTask(void *) {
-  uint8_t buffer[80];unsigned previous=~0U;
+  uint8_t buffer[134];unsigned previous=~0U;
   while(true){
     if(readUSB().responsive && claimCapt(CaptStatusOwner)){
       auto pending=jobSnapshot();
@@ -495,6 +511,7 @@ static void captStatusTask(void *) {
         unsigned key=f.service|f.jam<<1|f.cover<<2|f.paper<<3|f.toner<<4|code<<8;
         if(key!=previous){Serial.printf("CAPT status service=%u code=%s jam=%u cover=%u paper=%u toner=%u completed=%u\n",f.service,service,f.jam,f.cover,f.paper,f.toner,f.completed);previous=key;}
       }
+      captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A1);
       releaseCapt(CaptStatusOwner);
     }
     vTaskDelay(pdMS_TO_TICKS(500));
