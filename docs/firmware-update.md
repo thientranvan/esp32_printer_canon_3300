@@ -98,3 +98,14 @@ bo 1/2, bo 3 tắt. Không ghi nhận việc các bo đã nhận 2026103005 cho 
 - Đẩy thay đổi phiên bản/trạng thái qua luồng realtime hiện tại của server; ESP đã gửi chúng trong mọi heartbeat, không cần PC agent.
 - Heartbeat mới sau reboot xác nhận version thực tế; offline vẫn xét theo last_seen như cũ. Không xóa trạng thái lỗi máy in chỉ vì version thay đổi.
 - Không tự gửi lệnh reboot/update trong lúc job active/paused/waiting/uncertain. Firmware tự quyết định idle và giữ khóa admission trước khi flash.
+
+
+## Máy 3 đã chuyển sang OTA công khai — 01/11/2026
+
+Máy 3 `esp32-1051db786a34` tại `192.168.1.201` đã nạp bước chuyển riêng
+qua OTA khi rảnh để lưu mật khẩu hiện hữu vào NVS, sau đó tự tải và xác minh
+image công khai `2026103101` từ GitHub. Không đưa image bước chuyển chứa bí mật
+vào repo. Đã đọc lại version đang chạy, tên/AP/IP giữ nguyên, self-test đạt,
+USB nối, CAPT fresh, Cassette 1 có giấy, heartbeat HTTP 200 và cloud idle.
+Từ đây Máy 3 kiểm tra bản mới mỗi 60 giây khi rảnh, như Máy 1/2.
+Chưa gửi lệnh in thử trong lượt cập nhật này.
