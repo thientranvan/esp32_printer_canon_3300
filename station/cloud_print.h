@@ -91,7 +91,7 @@ static String jobStatusJSON(const PrintControl::Job &j) {
 static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
   auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
-  String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||(!captFresh()&&!captTCPState.load()&&!cloudWorking.load()))?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
+  String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||!captFresh())?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
   String body="{\"schema\":1,\"firmware\":"+firmwareJSON()+",\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
@@ -152,8 +152,8 @@ static bool cloudTransfer(uint8_t *data,int size,bool input,int &received,uint32
   if((state!=0 && state!=3)||!captCommand.state.compare_exchange_strong(state,5))return false;
   captCommand.size=size;captCommand.input=input;captCommand.received=0;captCommand.error=0;
   if(!input)memcpy(captCommand.data,data,size);captCommand.state.store(1);
-  uint32_t start=millis();
-  while(captCommand.state.load()!=3) { if(uint32_t(millis()-start)>8000)return false;vTaskDelay(pdMS_TO_TICKS(2)); }
+  uint32_t start=millis();unsigned limit=CaptStatus::transferTimeout(input,input?0:CaptStatus::word(data))+3000;
+  while(captCommand.state.load()!=3) { if(uint32_t(millis()-start)>limit)return false;vTaskDelay(pdMS_TO_TICKS(2)); }
   if(captCommand.error!=ESP_OK)return false;
   received=captCommand.received;if(input)memcpy(data,captCommand.data,received);return true;
 }
@@ -347,7 +347,9 @@ static bool cloudPrint(const Prepared::Job &job,unsigned base=0) {
   for(size_t index=base;index<job.plan.size();++index) {
     auto side=job.plan[index];
     if(!cloudCheckpoint())return false;
-    ++number;if(number>2 && !cloudWait(1,number-2,60000))return false;
+    // Keep at most two unfinished raster pages, including the one being sent.
+    // started is not free buffer space: a started sheet may still be in duplex.
+    ++number;if(number>2 && !cloudWait(3,number-2,60000))return false;
     if(!cloudCheckpoint())return false;
     const auto &page=job.pages[side.page];uint8_t params[64];memcpy(params,page.parameters,64);
     params[8]=2;params[9]=(params[9]&~6)|side.flag;params[10]=1;params[40]=1;

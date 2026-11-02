@@ -193,7 +193,7 @@ static void serviceCapt(USBContext &context) {
     usb_host_transfer_free(transfer);
     command.transfer = nullptr;
     command.state.store(3);
-  } else if (state == 2 && uint32_t(millis() - command.started) >= 5000) {
+  } else if (state == 2 && uint32_t(millis() - command.started) >= CaptStatus::transferTimeout(command.input,captLastOpcode.load())) {
     command.cancelled = true;
     command.error = ESP_ERR_TIMEOUT;
     command.state.store(4);

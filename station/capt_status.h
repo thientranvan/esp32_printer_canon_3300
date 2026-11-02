@@ -3,6 +3,9 @@
 #include <stddef.h>
 #include <string.h>
 namespace CaptStatus {
+// ponytail: allow raster backpressure for 30s; a stalled printer still needs
+// verified recovery, never retransmission of a partly accepted CAPT frame.
+inline unsigned transferTimeout(bool input,unsigned op){return !input&&op==0xC0A0?30000:5000;}
 inline unsigned word(const uint8_t *p){return p[0]|unsigned(p[1])<<8;}
 struct Flags {
   bool service, jam, cover, toner, paper;

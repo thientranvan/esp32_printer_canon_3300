@@ -3,6 +3,9 @@
 #include <cassert>
 #include <cstdio>
 int main(){
+ assert(CaptStatus::transferTimeout(false,0xC0A0)==30000);
+ assert(CaptStatus::transferTimeout(true,0xC0A0)==5000);
+ assert(CaptStatus::transferTimeout(false,0xA0A8)==5000);
  uint8_t fault[60]={0xa8,0xa0,60,0,0x33,0x8c,8};
  fault[16]=2;fault[24]=3;
  for(unsigned split=1;split<60;++split){

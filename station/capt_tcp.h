@@ -46,8 +46,9 @@ static bool tcpTransfer(uint8_t *data, int size, bool input, int &received) {
   if (!input) memcpy(captCommand.data, data, size);
   captCommand.state.store(1);
   uint32_t started = millis();
+  unsigned limit=CaptStatus::transferTimeout(input,input?0:CaptStatus::word(data))+3000;
   while (captCommand.state.load() != 3) {
-    if (uint32_t(millis() - started) >= 8000) { captTCPError.store(ESP_ERR_TIMEOUT); return false; }
+    if (uint32_t(millis() - started) >= limit) { captTCPError.store(ESP_ERR_TIMEOUT); return false; }
     vTaskDelay(pdMS_TO_TICKS(2));
   }
   int error = captCommand.error;

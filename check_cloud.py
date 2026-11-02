@@ -45,7 +45,7 @@ static bool cloudCounters(unsigned *c){c[0]=decoded;c[1]=started;c[2]=completed;
 static bool cloudWait(unsigned index,unsigned target,unsigned,bool=false){
  if(index==1){assert(target<=submitted);started=target;return true;}
  if(index==0){assert(decoded==target);return true;}
- assert(index==3 && target==submitted);completed=target;return true;
+ assert(index==3 && target<=submitted);completed=target;return true;
 }
 static bool cloudInfo(unsigned,unsigned,unsigned){return true;}
 static bool cloudCommand(unsigned op,const uint8_t *p=nullptr,size_t n=0,bool reply=true){
@@ -54,7 +54,7 @@ static bool cloudCommand(unsigned op,const uint8_t *p=nullptr,size_t n=0,bool re
  if(op==0xA2A0){++reservations;cloudPut16(cloudBuffer+2,8);cloudPut16(cloudBuffer+6,7);}
  if(op==0xE0A5)decoded=started=submitted=completed=0;
  if(op==0xE1A9){assert(n==8 && p[0]==2 && p[1]==1);if(rejectPaper)return false;}
- if(op==0xD0A9){assert(n==64 && !reply && decoded-started<2);flags.push_back(p[9]&6);}
+ if(op==0xD0A9){assert(n==64 && !reply && decoded-completed<2);flags.push_back(p[9]&6);}
  if(op==0xC0A0)assert(n && !reply);
  if(op==0xC0A4)++decoded;
  if(op==0xE0A7){++submitted;assert(Prepared::u16(p)==submitted);}
