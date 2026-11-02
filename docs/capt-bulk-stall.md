@@ -54,3 +54,23 @@ Phải kiểm tra CAPT sau khi cắm lại; không tự gửi lại tài liệu.
 Máy 1 đã nạp OTA 2026110201 khi cáp máy in đang rút; đọc lại version,
 self-test đạt, heartbeat HTTP 200, không còn job active. Chưa xác nhận
 CAPT sau khi cắm lại hoặc thử lại tải in dài trên bản mới.
+
+## Sau khi cắm lại: nhận dạng USB chưa thành công
+
+Người dùng xác nhận đã cắm lại nhưng Ready vẫn nháy. Đọc bản 2026110201:
+physical_link=true, devices=1 nhưng descriptor_count=0, connected=false,
+không có CAPT hoặc lệnh active. Nạp lại cùng image một lần lúc rảnh để
+khởi tạo lại ESP, không tắt máy in: sau hơn 50 giây vẫn cùng trạng thái.
+Trace enum mới `1 2 34`; đối chiếu SDK 5.5.5: short device descriptor rồi
+cancel. Không coi coredump cũ trong flash là crash mới; uptime vẫn tăng.
+Chưa kết luận lỗi ở MCU máy in, cáp hoặc host chỉ từ trace này. Không có
+USB device handle hợp lệ để gửi CAPT cleanup; đã yêu cầu power-cycle riêng
+máy in một lần để phân biệt và thiết lập lại baseline. Chưa nghiệm thu
+bản sửa hoặc tuyên bố hết lỗi tái diễn.
+
+Người dùng đã tắt/bật riêng máy in, giữ ESP/cáp. ESP uptime tiếp tục tăng,
+đọc đúng VID/PID 04A9:267E, GET_DEVICE_ID và A0A8 mới; counter 0/0/0/0,
+Cassette 1 có giấy, transport.failures=0, cloud idle, heartbeat 200.
+Máy in hồi phục sau power-cycle; điều này chưa chứng minh nguyên nhân
+bulk stall đầu tiên hoặc nghiệm thu biện pháp giảm backlog/timeout mới.
+Đã đề nghị thử lệnh mới 6–10 trang cùng chế độ hai mặt; không tự phát lại 68 mặt.
