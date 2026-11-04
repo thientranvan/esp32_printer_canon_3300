@@ -54,7 +54,7 @@ static bool cloudCommand(unsigned op,const uint8_t *p=nullptr,size_t n=0,bool re
  if(op==0xA2A0){++reservations;cloudPut16(cloudBuffer+2,8);cloudPut16(cloudBuffer+6,7);}
  if(op==0xE0A5)decoded=started=submitted=completed=0;
  if(op==0xE1A9){assert(n==8 && p[0]==2 && p[1]==1);if(rejectPaper)return false;}
- if(op==0xD0A9){assert(n==64 && !reply && decoded-completed<2);flags.push_back(p[9]&6);}
+ if(op==0xD0A9){assert(n==64 && !reply && decoded-completed<4 && decoded-started<2);flags.push_back(p[9]&6);}
  if(op==0xC0A0)assert(n && !reply);
  if(op==0xC0A4)++decoded;
  if(op==0xE0A7){++submitted;assert(Prepared::u16(p)==submitted);}
@@ -74,6 +74,11 @@ int main(){
  decoded=started=submitted=completed=reservations=releases=0;rejectPaper=false;flags.clear();
  assert(cloudPrint(j,2));assert(decoded==1 && completed==1 && reservations==1 && releases==1);
  assert((flags==std::vector<int>{0}));assert(cloudView.submitted==3);
+ // Long duplex job must overlap sheets while bounding unfinished work.
+ j.plan={{0,4},{1,2},{0,4},{1,2},{0,4},{1,2},{0,4},{1,2}};
+ decoded=started=submitted=completed=reservations=releases=0;
+ assert(cloudPrint(j));assert(decoded==8&&completed==8&&started==6);
+ j.plan={{1,4},{0,2},{2,0}};
  // Old session drains without any USB disconnect: wait, then submit once.
  decoded=4;started=3;completed=2;submitted=reservations=releases=0;flags.clear();catchUp=true;
  assert(cloudPrint(j));assert(waits==1&&previousSessionWaits==1&&reservations==1&&releases==1);

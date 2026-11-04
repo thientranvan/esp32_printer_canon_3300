@@ -840,3 +840,5 @@ Khôi phục kẹt giấy/tắt bật máy in: [checkpoint theo tờ, LAN/cloud 
 
 Cập nhật firmware tự động từ bản `.bin` build sẵn trên GitHub:
 [phát hành, chuyển tiếp mật khẩu sang NVS và giới hạn OTA](docs/firmware-update.md).
+
+Rà soát/tối ưu tốc độ in web: [bàn giao 04/11/2026](docs/web-print-performance-20261104.md).

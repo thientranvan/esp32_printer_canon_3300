@@ -347,9 +347,12 @@ static bool cloudPrint(const Prepared::Job &job,unsigned base=0) {
   for(size_t index=base;index<job.plan.size();++index) {
     auto side=job.plan[index];
     if(!cloudCheckpoint())return false;
-    // Keep at most two unfinished raster pages, including the one being sent.
-    // started is not free buffer space: a started sheet may still be in duplex.
-    ++number;if(number>2 && !cloudWait(3,number-2,60000))return false;
+    // Admit like LAN, but bound unfinished work too: started is not completed.
+    // Four impressions allow one duplex sheet ahead without unlimited backlog.
+    // ponytail: fixed window, not measured printer capacity; tune only with USB traces.
+    ++number;
+    if(number>2 && !cloudWait(1,number-2,60000))return false;
+    if(number>4 && !cloudWait(3,number-4,60000))return false;
     if(!cloudCheckpoint())return false;
     const auto &page=job.pages[side.page];uint8_t params[64];memcpy(params,page.parameters,64);
     params[8]=2;params[9]=(params[9]&~6)|side.flag;params[10]=1;params[40]=1;
