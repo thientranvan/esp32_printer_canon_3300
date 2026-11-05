@@ -47,3 +47,11 @@ paper_required/jam/cover/service=false. Không reboot hoặc tắt/bật máy in
 Sau đó delete record cleared thành công, ID job rỗng. Không gửi trang in.
 Đây là xác minh dọn phiên trên máy rảnh; chưa tái tạo case sai nguồn giấy
 đang dở hoặc mất điện giữa chuỗi cleanup.0505 giữ ở nhánh thử, chưa OTA chung.
+
+## Phát hành OTA chính thức
+
+Người dùng yêu cầu phát hành0505 sau thử Máy2. Đưa đúng binary đã kiểm tra
+lên main/public OTA cùng manifest SHA-256, không build lại hoặc đổi cấu hình
+trạm. Bo có mạng tự kiểm tra khi rảnh; không ép OTA vào phiên đang chạy hay
+đang cần đối soát. Publish không đồng nghĩa mọi bo đã nạp. Giới hạn xác minh
+phần cứng ở trên vẫn áp dụng; tiếp tục theo dõi ca hủy giữa lúc lỗi giấy.
