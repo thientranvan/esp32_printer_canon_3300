@@ -130,3 +130,41 @@ Trạng thái triển khai: Máy1=0503 thử nghiệm, Máy2=0502 thử nghiệm
 main/public manifest vẫn0501. Không merge/phát hành chung từ bằng chứng
 chỉ vài phút200. Cần đối chiếu riêng một bo trên mạng2.4GHz khác, giữ Mac
 và bo còn lại làm đối chứng; người dùng xác nhận có mạng khác, đang chờSSID.
+
+## Thử mạng điện thoại — Máy 2, 2026110504
+
+Người dùng chọn thử Máy2 trên hotspot robotpi; không đổi Wi-Fi Mac/Máy1.
+Máy2 giữ lệnh LAN14mặt uncertain, job mac-1793881185-54946; đèn tím là
+đối soát, không phải OTA. Người dùng cho hủy riêng Máy2. Đã hủy CUPS
+ESP32_LBP3300_May2-279 và cancel trên ESP; CAPT cleanup unverified.
+Người dùng tắt riêng máy in; xác nhận USB disconnected, lưu bằng chứng hủy
+trong file chẩn đoán riêng, rồi xóa record cancelled để bảo trì OTA.
+Không đổi unverified thành cleared và không gửi lại dữ liệu in.
+
+0504 thêm DHCP vào màn hình đổi Wi-Fi; record NVS wifi mở rộng97->98byte,
+đuôi uint8_t dhcp=0/1. Loader chấp nhận record97byte cũ (static), kiểm tra
+kích thước, terminator và flag. Không thay layout station/token/ID/IP tĩnh
+đã lưu. DHCP dùng WiFi.config(0,0,0); kết nối thất bại khôi phục config cũ.
+Home/profile hiển thị IP đang dùng, /status.static_ip phản ánh mode hiện tại;
+/status.network vẫn là cấu hình IP tĩnh được giữ để trở về LAN.
+
+Tham số POST /wifi trial_seconds tùy chọn: chỉ số nguyên60..1800, không có
+thì lưu như thường sau khi kết nối thành công. Khi thử, không ghi đè NVS Wi-Fi;
+hết hạn và không có job/USB TCP đang chạy thì kết nối lại Wi-Fi đã lưu.
+Nếu ESP reboot trong trial thì cũng trở về cấu hình cũ, không phụ thuộc Mac.
+Ở lượt này dùng600s. Nếu job còn active thì chờ rảnh rồi mới quay lại.
+Không log password hoặc nội dung CSRF/Bearer.
+
+Đã nạp Máy2 0504 qua OTA sau khi máy in tắt. Bắt đầu hotspot:
+12:42:39 UTC server nhận firmware0504, uptime77s, IP10.53.50.88,
+BSSID5E:15:B6:F0:C9:B7, RSSI-73, channel12, heartbeat200/failures0.
+disconnects1/reason8 là thao tác đổi Wi-Fi chủ động, không gọi là reset/rớt tự phát.
+Diagnostic HTTP_WRITE_DATA/errno113 lúc đổi route được giữ làm lịch sử,
+không dùng lỗi lịch sử đó để báo lỗi hiện tại khi failures=0.
+Người dùng đã đưa điện thoại lại gần và bật lại máy in. Đang đo10phút,
+chưa kết luận hotspot đã khắc phục nguyên nhân của TVT.
+
+check_wifi.py kiểm thử production loader/config: legacy migration, DHCP/static,
+record sai, rollback, trial hết hạn và hoãn về mạng cũ khi đang bận.
+check_home.py/check_cloud_http.py/check_firmware_update.py đạt; build public
+không chứa secret. Main OTA chung chưa phát hành các bản thử0502–0504.

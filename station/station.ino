@@ -33,8 +33,8 @@ StationSettings stationSettings = {};
 bool healthy = false;
 bool uploadOK = false,uploadReserved=false;
 uint32_t rebootAt = 0;
-uint32_t connectionAt = 0;
-bool connecting = false;
+uint32_t connectionAt = 0,wifiTrialUntil=0;
+bool connecting = false,wifiDHCP=false;
 bool savedWiFiAttempt = false;
 uint32_t savedWiFiAttemptAt = 0, savedWiFiRetryAt = 0;
 String pendingSSID, pendingPassword;
@@ -42,7 +42,7 @@ bool wifiScanRunning=false;
 String wifiScanResult="{\"networks\":[]}";
 String windowsReport;
 String supportCommand = "# Hiện không cần chạy thêm lệnh trên Windows.";
-struct WiFiConfig { char ssid[33]; char password[64]; };
+struct WiFiConfig { char ssid[33]; char password[64]; uint8_t dhcp; };
 
 String jsonString(const String &value) {
   String result = "\"";
@@ -96,14 +96,20 @@ static String firmwareJSON();
 #include "realtime.h"
 #include "status_led.h"
 
+static bool configureStationIP(bool dhcp){
+  bool ok=dhcp?WiFi.config(IPAddress(),IPAddress(),IPAddress()):WiFi.config(stationIP,stationGateway,stationMask,stationDNS);
+  if(ok)wifiDHCP=dhcp;return ok;
+}
 void connectSaved() {
   savedWiFiRetryAt = millis();
   if (WiFi.softAPgetStationNum()) return;
   WiFiConfig config = {};
-  if (prefs.getBytes("wifi", &config, sizeof(config)) != sizeof(config)) return;
-  if (!memchr(config.ssid, 0, sizeof(config.ssid)) ||
+  size_t bytes=prefs.getBytesLength("wifi");
+  // Existing 97-byte records have no DHCP flag; zero initialization preserves static IP.
+  if((bytes!=offsetof(WiFiConfig,dhcp)&&bytes!=sizeof(config))||prefs.getBytes("wifi",&config,bytes)!=bytes)return;
+  if (config.dhcp>1 || !memchr(config.ssid, 0, sizeof(config.ssid)) ||
       !memchr(config.password, 0, sizeof(config.password))) return;
-  if (config.ssid[0]) {
+  if (config.ssid[0]&&configureStationIP(config.dhcp)) {
     savedWiFiAttemptAt = millis();
     savedWiFiAttempt = true;
     WiFi.begin(config.ssid, config.password);
@@ -247,7 +253,7 @@ void home() {
 <label>Subnet<input id="station-mask" name="mask" inputmode="decimal" required></label><label>DNS<input id="station-dns" name="dns" inputmode="decimal" required></label></div>
 <label><input id="cloud-enabled" name="cloud_enabled" type="checkbox">Nhận lệnh in từ web</label><label>Token do server cấp<input name="cloud_token" type="password" maxlength="96" autocomplete="new-password" placeholder="Để trống để giữ token đã lưu"></label><p class="meta">quanly.lophocbinhminh.com · Token chỉ hiện một lần khi server cấp.</p><div><button class="primary" data-config disabled>Lưu &amp; khởi động lại</button></div></form></details>
 <details><summary>Tên Wi-Fi phát từ ESP (AP)</summary><p>Đổi tên mạng dùng để vào trạm khi chưa có LAN. Không đổi tên máy in hoặc mạng Wi-Fi LAN.</p><form action="/wifi/ap" method="post" class="stack"><input name="token" type="hidden" value="__CSRF__"><label>Tên Wi-Fi ESP<input id="ap-name" name="ap_ssid" maxlength="32" required autocomplete="off"></label><p class="meta">Tối đa 32 byte UTF-8. Lưu sẽ khởi động lại; kết nối lại bằng tên mới. Mật khẩu giữ nguyên.</p><div><button>Lưu tên Wi-Fi ESP</button></div></form></details>
-<details><summary>Đổi Wi-Fi</summary><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><form action="/wifi" method="post" class="stack"><input type="hidden" name="token" value="__CSRF__"><div class="row"><button id="wifi-scan" type="button" onclick="scanWifi()">Quét Wi-Fi</button><span id="wifi-scan-note" role="status" aria-live="polite">Bấm quét để chọn mạng 2,4 GHz.</span></div><label>Chọn mạng Wi-Fi<select id="wifi-list" required onchange="chooseWifi()"><option value="">Chọn mạng sau khi quét</option></select></label><label id="wifi-hidden-label" hidden>Tên mạng ẩn<input id="wifi-hidden" maxlength="32" autocomplete="off" oninput="chooseWifi()"></label><input id="wifi-ssid" name="ssid" type="hidden"><label>Mật khẩu Wi-Fi<input name="password" type="password" maxlength="63" autocomplete="new-password"></label><div><button id="wifi-connect" disabled>Kết nối Wi-Fi</button></div></form></details>
+<details><summary>Đổi Wi-Fi</summary><p>Dùng mạng 2,4 GHz. Chỉ lưu sau khi kết nối thành công.</p><form action="/wifi" method="post" class="stack"><input type="hidden" name="token" value="__CSRF__"><div class="row"><button id="wifi-scan" type="button" onclick="scanWifi()">Quét Wi-Fi</button><span id="wifi-scan-note" role="status" aria-live="polite">Bấm quét để chọn mạng 2,4 GHz.</span></div><label>Chọn mạng Wi-Fi<select id="wifi-list" required onchange="chooseWifi()"><option value="">Chọn mạng sau khi quét</option></select></label><label id="wifi-hidden-label" hidden>Tên mạng ẩn<input id="wifi-hidden" maxlength="32" autocomplete="off" oninput="chooseWifi()"></label><input id="wifi-ssid" name="ssid" type="hidden"><label><input id="wifi-dhcp" name="dhcp" type="checkbox">Tự lấy IP (DHCP, dùng cho hotspot/mạng khác)</label><label>Mật khẩu Wi-Fi<input name="password" type="password" maxlength="63" autocomplete="new-password"></label><div><button id="wifi-connect" disabled>Kết nối Wi-Fi</button></div></form></details>
 <details><summary>Bảo trì &amp; chẩn đoán</summary><p id="hardware" class="meta"></p><pre id="diagnostics">Đang đọc dữ liệu USB…</pre>
 <form action="/usb/start" method="post" id="usb-start" hidden><input type="hidden" name="token" value="__CSRF__"><button>Bật USB Host</button></form>
 <form action="/cloud/resolve" method="post" id="resolve" hidden onsubmit="return confirm('Chỉ bỏ khóa khi đã kiểm tra giấy đã in và xử lý công việc dở trên máy in. Không tự in lại. Tiếp tục?')"><input type="hidden" name="token" value="__CSRF__"><p class="notice">Công việc web chưa rõ kết quả. Kiểm tra giấy và xử lý lệnh dở trước khi bỏ khóa.</p><button>Bỏ khóa sau khi đã kiểm tra</button></form>
@@ -321,6 +327,7 @@ async function refresh(patch=null){try{
  el('job-delete').disabled=j.actions?!j.actions.delete:!j.id||j.active||j.state==='uncertain'||j.state==='waiting_printer';
  el('support').hidden=!s.support_command||s.support_command.startsWith('#');el('support-command').value=s.support_command||'';
  el('name').textContent=s.station.name;el('connection').textContent=s.healthy?'Trạm hoạt động':'Trạm cần kiểm tra';el('connection').dataset.tone=s.healthy?'ok':'error';if(s.firmware)el('connection').textContent+=' · FW '+s.firmware.version+' · '+s.firmware.state;
+ if(!el('wifi-dhcp').dataset.loaded){el('wifi-dhcp').checked=!s.static_ip;el('wifi-dhcp').dataset.loaded='1';}
  el('wifi').textContent=s.connected?s.ssid:s.connecting?'Đang kết nối…':'Chưa kết nối Wi-Fi';el('network').textContent=s.connected?'IP '+s.ip+' · '+s.rssi+' dBm':'Kết nối Wi-Fi để in qua LAN và web.';
  el('cloud').textContent='Web: '+(cloudNames[c.state]||c.state)+(c.error?' · '+c.error:'');
  let title='Chưa kết nối máy in',note='Kiểm tra nguồn máy in và dây USB–OTG.';
@@ -373,7 +380,7 @@ document.querySelector('a[href="#settings"]').addEventListener('click',()=>{el('
 </script></body></html>)HTML";
   page.replace("__CSRF__", csrf);
   page.replace("__STATION_ID__", stationID);
-  page.replace("__STATION_IP__", stationIP.toString());
+  page.replace("__STATION_IP__", (WiFi.isConnected()?WiFi.localIP():stationIP).toString());
   server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -614,7 +621,7 @@ void setup() {
       ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
       ",\"connecting\":" + (connecting ? "true" : "false") +
       ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +
-      ",\"rssi\":" + WiFi.RSSI() + ",\"static_ip\":true" +
+      ",\"rssi\":" + WiFi.RSSI() + ",\"static_ip\":"+(wifiDHCP?"false":"true") +
       ",\"reset_reason\":" + int(esp_reset_reason()) +
       ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"uptime\":" + millis()/1000 +
       ",\"support_command\":" + jsonString(supportCommand) + ",\"flash\":" + ESP.getFlashChipSize() + ",\"psram\":" + ESP.getPsramSize() +
@@ -676,9 +683,16 @@ void setup() {
     if (connecting || wifiScanRunning) { server.send(409, "text/plain; charset=utf-8", "Đang quét hoặc kết nối Wi-Fi. Chờ rồi thử lại."); return; }
     pendingSSID = ssid;
     pendingPassword = password;
+    String trial=server.arg("trial_seconds");unsigned seconds=0;
+    if(trial.length()){
+      bool valid=trial.length()<=4;for(char c:trial)valid=valid&&c>='0'&&c<='9';
+      seconds=trial.toInt();if(!valid||seconds<60||seconds>1800){server.send(400,"text/plain","Trial must be 60..1800 seconds");return;}
+    }
+    bool dhcp=server.arg("dhcp")=="on";
     WiFi.disconnect();
+    if(!configureStationIP(dhcp)){connectSaved();pendingPassword="";server.send(500,"text/plain","Network configuration failed; restoring saved Wi-Fi");return;}
     WiFi.begin(ssid.c_str(), password.c_str());
-    connectionAt = millis();
+    connectionAt = millis();wifiTrialUntil=seconds?connectionAt+seconds*1000:0;
     connecting = true;
     server.sendHeader("Location", "/");
     server.send(303);
@@ -756,20 +770,24 @@ void loop() {
   server.handleClient();
   if (connecting && WiFi.status() == WL_CONNECTED) {
     WiFiConfig config = {};
+    config.dhcp=wifiDHCP;
     pendingSSID.toCharArray(config.ssid, sizeof(config.ssid));
     pendingPassword.toCharArray(config.password, sizeof(config.password));
-    bool saved = prefs.putBytes("wifi", &config, sizeof(config)) == sizeof(config);
+    bool saved = !wifiTrialUntil && prefs.putBytes("wifi", &config, sizeof(config)) == sizeof(config);
     Serial.printf("Wi-Fi connected: %s; saved=%d\n", WiFi.localIP().toString().c_str(), saved);
     pendingPassword = "";
     connecting = false;
   } else if (connecting && millis() - connectionAt > 30000) {
-    WiFi.disconnect();
+    wifiTrialUntil=0;WiFi.disconnect();
     connectSaved();
     pendingPassword = "";
     connecting = false;
     Serial.println("Wi-Fi attempt failed; restored saved settings");
   }
   if (!connecting) {
+    if(wifiTrialUntil&&int32_t(millis()-wifiTrialUntil)>=0&&!captTCPState.load()&&!cloudBusy()&&!jobSnapshot().active){
+      wifiTrialUntil=0;WiFi.disconnect();connectSaved();
+    }
     if (WiFi.status() == WL_CONNECTED) savedWiFiAttempt = false;
     else if (savedWiFiAttempt && (WiFi.softAPgetStationNum() || millis()-savedWiFiAttemptAt >= 15000)) {
       WiFi.disconnect();
