@@ -33,3 +33,17 @@ Build public không chứa device secret.
 Chưa nạp Máy1: xuất hiện lệnh LAN Windows VANSINH-280502,12mặt,8mặt được
 xác nhận, waiting_printer; chờ người dùng giữ hay hủy trước OTA. Lúc đọc này
 paper_required=false. Không tự hủy hoặc làm reset phiên đang giữ.
+
+## Kết quả Máy2
+
+Người dùng đổi yêu cầu sang Máy2; không hủy, không OTA, không gửi lệnh điều
+khiển Máy1. Máy2 được kiểm tra đúng ID esp32-1051db78a8fc, rảnh trước OTA;
+nạp0505 thành công. Sau reboot USB/CAPT phản hồi, heartbeat200, không lỗi,
+không job; counters lịch sử6/6/6/6.
+
+Thử POST /printer/discard đúng một lần lúc rảnh: reservation/cancel được
+ACK, job discard-orphan cancelled/cleared, bốn counters về0/0/0/0,
+paper_required/jam/cover/service=false. Không reboot hoặc tắt/bật máy in.
+Sau đó delete record cleared thành công, ID job rỗng. Không gửi trang in.
+Đây là xác minh dọn phiên trên máy rảnh; chưa tái tạo case sai nguồn giấy
+đang dở hoặc mất điện giữa chuỗi cleanup.0505 giữ ở nhánh thử, chưa OTA chung.
