@@ -197,3 +197,25 @@ Kết luận giới hạn: lượt hotspot10phút thành công và rollback TVT 
 TVT/Máy1 cũng không tái hiện lỗi cùng cửa sổ. Chưa chứng minh router gây lỗi,
 chưa nghiệm thu sửa dứt điểm HTTP/TLS; Máy2 cần theo dõi tiếp0504 trênTVT.
 Không phát hành0504 lên main/public OTA chỉ dựa trên lượt thử này.
+
+### Phát hành chính thức 2026110504 — 05/11/2026
+
+Sau lượt thử, Máy2 về TVT và in LAN job285 hoàn tất7/7mặt theo bộ đếm;
+CUPS trống, USB/CAPT phản hồi. Lỗi ban đầu của job285 do pending.txt trên
+Mac còn từ job14mặt đã được người dùng cho hủy trước bảo trì. Đã kiểm tra
+mtime1793881186, lưu marker thành pending.cancelled-1793881185.txt rồi
+cupsenable riêng hàng đợi Máy2. Không reset ESP/máy in hoặc replay job cũ.
+Không tự xóa marker uncertain chưa đối soát ở các máy khác.
+
+Log sau khi trở về TVT (12:52:40 đến khoảng13:04UTC): Máy2 có2334request,
+1336HTTP200/998HTTP204, khôngHTTP>=400, p95=0,160s/max0,678s. Máy1 có
+1403request200, khôngHTTP>=400, p95=0,145s/max1,732s. Uptime liên tục;
+Máy2 disconnects2 chỉ gồm chuyển đi/về chủ động, Máy1 disconnects0.
+Đây là cửa sổ quan sát hữu hạn, không chứng minh đã loại bỏ mọi lỗi dài hạn.
+
+Người dùng yêu cầu phát hành nếu kiểm tra ổn. Bộ kiểm thử transport/Wi-Fi/
+home/OTA/cloud/recovery/paper-wait/LAN recovery đạt. Phát hành đúng binary
+0504 đã thử, SHA25667e75f319f23885a17fae3862b02e9b89197b3eb408ff389ada86cb613e4c953,
+1375744byte lên main/public OTA. Không đổi mật khẩu/token/cấu hình trạm.
+Các bo kiểm tra bản mới khi rảnh; không xác nhận từng bo đã nạp chỉ từ việc
+publish manifest. Theo dõi tiếp400/499, gap heartbeat và disconnects.
