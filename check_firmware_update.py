@@ -96,7 +96,7 @@ int main(){
 }
 '''
 assert 'cfg.crt_bundle_attach=esp_crt_bundle_attach' in s and 'cfg.disable_auto_redirect=true' in s
-assert 'firmwareCheckPending.load() && captFresh()' in Path('station/cloud_print.h').read_text()
+assert 'firmwareCheckPending.load() && !jobSnapshot().needsCleanup() && captFresh()' in Path('station/cloud_print.h').read_text()
 assert '!firmwareCheckPending.load()&&claimCapt(1)' in Path('station/capt_tcp.h').read_text()
 with tempfile.TemporaryDirectory() as tmp:
  p=Path(tmp)/'check.cpp';p.write_text(prefix+policy+download+gate+main);out=Path(tmp)/'check'

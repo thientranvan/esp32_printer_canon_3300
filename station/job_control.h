@@ -14,6 +14,7 @@ struct Job {
  bool canCancel() const {return id[0]&&controllable&&!stopping()&&(active||waiting()||unresolved());}
  bool canPause() const {return canCancel()&&!unresolved()&&std::strcmp(state,"paused")&&std::strcmp(request,"pause_requested");}
  bool canResume() const {return canCancel()&&!unresolved()&&(waiting()||!std::strcmp(state,"paused")||!std::strcmp(request,"pause_requested"));}
+ bool needsCleanup() const {return std::strcmp(state,"completed") && ((printerSession && std::strcmp(printerCancel,"cleared")) || !std::strcmp(printerCancel,"unverified"));}
  bool canDelete() const {return id[0]&&!stopping()&&(!active||controllable);}
  void metadata(const char *name,const char *host,const char *platform){std::strncpy(title,name,128);title[128]=0;std::strncpy(client,host,96);client[96]=0;std::strncpy(os,platform,8);os[8]=0;}
  unsigned total=0, completed=0, completedSheets=0;bool automaticRecovery=false, deleteAfterStop=false; bool active=false, controllable=false;
@@ -31,7 +32,7 @@ struct Job {
   if(!matches(target))return false;
   if(!std::strcmp(action,"delete")) {
    if(!canDelete())return false;
-   if(active||waiting()||unresolved()){deleteAfterStop=true;std::strcpy(request,"cancel_requested");return true;}
+   if(active||waiting()||unresolved()||needsCleanup()){deleteAfterStop=true;std::strcpy(request,"cancel_requested");return true;}
    *this=Job();return true;
   }
   if(!controllable || !std::strcmp(request,"cancel_requested"))return false;

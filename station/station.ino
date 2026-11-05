@@ -545,6 +545,13 @@ void setup() {
     if(!submitQueueCommand(server.arg("job_id"),server.arg("action"))){server.send(409,"text/plain; charset=utf-8","Hàng đợi chưa hỗ trợ, dữ liệu đã cũ, ID không hợp lệ hoặc có yêu cầu đang chờ.");return;}
     server.send(202,"text/plain; charset=utf-8","Đã xếp yêu cầu gửi server; chưa xác nhận đã thực hiện.");
   });
+  server.on("/printer/discard",HTTP_POST,[]{
+    if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
+    if(jobSnapshot().id[0]||captInUse()||cloudBusy()||cloudClaiming.load()||captTCPState.load()||cloudSnapshot().job[0]||firmwareCheckPending.load()){
+      server.send(409,"text/plain","Printer busy or job history still present; cancel that job first");return;
+    }
+    discardOrphanRequested.store(true);server.send(202,"text/plain","Discard requested; inspect printer_cancel for verified result. Fed sheets may still exit.");
+  });
   server.on("/jobs/control",HTTP_POST,[]{
     if(!authorized())return;if(!validPost()){server.send(403,"text/plain","Invalid token");return;}
     String id=server.arg("job_id"),action=server.arg("action");

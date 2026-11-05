@@ -247,6 +247,8 @@ static bool cancelCapt(uint32_t owner,bool report) {
     // Release even when an earlier cleanup command fails; never report cleared then.
     bool ended=command(0xE1A1,info,sizeof(info));bool released=command(0xE0A9,id,2);
     bool idle=command(0xA0A8)&&Prepared::u16(buffer+2)>=40&&!(Prepared::u16(buffer+12)&0x84);
+    if(idle){auto f=CaptStatus::decode(buffer);idle=!f.service&&!f.jam&&!f.cover&&!f.paper;
+      for(unsigned i=0;i<4;++i)idle=idle&&!Prepared::u16(buffer+18+i*2);}
     ok=ok&&ended&&released&&idle;
   }
   portENTER_CRITICAL(&jobLock);
@@ -467,11 +469,11 @@ static void cloudTask(void *) {
       int code=cloudPost("/jobs/"+id+"/events",event,response,lease);
       if(code==204 && state!="uncertain") {
         if(!journal.remove("job")){cloudState("blocked","Cannot clear acknowledged journal");vTaskDelete(nullptr);return;}
-        if(deleteAfterAck){jobCommand(id,"delete");deleteAfterAck=false;}
+        if(deleteAfterAck){if(!jobSnapshot().needsCleanup())jobCommand(id,"delete");deleteAfterAck=false;}
         id="";lease="";state="";error="";
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
-    }else if(!firmwareCheckPending.load() && captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
+    }else if(!firmwareCheckPending.load() && !jobSnapshot().needsCleanup() && captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
       cloudClaiming.store(true);
       struct ClaimGuard {~ClaimGuard(){cloudClaiming.store(false);}} claimGuard;
       if(firmwareCheckPending.load()){vTaskDelay(pdMS_TO_TICKS(100));continue;}
@@ -551,14 +553,27 @@ static void cloudTask(void *) {
     vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
+static std::atomic<bool> discardOrphanRequested{false};
 static constexpr uint32_t CaptStatusOwner=0xFFFFFFFD;
 static void captStatusTask(void *) {
   uint8_t buffer[134];unsigned previous=~0U;
   while(true){
     if(readUSB().responsive && claimCapt(CaptStatusOwner)){
+      if(discardOrphanRequested.exchange(false)){
+        auto old=jobSnapshot();
+        if(!old.id[0]&&!cloudBusy()&&!cloudClaiming.load()&&!captTCPState.load()&&!cloudSnapshot().job[0]){
+          jobBegin("discard-orphan","lan",true);jobFinish("uncertain");
+          uint8_t reservation[8]={0,0,30};
+          bool reserved=captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA3A2)&&
+            captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA2A0,reservation,8)&&Prepared::u16(buffer+2)==8;
+          if(reserved)jobPrinterSession(Prepared::u16(buffer+6));
+          bool cleared=cancelCapt(CaptStatusOwner);jobFinish("cancelled");
+          if(!reserved||!cleared){portENTER_CRITICAL(&jobLock);strcpy(currentJob.printerCancel,"unverified");portEXIT_CRITICAL(&jobLock);}
+        }
+      }
       auto pending=jobSnapshot();
-      if(!pending.active&&!strcmp(pending.source,"lan")&&pending.stopping()){
-        cancelCapt(CaptStatusOwner);jobFinish("cancelled");if(pending.deleteAfterStop)jobCommand(pending.id,"delete");
+      if(!pending.active&&pending.stopping()&&(!strcmp(pending.source,"lan")||!strcmp(pending.state,"cancelled")||!strcmp(pending.state,"failed"))){
+        bool cleared=cancelCapt(CaptStatusOwner);jobFinish("cancelled");if(cleared&&pending.deleteAfterStop)jobCommand(pending.id,"delete");
       }
       if(captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A8) && CaptStatus::word(buffer+2)>=40){
         auto f=CaptStatus::decode(buffer);unsigned code=0,sub=0;char service[24]="unknown";

@@ -105,9 +105,9 @@ static void captTCPTask(void *) {
           if(same&&(previous.stopping()||!strcmp(previous.state,"cancelled"))){
             if(previous.stopping())cancelCapt(1);
             const uint8_t cancelled[10]={5,0xF0,10,0,0,1,254,255,255,255};
-            client.write(cancelled,10);rememberLanResult(jobId,true);jobFinish("cancelled");if(previous.deleteAfterStop)jobCommand(jobId,"delete");lanRecovery=PrintRecovery::Checkpoint();break;
+            client.write(cancelled,10);rememberLanResult(jobId,true);jobFinish("cancelled");if(previous.deleteAfterStop&&!jobSnapshot().needsCleanup())jobCommand(jobId,"delete");lanRecovery=PrintRecovery::Checkpoint();break;
           }
-          bool held=previous.id[0]&&(!strcmp(previous.state,"waiting_printer")||!strcmp(previous.state,"uncertain")||previous.active);
+          bool held=previous.id[0]&&(!strcmp(previous.state,"waiting_printer")||!strcmp(previous.state,"uncertain")||previous.active||previous.needsCleanup());
           if(held&&!same)break;
           if(!same){
             lanRecovery.begin(jobId,plan,printerEpoch.load());jobBegin(jobId,"lan",true);jobMetadata(jobTitle,jobClient,jobOS);
@@ -221,7 +221,7 @@ static void captTCPTask(void *) {
         if(cancelled&&!done)cancelCapt(1);
         jobFinish(done?"completed":cancelled?"cancelled":recoverable&&mayPrint?"waiting_printer":mayPrint?"uncertain":"failed");
         if(recoverable&&(done||cancelled))rememberLanResult(jobId,cancelled);
-        if(cancelled&&j.deleteAfterStop)jobCommand(jobId,"delete");
+        if(cancelled&&j.deleteAfterStop&&!jobSnapshot().needsCleanup())jobCommand(jobId,"delete");
         if(cancelled)lanRecovery=PrintRecovery::Checkpoint();
       }
       releaseCapt(1);

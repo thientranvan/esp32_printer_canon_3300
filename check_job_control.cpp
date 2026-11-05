@@ -18,5 +18,8 @@ int main(){
  assert(j.rejectBeforeStart("fault-job","lan",2,true));
  for(int retry=0;retry<50;++retry){assert(j.rejectBeforeStart("fault-job","lan",2,true));assert(!j.active && !strcmp(j.state,"failed") && j.total==2 && j.completed==0);}
  j.finish("uncertain");assert(!j.rejectBeforeStart("other","lan",3,true));assert(j.matches("fault-job"));
+ j.begin("failed-session","lan",true);j.printerSession=7;j.finish("failed");assert(j.command(j.id,"delete")&&j.stopping()&&j.id[0]);
+ j.finish("cancelled");strcpy(j.printerCancel,"unverified");assert(j.command(j.id,"delete")&&j.id[0]&&j.stopping());
+ j.finish("cancelled");strcpy(j.printerCancel,"cleared");assert(j.command("failed-session","delete")&&!j.id[0]);
  puts("PASS: job identity, cooperative capability, pause/resume, cancel cannot undo, uncertain can discard explicitly but cannot resume/replay");
 }
