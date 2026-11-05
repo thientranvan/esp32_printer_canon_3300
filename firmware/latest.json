@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": 2026110501,
+  "version": 2026110503,
   "board": "esp32-s3-n16r8",
-  "bytes": 1372608,
-  "sha256": "4261364bae6892d13a1921c9a676e28312f5a90e0e853c9c5a226caff5bdaae2"
+  "bytes": 1374528,
+  "sha256": "390f4b2da5b54c44cfa8262185dddda7b750e95dccfd99aff0c1d1e5d45f693e"
 }

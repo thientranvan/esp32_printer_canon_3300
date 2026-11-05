@@ -13,7 +13,7 @@
 static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
-struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; char waitReason[32]; char heartbeatDiagnostic[128]; unsigned heartbeatDurationMs, heartbeatFailures; };
+struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; char waitReason[32]; char heartbeatDiagnostic[192]; unsigned heartbeatDurationMs, heartbeatFailures; };
 static CloudView cloudView={"disabled","","",0,0,0,0,0,0,0,false};
 static bool cloudBusy() { return cloudWorking.load(); }
 static CloudView cloudSnapshot() { portENTER_CRITICAL(&cloudLock); auto v=cloudView; portEXIT_CRITICAL(&cloudLock); return v; }
@@ -73,7 +73,7 @@ static esp_err_t cloudResponseEvent(esp_http_client_event_t *event) {
 static int cloudPost(const String &path,const String &body,String &response,const String &lease="",esp_http_client_handle_t reusable=nullptr,String *diagnostic=nullptr) {
   response="";int status=-1;uint32_t started=millis();String detail;
   auto h=reusable?reusable:cloudClient(path,lease);CloudResponse result;result.body=&response;
-  int performed=ESP_FAIL,setup=ESP_FAIL;
+  int performed=ESP_FAIL,setup=ESP_FAIL;unsigned resumes=0;
   if(h){
     setup=esp_http_client_set_method(h,HTTP_METHOD_POST);
     if(setup==ESP_OK)setup=esp_http_client_set_header(h,"Content-Type","application/json");
@@ -81,18 +81,29 @@ static int cloudPost(const String &path,const String &body,String &response,cons
     if(setup==ESP_OK)setup=esp_http_client_set_user_data(h,&result);
     if(setup==ESP_OK)setup=esp_http_client_set_post_field(h,body.c_str(),body.length());
     if(setup==ESP_OK){
-      performed=esp_http_client_perform(h);
+      while(true){
+        performed=esp_http_client_perform(h);
+        // IDF 5.5.5 retains REQ_COMPLETE_DATA when fetch_headers returns EAGAIN.
+        // Resume that request; do not reset its POST field or restart its headers.
+        uint32_t elapsed=millis()-started;
+        if(performed!=ESP_ERR_HTTP_EAGAIN||result.overflow||elapsed>=10000)break;
+        ++resumes;esp_http_client_set_timeout_ms(h,min(uint32_t(5000),10000-elapsed));
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
       if(performed==ESP_OK&&!result.overflow&&esp_http_client_is_complete_data_received(h))
         status=esp_http_client_get_status_code(h);
     }
   }
-  if(status<0){char text[128];snprintf(text,sizeof(text),"phase=%s setup=%d perform=%d errno=%d bytes=%u overflow=%d heap=%u",result.phase,setup,performed,h?esp_http_client_get_errno(h):0,(unsigned)response.length(),int(result.overflow),(unsigned)ESP.getFreeHeap());detail=text;response="";}
+  if(status<0){
+    int tls=0,flags=0;if(h)esp_http_client_get_and_clear_last_tls_error(h,&tls,&flags);
+    char text[176];snprintf(text,sizeof(text),"phase=%s setup=%d perform=%d tls=%d flags=%x errno=%d resumes=%u ms=%u bytes=%u overflow=%d heap=%u",result.phase,setup,performed,tls,unsigned(flags),h?esp_http_client_get_errno(h):0,resumes,unsigned(millis()-started),(unsigned)response.length(),int(result.overflow),(unsigned)ESP.getFreeHeap());detail=text;response="";
+  }
   if(h){
     // Stack context and POST body must not survive this call on a reused handle.
     esp_http_client_set_event_handler(h,nullptr);esp_http_client_set_user_data(h,nullptr);
     esp_http_client_set_post_field(h,nullptr,0);
     if(!reusable){esp_http_client_close(h);esp_http_client_cleanup(h);}
-    else if(status<0)esp_http_client_close(h); // Next heartbeat reconnects, never reuses a broken stream.
+    else {esp_http_client_set_timeout_ms(h,5000);if(status<0)esp_http_client_close(h);}
   }
   if(diagnostic)*diagnostic=detail;
   uint32_t duration=millis()-started;
@@ -100,11 +111,20 @@ static int cloudPost(const String &path,const String &body,String &response,cons
   if(path=="/heartbeat"){
     cloudView.heartbeatHttp=status;cloudView.heartbeatDurationMs=duration;
     if(status==200||status==204)cloudView.heartbeatFailures=0;
-    else {++cloudView.heartbeatFailures;snprintf(cloudView.heartbeatDiagnostic,sizeof(cloudView.heartbeatDiagnostic),"HTTP=%d %.110s",status,detail.c_str());}
+    else {++cloudView.heartbeatFailures;snprintf(cloudView.heartbeatDiagnostic,sizeof(cloudView.heartbeatDiagnostic),"HTTP=%d %.174s",status,detail.c_str());}
   }
   else {cloudView.http=status;if(path=="/jobs/claim")cloudView.claimHttp=status;else cloudView.eventHttp=status;}
   portEXIT_CRITICAL(&cloudLock);
   return status;
+}
+// Claim polls otherwise create a fresh TLS handshake every ~0.5s while idle.
+// One claim handle, owned only by cloudTask; release it before downloading a job.
+static esp_http_client_handle_t cloudClaimClient=nullptr;
+static int cloudClaim(String &response,String &diagnostic){
+  if(!cloudClaimClient)cloudClaimClient=cloudClient("/jobs/claim");
+  int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",cloudClaimClient,&diagnostic);
+  if(code!=204&&cloudClaimClient){esp_http_client_cleanup(cloudClaimClient);cloudClaimClient=nullptr;}
+  return code;
 }
 static String cloudBoot;
 static std::atomic<bool> cloudOnline{false};
@@ -120,7 +140,7 @@ static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
   auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
   String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||!captFresh())?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
-  String body="{\"schema\":1,\"firmware\":"+firmwareJSON()+",\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
+  String body="{\"schema\":1,\"wifi_diagnostics\":"+wifiDiagnosticsJSON()+",\"firmware\":"+firmwareJSON()+",\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
     ",\"printer\":{\"state\":"+jsonString(printer)+",\"ready_verified\":false,\"usb_connected\":"+(u.connected?"true":"false")+
     ",\"usb_responsive\":"+(u.responsive?"true":"false")+",\"error_code\":"+u.error+",\"capt_transport\":"+captTransportJSON()+",\"capt\":"+captTelemetryJSON()+"},\"lan\":{\"active\":"+(lanJob&&j.active?"true":"false")+
@@ -130,10 +150,9 @@ static String cloudHeartbeatBody() {
 // Dedicated network task: HTTPS cannot block USB engine/status or local controls.
 static void cloudTelemetryTask(void *) {
   String previous;uint32_t sent=0,sequence=0;auto h=cloudClient("/heartbeat");
-  if(!h){vTaskDelete(nullptr);return;}
   // Server capture showed valid requests aborted during ~1.45s upstream waits.
   // This independent task can wait without blocking USB or local controls.
-  esp_http_client_set_timeout_ms(h,5000);
+  if(h)esp_http_client_set_timeout_ms(h,5000);
   while(true) {
     if(stationSettings.cloudEnabled && WiFi.isConnected() && time(nullptr)>1700000000) {
       String body=cloudHeartbeatBody();
@@ -143,7 +162,10 @@ static void cloudTelemetryTask(void *) {
       char *encoded=j?cJSON_PrintUnformatted(j):nullptr;String key=encoded?String(encoded):String("");free(encoded);cJSON_Delete(j);
       if(key!=previous || uint32_t(millis()-sent)>=1000) {
         body.remove(body.length()-1);body+=",\"telemetry_seq\":"+String(++sequence)+",\"command_ack\":{\"seq\":"+String(cloudCommandSeq.load())+",\"result\":"+jsonString(cloudCommandResult.load()==1?"accepted":cloudCommandResult.load()==2?"rejected":"none")+"}}";
+        if(!h){h=cloudClient("/heartbeat");if(h)esp_http_client_set_timeout_ms(h,5000);}
         sent=millis();String response;int code=cloudPost("/heartbeat",body,response,"",h);cloudOnline.store(code==200||code==204);
+        // A failed TLS stream must not retain parser/transport state across snapshots.
+        if(code<0&&h){esp_http_client_cleanup(h);h=nullptr;}
         if(code==200){auto *r=cJSON_Parse(response.c_str());updateServerQueue(r);auto *cmd=cJSON_GetObjectItemCaseSensitive(r,"command");
           String target=cloudText(cmd,"job_id"),action=cloudText(cmd,"action");
           auto *n=cJSON_GetObjectItemCaseSensitive(cmd,"seq");double seq=cJSON_IsNumber(n)?n->valuedouble:0;
@@ -453,7 +475,7 @@ static void cloudTask(void *) {
       cloudClaiming.store(true);
       struct ClaimGuard {~ClaimGuard(){cloudClaiming.store(false);}} claimGuard;
       if(firmwareCheckPending.load()){vTaskDelay(pdMS_TO_TICKS(100));continue;}
-      String response,detail;int code=cloudPost("/jobs/claim","{\"schema\":1,\"max_bytes\":4194304,\"format\":\"espjob-v1\"}",response,"",nullptr,&detail);
+      String response,detail;int code=cloudClaim(response,detail);
       if(code==200) {
         auto *j=cJSON_Parse(response.c_str());id=cloudText(j,"id");lease=cloudText(j,"lease");String hash=cloudText(j,"sha256"),title=cloudText(j,"title");if(title.length()>128)title="";
         auto *n=cJSON_GetObjectItem(j,"bytes");double bytes=cJSON_IsNumber(n)?n->valuedouble:0;

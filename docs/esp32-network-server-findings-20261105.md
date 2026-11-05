@@ -24,3 +24,22 @@ Kiểm tra logic: `php scripts/check_printer_api_diagnostics.php`, `php scripts/
 ## Quan sát sau cô lập pool
 
 11:11:10 UTC Máy 2 vẫn có 400, request_length 285 / content_length 2052, upstream rỗng: xác nhận tách pool không sửa lỗi đóng trước body. 11:12:09 có một 502 trùng lần reload FPM; không quy lỗi này cho firmware. 11:12:25 Máy 1 còn 499 khoảng 1,5 giây dù đã có pool riêng, nên chưa thể khẳng định tải pool chung là nguyên nhân gốc hoặc đã sửa dứt điểm. Tổng mẫu 11:10:55 tới khoảng 11:12:25: 302 HTTP200, 108 HTTP204, một 400, một 502, một 499. Không tăng timeout mù hoặc đánh ready giả. Cần source/diagnostic firmware để hoàn tất sửa transport. Test PHP: 167 kiểm tra đạt, không in vật lý.
+
+## Theo dõi firmware 2026110501: chưa đạt — 05/11, 18:30 Việt Nam
+
+Đọc `esp32-http-transport-fix-20261105.md`, xác nhận DB cả hai máy báo 2026110501 và giữ boot ID trong các lần lấy mẫu. Lấy cửa sổ sau OTA từ 11:22:35 UTC; không gửi lệnh in hoặc gây tải giả. Trước 11:28 đã có request thành công chậm 3,432 s (Máy 1), 3,511 s (Máy 2), không thể coi mọi heartbeat đều dưới 250 ms.
+
+| UTC | Máy | HTTP | Request / body khai báo | Thời gian | Upstream |
+|---|---|---:|---|---:|---|
+| 11:28:16 | 1 | 499 | 2366 / 2081 byte | 3,869 s | kết nối được, chưa có header sau 3,808 s |
+| 11:28:17 | 2 | 499 | 2421 / 2136 byte | 3,894 s | kết nối được, chưa có header sau 3,864 s |
+| 11:28:24 | 2 | 499 | 2507 / 2222 byte | 4,997 s | kết nối được, chưa có header sau 4,956 s |
+| 11:28:53 | 2 | 400 | 285 / 2223 byte | 0,128 s | rỗng, PHP chưa xử lý |
+
+Nginx info tiếp tục ghi `client prematurely closed connection`. Request_length 285 đúng header: không nhận đủ body trong ca 400, lỗi còn xảy ra với native HTTP transport mới. Không kết luận nguyên nhân sâu do Wi-Fi/TLS/SDK chỉ từ event `headers_sent`.
+
+Diagnostic lưu lúc 11:29:07: cả hai có `HTTP=-1 phase=headers_sent setup=0 perform=28679 errno=0 bytes=0 overflow=0`, heap lần lượt 102000 / 101552. Sau đó Máy 2 giữ lỗi mới `HTTP=-1 phase=open setup=0 perform=28674 errno=0 bytes=0 overflow=0 heap=99072`. Hai mã tương ứng 0x7007 / 0x7002; cần đối chiếu enum của đúng SDK đang build, không tự suy ý nghĩa errno=0 là không có lỗi.
+
+Máy 2 heartbeat cuối trước khoảng mất là 11:28:53 (400), đầu tiên phục hồi là 11:29:33 (200), khoảng 40 s; heartbeat thành công trước đó là 11:28:52, tới lần thành công sau là 41 s. Máy 1 khoảng cách heartbeat lớn nhất trong cửa sổ tới 11:29:58 là 5 s. Tại 11:29:58 cả hai đã về idle, heartbeat200, claim204 và failures=0; diagnostic vẫn giữ lỗi lịch sử đúng contract, không dùng nó để báo lỗi hiện tại.
+
+Kết luận: chưa nghiệm thu ổn định, không cần chờ đủ 15–30 phút mới báo fail vì đã có bằng chứng tái hiện ngay trong phút thứ sáu sau mốc theo dõi. Bộ kiểm tra server diagnostics/167 printer/USB status/batches đạt; không chứng minh transport thực tế đã hết lỗi. Không thay firmware, ngưỡng stale hoặc trạng thái job trong lượt theo dõi này.

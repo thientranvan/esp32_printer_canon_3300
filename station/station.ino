@@ -58,6 +58,12 @@ String jsonString(const String &value) {
   return result + "\"";
 }
 
+static std::atomic<unsigned> wifiDisconnects{0},wifiLastReason{0},wifiLastAt{0};
+static String wifiDiagnosticsJSON(){
+  bool connected=WiFi.isConnected();unsigned count=wifiDisconnects.load();
+  return String("{\"connected\":")+(connected?"true":"false")+",\"rssi\":"+(connected?String(WiFi.RSSI()):String("null"))+",\"channel\":"+WiFi.channel()+",\"bssid\":"+(connected?jsonString(WiFi.BSSIDstr()):String("null"))+",\"disconnects\":"+count+",\"last_reason\":"+(count?String(wifiLastReason.load()):String("null"))+",\"last_disconnect_ms\":"+(count?String(wifiLastAt.load()):String("null"))+"}";
+}
+
 bool validStationName(const String &name) {
   if (!name.length() || name.length() > 192) return false;
   for (uint8_t c : name) if (c < 32 || c == 127 || c == '\\' || c == '/' || c == '"' || c == ';') return false;
@@ -397,8 +403,10 @@ void setup() {
   bool passwordOK=devicePassword.length()>=8&&devicePassword.length()<=63;
   if (storageOK) supportCommand = prefs.getString("supportcmd", supportCommand);
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED){
+      wifiLastReason.store(info.wifi_sta_disconnected.reason);wifiLastAt.store(millis());++wifiDisconnects;
       Serial.printf("Wi-Fi STA disconnected: reason=%u\n", info.wifi_sta_disconnected.reason);
+    }
     else if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED)
       Serial.println("Wi-Fi AP client connected");
     else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED)
@@ -602,7 +610,7 @@ void setup() {
   server.on("/status", HTTP_GET, [] {
     if (!authorized()) return;
     USBStatus usb = readUSB();
-    String json = String("{\"firmware\":")+firmwareJSON()+",\"status_source\":\"esp32\",\"server_queue\":"+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
+    String json = String("{\"firmware\":")+firmwareJSON()+",\"wifi_diagnostics\":"+wifiDiagnosticsJSON()+",\"status_source\":\"esp32\",\"server_queue\":"+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
       ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
       ",\"connecting\":" + (connecting ? "true" : "false") +
       ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +

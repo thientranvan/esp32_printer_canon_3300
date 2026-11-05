@@ -70,3 +70,63 @@ Log nginx sau 11:22:35 UTC: mẫu đầu 97 heartbeat Máy 2 và 93 Máy 1 đề
 request_time tối đa lần lượt0.150s/0.246s; chưa có400/499 trong mẫu này.
 Đây chỉ là quan sát ngắn ban đầu, không phải nghiệm thu15–30phút.
 Máy 3 không truy cập được trong LAN; chưa nạp trực tiếp bo này.
+
+## Tái hiện bản 2026110501 và sửa tiếp 2026110502
+
+Server đã xác nhận 0501 chưa đạt: 499 lúc 11:28:16–24 UTC, Máy 2 400
+thiếu body lúc11:28:53; gián đoạn heartbeat40s, boot ID không đổi.
+Đối chiếu esp_http_client.h cài trong Arduino ESP32 3.3.11 / IDF5.5.5:
+28679 (0x7007) = ESP_ERR_HTTP_EAGAIN, 28674 (0x7002) = ESP_ERR_HTTP_CONNECT.
+Đọc source Espressif tag v5.5.5, esp_http_client_perform trả EAGAIN khi
+fetch_headers hết thời gian chờ và giữ state REQ_COMPLETE_DATA.
+
+0502 tiếp tục perform trên CÙNG handle/POST/response context khi EAGAIN,
+ngân sách10s từ lúc bắt đầu request; mỗi lần tiếp tục dùng timeout không lớn
+hơn phần ngân sách còn lại, nhường task10ms. Không gọi set_post_field,
+connect hoặc tạo request mới trong vòng tiếp tục. Không retry lỗi connect,
+write, framing hoặc HTTP status thật. Đây là tiếp tục state SDK, không replay
+POST. Deadline không bao gồm giới hạn DNS/TLS tuyệt đối của mọi đường SDK.
+
+Sau transport failure, telemetry cleanup toàn bộ handle và tạo handle mới
+ở snapshot kế tiếp, thay vì chỉ close rồi tái dùng cấu trúc cũ. Init thất bại
+không xóa task telemetry vĩnh viễn. Bổ sung tls error/verify flags, số lần resume
+và elapsed ms vào diagnostic. Chưa kết luận việc cleanup sửa được400 thiếu
+body: phải đối chiếu thực nghiệm; không tăng timeout để tuyên bố hết lỗi.
+
+Unit test thêm EAGAIN2lần rồi thành công: perform3lần nhưng POST chỉ gửi1lần;
+EAGAIN kéo dài: dừng hữu hạn, close, không replay, TLS diagnostic giữ lại.
+
+## Bản thử 2026110503 — chưa phát hành OTA chung
+
+0502 vẫn có lỗi CONNECT 5s và EAGAIN đến hết ngân sách10s. Không nghiệm thu.
+0503 giữ sửa continuation/cleanup, bổ sung:
+- Claim poll dùng một handle riêng do cloudTask sở hữu; giữ khi204, cleanup
+  khi nhận job hoặc có lỗi. Tránh tạo TLS handshake mới mỗi~0.5s lúc idle.
+  Unit test xác nhận hai204 chỉ init1handle;200/lỗi giải phóng trước download.
+- /status.wifi_diagnostics và heartbeat.wifi_diagnostics: connected, rssi,
+  channel, bssid, disconnects, last_reason, last_disconnect_ms (uptime millis).
+  Không chứa SSID password/token. Server đã lưu được các trường mới.
+
+Nạp0503 Máy 2 chưa thành công qua LAN; đọc lại vẫn0502. Không ghi giả đã nạp.
+Nạp0503 Máy 1 thành công; USB/CAPT/heartbeat nối lại. Mẫu Máy 1 lúcuptime121s:
+Wi-Fi connected, disconnects=0, RSSI-49, channel12, BSSID24:0B:2B:0C:40:0C,
+nhưng có lỗi phase=headers_sent, perform28679, resumes1, elapsed10011ms,
+TLS0/flags0. Vẫn CHƯA đạt; không thể quy mọi lỗi thành Wi-Fi disassociation.
+
+Nginx 12:23:11 UTC Máy 1 heartbeat HTTP200 request_time9.981s trong khi
+upstream_header_time0.032s, connect_time0.000s. Phần lớn độ trễ của mẫu này
+ở trước/kết hợp nhận request, không phải9.981s xử lýPHP. Chưa phân biệt
+TLS scheduling/ghi client, TCP loss, AP hoặc WAN. Không lấy số0.032s để
+kết luận mọi lần server đều nhanh. CóHTTP422 Máy 1 12:21:41–42; cần dev
+đối chiếu mã validate (không phải400 thiếubody), chưa tự sửa server.
+
+Capture TCP header-only30s tại server, lọc nhóm packet không TCP options:
+498 packet có payload,3 seq-range bị lặp theo hướngserver về một kết nối
+client. Không lưu/hiển thị payload, token hoặc dữ liệu tài liệu. Capture ngắn
+này chưa ánh xạ chắc chắn kết nối đó sang Máy1/2 và chưa bắt trọn ca timeout;
+không dùng làm bằng chứng kết luận Wi-Fi/router là thủ phạm.
+
+Trạng thái triển khai: Máy1=0503 thử nghiệm, Máy2=0502 thử nghiệm;
+main/public manifest vẫn0501. Không merge/phát hành chung từ bằng chứng
+chỉ vài phút200. Cần đối chiếu riêng một bo trên mạng2.4GHz khác, giữ Mac
+và bo còn lại làm đối chứng; người dùng xác nhận có mạng khác, đang chờSSID.
