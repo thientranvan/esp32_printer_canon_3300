@@ -168,3 +168,32 @@ check_wifi.py kiểm thử production loader/config: legacy migration, DHCP/stat
 record sai, rollback, trial hết hạn và hoãn về mạng cũ khi đang bận.
 check_home.py/check_cloud_http.py/check_firmware_update.py đạt; build public
 không chứa secret. Main OTA chung chưa phát hành các bản thử0502–0504.
+
+### Kết quả lượt hotspot và tự quay về TVT
+
+Ngày 05/11/2026, Máy2 tự trở về TVT lúc uptime648035ms (~12:52:10 UTC),
+IP192.168.1.200. Đọc trực tiếp lúc12:52:34: uptime673s (không reboot),
+firmware0504, RSSI-56, heartbeat200/failures0, claim204, USB connected,
+CAPT fresh, không job active. disconnects2/reason8 gồm hai lần chuyển mạng
+chủ động, không có lần mất association tự phát trong lượt thử.
+Máy in đã bật lại, CAPT không báo kẹt/nắp/giấy; ready_verified=false nên
+không diễn giải thành đã xác minh đầy đủ mọi điều kiện sẵn sàng.
+
+Đối chiếu nginx theo stationID trong cửa sổ12:42:40–12:52:09 UTC
+(loại thời điểm đổi route):
+
+| Trạm | Mạng | Request | HTTP | Trung vị | p95 | Lâu nhất |
+|---|---|---:|---|---:|---:|---:|
+| Máy2 /0504 | robotpi |1456|779×200,677×204|0,100s|0,156s|4,072s|
+| Máy1 /0503 | TVT |1156|1156×200|0,066s|0,112s|0,329s|
+
+Không400/499/5xx trong cửa sổ trên ở cả hai trạm. Máy1 đang có lệnh LAN
+chờ giấy nên không có claim204; không so sánh số request như cùng tải.
+Máy2 RSSI khoảng-40..-42 sau khi đưa điện thoại gần, uptime tăng liên tục,
+heartbeat failures0 trong mẫu mỗi30s. Diagnostic WRITE_DATA/errno113 giữ
+lại từ thao tác đổi route, không phải lỗi mới trong cửa sổ thử.
+
+Kết luận giới hạn: lượt hotspot10phút thành công và rollback TVT đúng;
+TVT/Máy1 cũng không tái hiện lỗi cùng cửa sổ. Chưa chứng minh router gây lỗi,
+chưa nghiệm thu sửa dứt điểm HTTP/TLS; Máy2 cần theo dõi tiếp0504 trênTVT.
+Không phát hành0504 lên main/public OTA chỉ dựa trên lượt thử này.
