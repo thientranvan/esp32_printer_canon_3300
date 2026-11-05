@@ -13,7 +13,7 @@
 static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
-struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; char waitReason[32]; };
+struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; char waitReason[32]; char heartbeatDiagnostic[128]; unsigned heartbeatDurationMs, heartbeatFailures; };
 static CloudView cloudView={"disabled","","",0,0,0,0,0,0,0,false};
 static bool cloudBusy() { return cloudWorking.load(); }
 static CloudView cloudSnapshot() { portENTER_CRITICAL(&cloudLock); auto v=cloudView; portEXIT_CRITICAL(&cloudLock); return v; }
@@ -23,7 +23,7 @@ static void cloudState(const char *state,const char *error="",const char *waitRe
 static String cloudStatusJSON() {
   auto v=cloudSnapshot();
   return String("{\"enabled\":")+(stationSettings.cloudEnabled?"true":"false")+",\"state\":"+jsonString(v.state)+
-    ",\"error\":"+jsonString(v.error)+",\"wait_reason\":"+jsonString(v.waitReason)+",\"http\":"+v.http+",\"heartbeat_http\":"+v.heartbeatHttp+",\"claim_http\":"+v.claimHttp+",\"event_http\":"+v.eventHttp+",\"job\":"+jsonString(v.job)+
+    ",\"error\":"+jsonString(v.error)+",\"wait_reason\":"+jsonString(v.waitReason)+",\"http\":"+v.http+",\"heartbeat_http\":"+v.heartbeatHttp+",\"claim_http\":"+v.claimHttp+",\"event_http\":"+v.eventHttp+",\"heartbeat_diagnostic\":"+jsonString(v.heartbeatDiagnostic)+",\"heartbeat_duration_ms\":"+v.heartbeatDurationMs+",\"heartbeat_failures\":"+v.heartbeatFailures+",\"job\":"+jsonString(v.job)+
     ",\"progress_known\":"+(v.progressKnown?"true":"false")+",\"total\":"+v.total+",\"submitted\":"+v.submitted+",\"completed\":"+v.completed+"}";
 }
 static String cloudText(cJSON *object,const char *key) {
@@ -49,31 +49,59 @@ static esp_http_client_handle_t cloudClient(const String &path,const String &lea
   }
   return h;
 }
-// Bounded bodies, no redirects: a server response never chooses another host/path.
+// Native synchronous perform owns TLS partial writes and response framing.
+// Each handle belongs to one task. No automatic application-level POST replay.
+struct CloudResponse { String *body; const char *phase="open"; bool overflow=false; };
+static esp_err_t cloudResponseEvent(esp_http_client_event_t *event) {
+  auto *r=static_cast<CloudResponse *>(event->user_data);if(!r)return ESP_OK;
+  switch(event->event_id){
+    case HTTP_EVENT_ON_CONNECTED:r->phase="connected";break;
+    case HTTP_EVENT_HEADERS_SENT:r->phase="headers_sent";break;
+    case HTTP_EVENT_ON_HEADER:r->phase="response_headers";break;
+    case HTTP_EVENT_ON_DATA:
+      r->phase="read";
+      if(event->data_len<0||size_t(event->data_len)>8192-r->body->length()||
+         !r->body->concat(static_cast<const char *>(event->data),event->data_len)){
+        r->overflow=true;return ESP_FAIL;
+      }
+      break;
+    case HTTP_EVENT_ON_FINISH:r->phase="finish";break;
+    default:break;
+  }
+  return ESP_OK;
+}
 static int cloudPost(const String &path,const String &body,String &response,const String &lease="",esp_http_client_handle_t reusable=nullptr,String *diagnostic=nullptr) {
-  response="";int status=-1;auto h=reusable?reusable:cloudClient(path,lease);
-  auto note=[&](const char *stage,int result){if(diagnostic){char text[112];snprintf(text,sizeof(text),"%s=%d errno=%d heap=%u",stage,result,h?esp_http_client_get_errno(h):0,(unsigned)ESP.getFreeHeap());*diagnostic=text;}};
-  if(diagnostic)*diagnostic="";
-  if(!h)note("init",-1);
+  response="";int status=-1;uint32_t started=millis();String detail;
+  auto h=reusable?reusable:cloudClient(path,lease);CloudResponse result;result.body=&response;
+  int performed=ESP_FAIL,setup=ESP_FAIL;
   if(h){
-  esp_http_client_set_method(h,HTTP_METHOD_POST); esp_http_client_set_header(h,"Content-Type","application/json");
-  int opened=esp_http_client_open(h,body.length());if(opened!=ESP_OK)note("open",opened);
-  if(opened==ESP_OK) {
-    size_t offset=0;
-    while(offset<body.length()) { int n=esp_http_client_write(h,body.c_str()+offset,body.length()-offset); if(n<=0){note("write",n);break;} offset+=n; }
-    int64_t headers=offset==body.length()?esp_http_client_fetch_headers(h):-1;
-    if(headers<0 && offset==body.length())note("headers",int(headers));
-    if(offset==body.length() && headers>=0) {
-      status=esp_http_client_get_status_code(h); response=""; char b[512];
-      // HTTP 204 has no body. Reading it may wait for nonexistent data and fail.
-      while(status!=204 && response.length()<=8192) { int n=esp_http_client_read(h,b,sizeof(b)); if(n<0){note("read",n);status=-1;break;} if(!n)break; response.concat(b,n); }
-      if(response.length()>8192)status=-1;
+    setup=esp_http_client_set_method(h,HTTP_METHOD_POST);
+    if(setup==ESP_OK)setup=esp_http_client_set_header(h,"Content-Type","application/json");
+    if(setup==ESP_OK)setup=esp_http_client_set_event_handler(h,cloudResponseEvent);
+    if(setup==ESP_OK)setup=esp_http_client_set_user_data(h,&result);
+    if(setup==ESP_OK)setup=esp_http_client_set_post_field(h,body.c_str(),body.length());
+    if(setup==ESP_OK){
+      performed=esp_http_client_perform(h);
+      if(performed==ESP_OK&&!result.overflow&&esp_http_client_is_complete_data_received(h))
+        status=esp_http_client_get_status_code(h);
     }
   }
-  if(!reusable){esp_http_client_close(h);esp_http_client_cleanup(h);}else if(status<0)esp_http_client_close(h);
+  if(status<0){char text[128];snprintf(text,sizeof(text),"phase=%s setup=%d perform=%d errno=%d bytes=%u overflow=%d heap=%u",result.phase,setup,performed,h?esp_http_client_get_errno(h):0,(unsigned)response.length(),int(result.overflow),(unsigned)ESP.getFreeHeap());detail=text;response="";}
+  if(h){
+    // Stack context and POST body must not survive this call on a reused handle.
+    esp_http_client_set_event_handler(h,nullptr);esp_http_client_set_user_data(h,nullptr);
+    esp_http_client_set_post_field(h,nullptr,0);
+    if(!reusable){esp_http_client_close(h);esp_http_client_cleanup(h);}
+    else if(status<0)esp_http_client_close(h); // Next heartbeat reconnects, never reuses a broken stream.
   }
+  if(diagnostic)*diagnostic=detail;
+  uint32_t duration=millis()-started;
   portENTER_CRITICAL(&cloudLock);
-  if(path=="/heartbeat")cloudView.heartbeatHttp=status;
+  if(path=="/heartbeat"){
+    cloudView.heartbeatHttp=status;cloudView.heartbeatDurationMs=duration;
+    if(status==200||status==204)cloudView.heartbeatFailures=0;
+    else {++cloudView.heartbeatFailures;snprintf(cloudView.heartbeatDiagnostic,sizeof(cloudView.heartbeatDiagnostic),"HTTP=%d %.110s",status,detail.c_str());}
+  }
   else {cloudView.http=status;if(path=="/jobs/claim")cloudView.claimHttp=status;else cloudView.eventHttp=status;}
   portEXIT_CRITICAL(&cloudLock);
   return status;
@@ -103,13 +131,15 @@ static String cloudHeartbeatBody() {
 static void cloudTelemetryTask(void *) {
   String previous;uint32_t sent=0,sequence=0;auto h=cloudClient("/heartbeat");
   if(!h){vTaskDelete(nullptr);return;}
-  esp_http_client_set_timeout_ms(h,1500);
+  // Server capture showed valid requests aborted during ~1.45s upstream waits.
+  // This independent task can wait without blocking USB or local controls.
+  esp_http_client_set_timeout_ms(h,5000);
   while(true) {
     if(stationSettings.cloudEnabled && WiFi.isConnected() && time(nullptr)>1700000000) {
       String body=cloudHeartbeatBody();
       auto *j=cJSON_Parse(body.c_str());
       if(j){cJSON_DeleteItemFromObject(j,"uptime_s");auto *printer=cJSON_GetObjectItem(j,"printer");auto *capt=cJSON_GetObjectItem(printer,"capt");
-        cJSON_DeleteItemFromObject(capt,"age_ms");auto *cloud=cJSON_GetObjectItem(j,"cloud");cJSON_DeleteItemFromObject(cloud,"http");}
+        cJSON_DeleteItemFromObject(capt,"age_ms");auto *cloud=cJSON_GetObjectItem(j,"cloud");cJSON_DeleteItemFromObject(cloud,"http");cJSON_DeleteItemFromObject(cloud,"heartbeat_duration_ms");}
       char *encoded=j?cJSON_PrintUnformatted(j):nullptr;String key=encoded?String(encoded):String("");free(encoded);cJSON_Delete(j);
       if(key!=previous || uint32_t(millis()-sent)>=1000) {
         body.remove(body.length()-1);body+=",\"telemetry_seq\":"+String(++sequence)+",\"command_ack\":{\"seq\":"+String(cloudCommandSeq.load())+",\"result\":"+jsonString(cloudCommandResult.load()==1?"accepted":cloudCommandResult.load()==2?"rejected":"none")+"}}";
