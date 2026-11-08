@@ -14,6 +14,92 @@ my $stationHost;my $stationPort=9100;my $metadataSupported=0;my $recoverySupport
 my @completedSheets=(0);my $lastCompleted=-1;
 my $cache = '/Library/Caches/ESP32Printer';
 my $pending = "$cache/pending.txt";
+# Cloud token is a client-scoped credential exported by server, never ESP token.
+# ponytail: fallback only before LAN connect; cross-route recovery needs confirmed server/ESP admission.
+my $stationId;
+sub cloud_config {
+    my $path="$cache/cloud.json";return unless -e $path;
+    require JSON::PP;open(my $f,'<',$path) or fail('Cannot read cloud configuration');
+    my $raw=do{local $/;<$f>};close($f);fail('Cloud configuration too large') if length($raw)>4096;
+    my $c=eval {JSON::PP::decode_json($raw)};
+    fail('Invalid cloud configuration') unless $c && ($c->{schema}//0)==1 &&
+      ($c->{station_id}//'') eq ($stationId//'') && ($c->{token}//'') =~ /\A[A-Za-z0-9_-]{32,256}\z/;
+    return $c;
+}
+sub cloud_request {
+    my ($c,$method,$path,$body,$hash,$title)=@_;
+    require File::Temp;require JSON::PP;
+    my ($cfg,$name)=File::Temp::tempfile('esp-cloud-XXXX',TMPDIR=>1,UNLINK=>1);chmod(0600,$name);
+    print $cfg qq(url = "https://quanly.lophocbinhminh.com/api/print/v1/client/stations/$stationId/$path"\n);
+    print $cfg qq(header = "Authorization: Bearer $c->{token}"\nrequest = "$method"\n);
+    print $cfg "silent\nshow-error\nfail\nproto = \"=https\"\nconnect-timeout = 5\nmax-time = 120\nmax-filesize = 65536\nretry = 2\nretry-delay = 2\nretry-max-time = 180\n";
+    if(defined $body){
+      require MIME::Base64;
+      print $cfg qq(header = "Content-Type: application/vnd.esp32.espjob"\nheader = "X-Content-SHA256: $hash"\n);
+      my $text=eval{decode('UTF-8',$title,FB_CROAK)};$text='' if $@;chop($text) while length(encode('UTF-8',$text))>384;
+      my $name=MIME::Base64::encode_base64(encode('UTF-8',$text),'');
+      print $cfg qq(header = "X-Print-Title-Base64: $name"\nheader = "X-Print-Client-OS: macos"\ndata-binary = "\@$body"\n);
+    }
+    close($cfg);
+    open(my $curl,'-|','/usr/bin/curl','--config',$name) or fail('Cloud request failed');
+    my $raw='';while(length($raw)<=65536){my $n=read($curl,my $part,4096);last unless $n;$raw.=$part;}
+    my $ok=close($curl);unlink($name);
+    fail('Cloud request failed; retained receipt, retry same job only') unless $ok && length($raw)<=65536;
+    my $r=eval {JSON::PP::decode_json($raw)};fail('Invalid cloud response') unless ref($r) eq 'HASH';return $r;
+}
+sub cloud_prepare {
+    my ($pages,$copies,$duplex,$collate)=@_;
+    fail('Cloud copies/pages limit') unless $copies>=1&&$copies<=99&&@$pages>=1&&@$pages<=100;
+    my $data=pack('a8vvCCv',"ESPJOB1\n",scalar(@$pages),$copies,$duplex,$collate,0);my $count=0;
+    for my $p (@$pages){
+      my ($params,$bands)=@$p;fail('Invalid cloud page') unless length($params)==64 && @$bands && @$bands<=4096;
+      my ($w,$h)=unpack('x34vv',$params);my $shift=ord(substr($params,17,1));
+      fail('Cloud requires A4 600 dpi') unless ($w>>($shift&15))==2480&&($h>>($shift>>4))==3507;
+      substr($params,40,1,chr(1)); # Same cassette normalization as LAN engine.
+      $data.=$params.pack('V',scalar(@$bands));
+      for my $band (@$bands){fail('Invalid cloud band') unless length($band);$data.=pack('V',length($band)).$band;}
+      $count+=@$bands;fail('Cloud job exceeds 4096 bands / 4 MiB') if $count>4096||length($data)>4*1024*1024;
+    }
+    return $data;
+}
+sub cloud_identity {
+    my ($pages,$copies,$duplex,$collate)=@_;require Digest::SHA;
+    my $data=cloud_prepare($pages,$copies,$duplex,$collate);my $hash=Digest::SHA::sha256_hex($data);
+    return ('client-'.substr(Digest::SHA::sha256_hex(join("\0",$stationId,$ARGV[0],$hash)),0,48),$hash,$data);
+}
+sub cloud_was_selected {
+    my ($pages,$copies,$duplex,$collate)=@_;
+    return 1 if -e "$cache/cloud-job.json";
+    return 0 unless -e "$cache/cloud-completed.json";
+    require JSON::PP;open(my $f,'<',"$cache/cloud-completed.json") or fail('Cannot read completed cloud receipt');
+    my $r=eval {JSON::PP::decode_json(do{local $/;<$f>})};close($f);fail('Invalid completed cloud receipt') unless $r;
+    return 0 unless ($r->{spool_id}//'') eq $ARGV[0];
+    my ($id)=cloud_identity($pages,$copies,$duplex,$collate);return ($r->{id}//'') eq $id;
+}
+sub cloud_print {
+    my ($c,$pages,$copies,$duplex,$collate,$raw)=@_;
+    require Digest::SHA;require JSON::PP;
+    my ($id,$hash,$data)=cloud_identity($pages,$copies,$duplex,$collate);
+    my $receipt="$cache/cloud-job.json";
+    if(-e $receipt){
+      open(my $f,'<',$receipt) or fail('Cannot read cloud receipt');my $r=eval{JSON::PP::decode_json(do{local $/;<$f>})};close($f);
+      fail('Unresolved different cloud job; inspect cloud-job.json') unless $r&&($r->{id}//'') eq $id&&($r->{sha256}//'') eq $hash;
+    }else{
+      sysopen(my $f,$receipt,O_WRONLY|O_CREAT|O_EXCL,0600) or fail('Cannot persist cloud receipt');
+      print $f JSON::PP::encode_json({id=>$id,sha256=>$hash,spool_id=>$ARGV[0]}) or fail('Cannot write cloud receipt');require IO::Handle;$f->flush() or fail('Cannot flush cloud receipt');$f->sync() or fail('Cannot sync cloud receipt');close($f) or fail('Cannot save cloud receipt');
+    }
+    require File::Temp;my ($f,$path)=File::Temp::tempfile('esp-job-XXXX',TMPDIR=>1,UNLINK=>1);binmode($f);print $f $data or fail('Cannot write cloud artifact');close($f) or fail('Cannot save cloud artifact');
+    my $r=cloud_request($c,'PUT',"jobs/$id",$path,$hash,$ARGV[2]);unlink($path);
+    while(1){
+      fail('Cloud receipt identity mismatch') unless ($r->{schema}//0)==1&&($r->{station_id}//'') eq $stationId&&($r->{client_job_id}//'') eq $id&&($r->{sha256}//'') eq $hash;
+      my $state=$r->{state}//'';
+      fail('Invalid cloud job state') unless $state =~ /\A(?:queued|claimed|downloading|printing|waiting_printer|paused|uncertain|completed|failed|cancelled)\z/;
+      print STDERR "INFO: Cloud $state; progress from ESP only\n";
+      if($state eq 'completed'){rename($receipt,"$cache/cloud-completed.json") or fail('Cannot archive cloud receipt');return;}
+      fail('Cloud job stopped; inspect server job before retry') if $state eq 'failed'||$state eq 'cancelled'||$state eq 'uncertain';
+      sleep 2;$r=cloud_request($c,'GET',"jobs/$id");
+    }
+}
 sub packet { return pack('vv', $_[0], length($_[1] // '') + 4) . ($_[1] // ''); }
 sub fail { die "$_[0]\n"; }
 sub write_all {
@@ -274,6 +360,8 @@ sub print_pages {
 # Native CUPS monitor: no USB ownership, no print submission, no queue resume.
 sub monitor {
     my ($host,$queue,$once)=@_;
+    if($queue =~ /\AESP32_esp32([0-9a-f]{12})\z/){$stationId="esp32-$1";$cache.="/$stationId";}
+
     fail('Invalid monitor address/queue') unless $host =~ /\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/ &&
       !grep({$_>255} split /\./,$host) && $queue =~ /\A(?:ESP32_esp32[0-9a-f]{12}|Canon_LBP3300_ESP32)\z/;
     require JSON::PP;require File::Temp;
@@ -287,7 +375,18 @@ sub monitor {
         $state=JSON::PP->new->max_size(65536)->max_depth(16)->decode($json);
         die 'schema' unless ref($state) eq 'HASH' && ($state->{schema}//0)==1;
       };
-      if($@ || !$state->{connected} || !$state->{responsive}){push @reasons,'offline-report';}
+      if($@ && $stationId){
+        eval {my $c=cloud_config();$state=cloud_request($c,'GET','status') if $c;
+          die 'schema' unless $state&&($state->{schema}//0)==1&&($state->{station_id}//'') eq $stationId;};
+        $state=undef if $@;
+      }
+      if($stationId){
+        eval {my $dest="/Library/Printers/ESP32Printer/cloud-status-$stationId.json";
+          open(my $f,'>',$dest.'.tmp') or die 'cache';chmod(0644,$dest.'.tmp');
+          my %view;for my $k(qw(schema connected responsive capt job_control active total completed)){ $view{$k}=$state->{$k} if $state && exists $state->{$k}; }
+          print $f JSON::PP::encode_json({received_at=>time,status=>\%view});close($f) or die 'cache';rename($dest.'.tmp',$dest) or die 'cache';};
+      }
+      if(!$state || !$state->{connected} || !$state->{responsive}){push @reasons,'offline-report';}
       elsif(!$state->{capt}{fresh}){push @reasons,'other-warning';$message='Waiting for fresh CAPT status';}
       else {
         my $p=$state->{capt};my @notes;
@@ -365,7 +464,7 @@ sub main {
     # No proprietary Canon backchannel server: let filter use its PPD defaults.
     POSIX::close(3); POSIX::close(4);
     my ($host, $port, $id) = ($ENV{DEVICE_URI} // '') =~ m{\Aesp32capt://([a-zA-Z0-9.-]+)(?::([0-9]+))?(?:/(esp32-[0-9a-f]{12}))?/?\z};
-    if ($id) { $cache .= "/$id"; $pending = "$cache/pending.txt"; }
+    if ($id) { $stationId=$id; $cache .= "/$id"; $pending = "$cache/pending.txt"; }
     fail('Invalid device URI') unless $host;
     $stationHost=$host;$stationPort=$port||9100;
     eval {
@@ -390,8 +489,17 @@ sub main {
     sysopen(my $lock, "$cache/lock", O_WRONLY | O_CREAT, 0600) or fail('Cannot open local lock');
     flock($lock, LOCK_EX) or fail('Cannot lock local printer');
     fail('Previous result uncertain; inspect pending.txt') if -e $pending;
-    $socket = IO::Socket::INET->new(PeerAddr => $host, PeerPort => ($port || 9100), Proto => 'tcp', Timeout => 70)
-        or fail('Cannot connect to ESP');
+    my $cloud;
+    my $cloudDuplex=$duplex?($ARGV[4]=~/(?:BindEdge=Top|Duplex=DuplexTumble|sides=two-sided-short-edge)/i?3:2):1;
+    if(cloud_was_selected(\@pages,$ARGV[3],$cloudDuplex,$collate)){
+        $cloud=cloud_config();fail('Cloud receipt exists but cloud is not configured') unless $cloud;
+        cloud_print($cloud,\@pages,$ARGV[3],$cloudDuplex,$collate,$job);return;
+    }
+    $socket = IO::Socket::INET->new(PeerAddr => $host, PeerPort => ($port || 9100), Proto => 'tcp', Timeout => 5);
+    if(!$socket){
+        $cloud=cloud_config();fail('Cannot connect to ESP; cloud fallback not configured') unless $cloud;
+        cloud_print($cloud,\@pages,$ARGV[3],$cloudDuplex,$collate,$job);return;
+    }
     $socket->autoflush(1);
     my @plan = plan_pages(\@pages, $ARGV[3], $duplex, $collate);
     print_pages(@plan);

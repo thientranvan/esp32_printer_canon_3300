@@ -842,3 +842,11 @@ Cập nhật firmware tự động từ bản `.bin` build sẵn trên GitHub:
 [phát hành, chuyển tiếp mật khẩu sang NVS và giới hạn OTA](docs/firmware-update.md).
 
 Rà soát/tối ưu tốc độ in web: [bàn giao 04/11/2026](docs/web-print-performance-20261104.md).
+
+## LAN fallback qua server — client render
+
+Windows/Mac/Ubuntu có thể gửi CAPT đã render tại máy gửi qua HTTPS khi không
+kết nối được LAN trước khi truyền lệnh. Cần backend mới, cấu hình client do
+server cấp và API bổ sung; chưa nghiệm thu đầu-cuối. Không render lại trên server,
+không tự chuyển tuyến khi lệnh LAN đã gửi dở. Xem
+[contract triển khai](docs/client-cloud-fallback-20261108.md).

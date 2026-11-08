@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Config)
+﻿param([Parameter(Mandatory=$true)][string]$Config)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
@@ -132,6 +132,9 @@ $timer.add_Tick({
    $s=$null
    try {if ($script:download.IsCompleted) {$s=$script:download.GetAwaiter().GetResult() | ConvertFrom-Json}} catch {}
    $script:client.CancelAsync();$script:client.Dispose();$script:download=$null
+   if (!$s) {
+    try {$cached=Get-Item -LiteralPath (Join-Path (Split-Path $Config) 'cloud-state.json');if (((Get-Date).ToUniversalTime()-$cached.LastWriteTimeUtc).TotalSeconds -lt 10) {$s=Get-Content -LiteralPath $cached.FullName -Raw | ConvertFrom-Json}} catch {}
+   }
    $view=Get-DeviceView $s
    $state.Text=$view.Title;$message.Text=$view.Detail;$progressText.Text=$view.Progress
    $state.ForeColor=switch ($view.Kind) {'error' {[Drawing.Color]::FromArgb(185,45,45)} 'warning' {[Drawing.Color]::FromArgb(133,84,0)} 'offline' {[Drawing.Color]::DimGray} 'busy' {[Drawing.Color]::FromArgb(23,84,161)} default {[Drawing.Color]::FromArgb(26,110,85)}}

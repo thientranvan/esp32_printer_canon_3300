@@ -1,5 +1,5 @@
 ﻿#requires -RunAsAdministrator
-param([string]$StationIP, [string]$PrinterName, [switch]$ResolvePending)
+param([string]$StationIP, [string]$PrinterName, [switch]$ResolvePending, [string]$CloudConfig)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 function Move-BridgePendingToArchive([string]$Folder) {
@@ -191,6 +191,9 @@ $timer.add_Tick({
    $s=$null
    try {if ($script:download.IsCompleted) {$s=$script:download.GetAwaiter().GetResult() | ConvertFrom-Json}} catch {}
    $script:client.CancelAsync();$script:client.Dispose();$script:download=$null
+   if (!$s) {
+    try {$cached=Get-Item -LiteralPath (Join-Path (Split-Path $Config) 'cloud-state.json');if (((Get-Date).ToUniversalTime()-$cached.LastWriteTimeUtc).TotalSeconds -lt 10) {$s=Get-Content -LiteralPath $cached.FullName -Raw | ConvertFrom-Json}} catch {}
+   }
    $view=Get-DeviceView $s
    $state.Text=$view.Title;$message.Text=$view.Detail;$progressText.Text=$view.Progress
    $state.ForeColor=switch ($view.Kind) {'error' {[Drawing.Color]::FromArgb(185,45,45)} 'warning' {[Drawing.Color]::FromArgb(133,84,0)} 'offline' {[Drawing.Color]::DimGray} 'busy' {[Drawing.Color]::FromArgb(23,84,161)} default {[Drawing.Color]::FromArgb(26,110,85)}}
@@ -260,6 +263,7 @@ Start-Sleep -Milliseconds 500
 Start-ScheduledTask -TaskName "ESP32PrinterStatus-$stationId"
 
 if (@(Get-Printer | Where-Object { $_.PortName -eq $portName -and $_.JobCount -ne 0 }).Count) { throw 'Status window installed. Print queue is not empty. Resolve existing jobs first; no jobs were deleted.' }
+if (Test-Path "$root\cloud-job.txt") { throw 'Cloud job unresolved. Wait for server result before upgrading; no files changed.' }
 $unresolved=(Test-Path "$root\pending.txt") -or @(Get-ChildItem "$root\*.capt" -ErrorAction SilentlyContinue).Count -gt 0
 if ($unresolved) {
  $note=Get-Content "$root\status.txt" -Raw -ErrorAction SilentlyContinue
@@ -510,17 +514,29 @@ public static class Esp32CaptBridge {
  [System.Runtime.InteropServices.DllImport("winspool.drv")] static extern bool ClosePrinter(IntPtr handle);
  static bool Flag(string json,string key){return System.Text.RegularExpressions.Regex.IsMatch(json,"\\\""+key+"\\\"\\s*:\\s*true");}
  static bool monitorStarted=false;
+
+ static string ReadStatus(){
+  HttpWebRequest r=(HttpWebRequest)WebRequest.Create("http://__STATION_IP__/printer/status");r.Proxy=null;r.Timeout=2000;r.ReadWriteTimeout=2000;
+  try{return ReadStatusResponse(r);}catch(WebException){
+   CloudConfig c=ReadCloud();if(c==null)throw;
+   r=(HttpWebRequest)WebRequest.Create("https://quanly.lophocbinhminh.com/api/print/v1/client/stations/"+c.station_id+"/status");
+   r.Headers["Authorization"]="Bearer "+c.token;r.AllowAutoRedirect=false;r.Timeout=5000;r.ReadWriteTimeout=5000;
+   return ReadStatusResponse(r);
+  }
+ }
+ static string ReadStatusResponse(HttpWebRequest r){
+  using(var response=(HttpWebResponse)r.GetResponse())using(Stream input=response.GetResponseStream())using(MemoryStream data=new MemoryStream()){
+   Need(response.StatusCode==HttpStatusCode.OK,"Invalid printer status response");byte[] b=new byte[4096];int n;
+   while((n=input.Read(b,0,b.Length))>0){data.Write(b,0,n);Need(data.Length<=65536,"Status too large");}return System.Text.Encoding.UTF8.GetString(data.ToArray());
+  }
+ }
+
  static void MonitorPrinter(){
   string name=System.Text.Encoding.UTF8.GetString(Convert.FromBase64String("__PRINTER_NAME_BASE64__"));
   while(true){
    uint status=0;string json="";
    try{
-    System.Net.HttpWebRequest request=(System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://__STATION_IP__/printer/status");
-    request.Proxy=null;request.Timeout=2500;request.ReadWriteTimeout=2500;
-    using(System.Net.WebResponse response=request.GetResponse())using(StreamReader reader=new StreamReader(response.GetResponseStream())){
-     char[] data=new char[65537];int length=0,count;while(length<data.Length && (count=reader.Read(data,length,data.Length-length))>0)length+=count;
-     if(length>65536)throw new InvalidDataException("Status too large");json=new string(data,0,length);
-    }
+    json=ReadStatus();
     if(!Flag(json,"connected")||!Flag(json,"responsive"))status=0x80;
     else if(!Flag(json,"fresh"))status=0x100002;
     else {if(Flag(json,"service_error"))status|=0x100002;if(Flag(json,"paper_jam"))status|=8;if(Flag(json,"paper_required"))status|=0x10;
@@ -528,6 +544,8 @@ public static class Esp32CaptBridge {
    }catch{status=0x80;}
    if(File.Exists(Pending))status|=0x100002;
    try{File.WriteAllText(Path.Combine(Root,"printer-state.json"),json);
+    string shared=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"ESP32PrinterStatus","__STATION_ID__","cloud-state.json");
+    File.WriteAllText(shared,json);
     IntPtr handle;PrinterDefaults defaults=new PrinterDefaults();defaults.Access=12;
     if(OpenPrinter(name,out handle,ref defaults)){try{uint needed;GetPrinter(handle,6,IntPtr.Zero,0,out needed);
       if(needed<4||needed>64)throw new IOException("Invalid printer status size");
@@ -539,20 +557,106 @@ public static class Esp32CaptBridge {
   }
  }
  static void Note(string text){File.WriteAllText(Path.Combine(Root,"status.txt"),DateTime.Now.ToString("s")+" "+text);}
+
+ [System.Runtime.Serialization.DataContract] sealed class CloudConfig {
+  [System.Runtime.Serialization.DataMember] public int schema;
+  [System.Runtime.Serialization.DataMember] public string station_id;
+  [System.Runtime.Serialization.DataMember] public string token;
+ }
+ [System.Runtime.Serialization.DataContract] sealed class CloudReceipt {
+  [System.Runtime.Serialization.DataMember] public int schema;
+  [System.Runtime.Serialization.DataMember] public string station_id,client_job_id,sha256,state;
+  [System.Runtime.Serialization.DataMember] public int total,completed;
+  [System.Runtime.Serialization.DataMember] public bool progress_known;
+ }
+ static T CloudJson<T>(byte[] bytes){
+  Need(bytes.Length<=65536,"Cloud response too large");
+  using(MemoryStream s=new MemoryStream(bytes))return (T)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(T)).ReadObject(s);
+ }
+ static CloudConfig ReadCloud(){
+  string path=Path.Combine(Root,"cloud.json");if(!File.Exists(path))return null;
+  byte[] bytes=File.ReadAllBytes(path);Need(bytes.Length<=4096,"Cloud configuration too large");
+  CloudConfig c=CloudJson<CloudConfig>(bytes);
+  Need(c!=null&&c.schema==1&&c.station_id=="__STATION_ID__"&&c.token!=null&&System.Text.RegularExpressions.Regex.IsMatch(c.token,@"\A[A-Za-z0-9_-]{32,256}\z"),"Invalid client cloud configuration");return c;
+ }
+ static byte[] CloudPrepared(Job job){
+  using(MemoryStream s=new MemoryStream())using(BinaryWriter w=new BinaryWriter(s)){
+   w.Write(System.Text.Encoding.ASCII.GetBytes("ESPJOB1\n"));w.Write((ushort)job.Pages.Count);w.Write((ushort)job.Copies);w.Write((byte)job.Duplex);w.Write((byte)(job.Collate?1:0));w.Write((ushort)0);
+   int bands=0;foreach(Page page in job.Pages){
+    Need(page.Parameters.Length==64&&page.Bands.Count>0,"Invalid prepared page");w.Write(page.Parameters);w.Write((uint)page.Bands.Count);
+    foreach(byte[] band in page.Bands){Need(band.Length>0,"Empty band");w.Write((uint)band.Length);w.Write(band);}
+    bands+=page.Bands.Count;Need(bands<=4096&&s.Length<=4*1024*1024,"Cloud job exceeds 4096 bands / 4 MiB");
+   }return s.ToArray();
+  }
+ }
+ static string CloudHash(byte[] bytes){using(var sha=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-","").ToLowerInvariant();}
+ static CloudReceipt CloudRequest(CloudConfig c,string method,string id,byte[] body,string hash,string title){
+  for(int attempt=0;;attempt++){
+   try{return CloudRequestOnce(c,method,id,body,hash,title);}catch(WebException e){
+    var response=e.Response as HttpWebResponse;int code=response==null?0:(int)response.StatusCode;if(response!=null)response.Close();
+    if(attempt>=2 || (code!=0&&code!=408&&code!=429&&code<500))throw;
+    Thread.Sleep(2000);
+   }
+  }
+ }
+ static CloudReceipt CloudRequestOnce(CloudConfig c,string method,string id,byte[] body,string hash,string title){
+  ServicePointManager.SecurityProtocol|=SecurityProtocolType.Tls12;
+  HttpWebRequest r=(HttpWebRequest)WebRequest.Create("https://quanly.lophocbinhminh.com/api/print/v1/client/stations/"+c.station_id+"/jobs/"+id);
+  r.Method=method;r.AllowAutoRedirect=false;r.Timeout=120000;r.ReadWriteTimeout=120000;r.Headers["Authorization"]="Bearer "+c.token;
+  if(body!=null){r.ContentType="application/vnd.esp32.espjob";r.ContentLength=body.Length;r.Headers["X-Content-SHA256"]=hash;
+   r.Headers["X-Print-Title-Base64"]=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(title));r.Headers["X-Print-Client-OS"]="windows";
+   using(Stream output=r.GetRequestStream())output.Write(body,0,body.Length);
+  }
+  using(HttpWebResponse response=(HttpWebResponse)r.GetResponse()){
+   Need((int)response.StatusCode>=200&&(int)response.StatusCode<300,"Cloud rejected request");
+   using(Stream input=response.GetResponseStream())using(MemoryStream data=new MemoryStream()){
+    byte[] block=new byte[4096];int n;while((n=input.Read(block,0,block.Length))>0){data.Write(block,0,n);Need(data.Length<=65536,"Cloud response too large");}return CloudJson<CloudReceipt>(data.ToArray());
+   }
+  }
+ }
+ static string CloudId(string file,string hash){return "client-"+CloudHash(System.Text.Encoding.UTF8.GetBytes("__STATION_ID__"+"\n"+Path.GetFileNameWithoutExtension(file)+"\n"+hash)).Substring(0,48);}
+ static bool CloudSelected(Job job,string file){
+  if(File.Exists(Path.Combine(Root,"cloud-job.txt")))return true;
+  string done=Path.Combine(Root,"cloud-completed.txt");if(!File.Exists(done))return false;
+  string saved=File.ReadAllText(done);if(!saved.EndsWith("\n"+Path.GetFileName(file)))return false;
+  string hash=CloudHash(CloudPrepared(job));return saved==CloudId(file,hash)+"\n"+hash+"\n"+Path.GetFileName(file);
+ }
+ static void CloudSend(CloudConfig c,Job job,string file){
+  byte[] bytes=CloudPrepared(job);string hash=CloudHash(bytes);string id=CloudId(file,hash);
+  string receipt=Path.Combine(Root,"cloud-job.txt"),value=id+"\n"+hash+"\n"+Path.GetFileName(file);
+  if(File.Exists(receipt))Need(File.ReadAllText(receipt)==value,"Different unresolved cloud job; inspect cloud receipt");
+  else using(FileStream f=new FileStream(receipt,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){byte[] b=System.Text.Encoding.UTF8.GetBytes(value);f.Write(b,0,b.Length);f.Flush(true);}
+  CloudReceipt r=CloudRequest(c,"PUT",id,bytes,hash,Path.GetFileNameWithoutExtension(file));
+  while(true){
+   Need(r!=null&&r.schema==1&&r.station_id==c.station_id&&r.client_job_id==id&&r.sha256==hash,"Cloud receipt identity mismatch");
+   Need(System.Text.RegularExpressions.Regex.IsMatch(r.state??"",@"\A(queued|claimed|downloading|printing|waiting_printer|paused|uncertain|completed|failed|cancelled)\z"),"Invalid cloud state");
+   string note="Cloud "+r.state+(r.progress_known?" "+r.completed+"/"+r.total:"; progress unknown");Note(note);File.AppendAllText(file+".progress",note+"\r\n");
+   if(r.state=="completed"){
+    string done=Path.Combine(Root,"cloud-completed.txt");if(File.Exists(done))File.Replace(receipt,done,null);else File.Move(receipt,done);return;
+   }
+   Need(r.state!="failed"&&r.state!="cancelled"&&r.state!="uncertain","Cloud job stopped; inspect server before retry");
+   Thread.Sleep(2000);r=CloudRequest(c,"GET",id,null,hash,"");
+  }
+ }
+
  static void Send(string file) {
   Job job=Parse(File.ReadAllBytes(file));Need(!File.Exists(Pending),"Uncertain previous job; inspect pending.txt");
+  CloudConfig cloud=null;
+  if(CloudSelected(job,file)){cloud=ReadCloud();Need(cloud!=null,"Cloud receipt exists but client is not configured");CloudSend(cloud,job,file);return;}
+  bool lanTouched=false;
   Stopwatch elapsed=Stopwatch.StartNew();
   while(true){
    try{
-    using(TcpClient c=Connect())PrintJob(c.GetStream(),job,delegate(int number,string state){
+    using(TcpClient c=Connect()){lanTouched=true;PrintJob(c.GetStream(),job,delegate(int number,string state){
      if(number==0 && !File.Exists(Pending)){using(FileStream marker=new FileStream(Pending,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){
       byte[] text=System.Text.Encoding.UTF8.GetBytes(file+" job started; no automatic retry.\r\n");marker.Write(text,0,text.Length);marker.Flush(true);
      }}
      string message=state+" page "+number+" at "+elapsed.Elapsed.TotalSeconds.ToString("F2")+"s";
      File.AppendAllText(file+".progress",message+"\r\n");Note(message);
-    },Path.GetFileNameWithoutExtension(file));
+    },Path.GetFileNameWithoutExtension(file));}
     File.Delete(Pending);break;
    }catch(Exception e){
+    if(!lanTouched){cloud=ReadCloud();if(cloud!=null){CloudSend(cloud,job,file);return;}}
     bool recover=__RECOVERY_SUPPORTED__ && (File.Exists(Pending)||e.Message.StartsWith("RECOVERY_WAIT:"));
     if(e.Message.StartsWith("Operator cancelled")){File.Delete(Pending);File.AppendAllText(file+".progress","Cancelled by operator\r\n");Note("Cancelled by operator");return;}
     if(e is InvalidDataException || (File.Exists(Pending)&&!recover))throw;
@@ -649,6 +753,10 @@ public static class Esp32CaptBridge {
     if(args.Length==2 && args[0]=="--send"){Send(args[1]);return 0;}
     Need(args.Length==0,"Unsupported arguments");
     Thread monitor=new Thread(MonitorPrinter);monitor.IsBackground=true;monitor.Start();monitorStarted=true;
+    if(File.Exists(Path.Combine(Root,"cloud-job.txt"))){
+     string[] captures=Directory.GetFiles(Root,"*.capt");Need(captures.Length==1,"Cloud receipt requires exactly one retained capture");
+     Send(captures[0]);File.Delete(captures[0]);File.Delete(captures[0]+".progress");
+    }
     Need(!File.Exists(Pending) && Directory.GetFiles(Root,"*.capt").Length==0,"Uncertain previous job; inspect bridge folder. Status monitor remains active.");
     TcpListener listener=new TcpListener(IPAddress.Loopback,__LOCAL_PORT__);listener.Start(1);Note("Ready on localhost:__LOCAL_PORT__");
     while(true){string file=Path.Combine(Root,DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff")+".capt");
@@ -673,7 +781,17 @@ $sourceCode=$sourceCode.Replace('__RECOVERY_SUPPORTED__',$(if ($profile.lan_reco
 [IO.File]::WriteAllText("$root\bridge.cs",$sourceCode)
 $staged=Join-Path $root 'bridge.new.exe'
 if (Test-Path $staged) { Remove-Item $staged }
-Add-Type -TypeDefinition $sourceCode -OutputAssembly $staged -OutputType ConsoleApplication
+if ($CloudConfig -and !(Test-Path -LiteralPath $CloudConfig -PathType Leaf)) {throw 'Cloud configuration file not found'}
+if (!$CloudConfig) { $CloudConfig=Join-Path $PSScriptRoot ($stationId+'.cloud.json') }
+if (Test-Path -LiteralPath $CloudConfig) {
+ $cloudBytes=[IO.File]::ReadAllBytes($CloudConfig)
+ if ($cloudBytes.Length -gt 4096) {throw 'Cloud configuration too large'}
+ $cloud=[Text.Encoding]::UTF8.GetString($cloudBytes) | ConvertFrom-Json
+ if ($cloud.schema -ne 1 -or $cloud.station_id -cne $stationId -or $cloud.token -cnotmatch '\A[A-Za-z0-9_-]{32,256}\z') {throw 'Invalid cloud client configuration'}
+ if (Test-Path "$root\cloud-job.txt") {throw 'Unresolved cloud job; configuration was not changed'}
+ [IO.File]::WriteAllText((Join-Path $root 'cloud.json'),($cloud | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+}
+Add-Type -TypeDefinition $sourceCode -ReferencedAssemblies System.dll,System.Core.dll,System.Runtime.Serialization.dll -OutputAssembly $staged -OutputType ConsoleApplication
 & $staged --self-test
 if ($LASTEXITCODE -ne 0) { throw 'Bridge self-test failed. Existing bridge was not stopped.' }
 Add-Type @'

@@ -1,3 +1,5 @@
+> 08/11/2026: [Client LAN fallback qua server, không render lại](client-cloud-fallback-20261108.md). API client dùng credential riêng, không dùng token ESP.
+
 > Bổ sung 25/10/2026: [Hủy phiên CAPT và `job.printer_cancel`](capt-cancel.md). ESP cleanup dữ liệu đệm; server đợi kết quả, không bắt tắt/bật sau mọi lần Hủy.
 
 # Bổ sung khôi phục kẹt giấy (25/10/2026)

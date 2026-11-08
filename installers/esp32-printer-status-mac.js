@@ -129,7 +129,13 @@ function run(argv) {
             try {
                 var chosen=selectedJob();pauseButton.enabled=!!chosen&&!controlTask&&chosen.code!==4;resumeButton.enabled=!!chosen&&!controlTask&&chosen.code===4;cancelButton.enabled=!!chosen&&!controlTask;
                 if(controlTask && !controlTask.task.running){var output=read(controlTask);footer.stringValue=$(Number(controlTask.task.terminationStatus)===0?actionNote:'Không thực hiện được: '+output.trim());actionUntil=Date.now()+10000;controlTask=null;nextPoll=0;}
-                if(request && !request.task.running) {var s=null;try{s=JSON.parse(read(request));}catch(e){} request=null;apply(s);}
+                if(request && !request.task.running) {var s=null;try{s=JSON.parse(read(request));}catch(e){} request=null;
+                    if(!s && /^ESP32_esp32[0-9a-f]{12}$/.test(queue)){
+                        try {var cache=JSON.parse(ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError($('/Library/Printers/ESP32Printer/cloud-status-esp32-'+queue.slice(11)+'.json'),$.NSUTF8StringEncoding,null)));
+                            if(Math.abs(Date.now()/1000-cache.received_at)<10)s=cache.status;
+                        }catch(e){}
+                    }
+                    apply(s);}
                 if(spool && !spool.task.running) {
                     var output=read(spool), ids=output.split('\n').filter(function(l){return l.indexOf(queue+'-')===0;}).map(function(l){return l.split(/\s+/)[0];});
                     // CUPS retains completed job IDs, so quick jobs still trigger opening.
