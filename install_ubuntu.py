@@ -15,7 +15,7 @@ import urllib.request
 
 BASE='https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/'
 # Filled with exact source digests; mismatches stop before installing code.
-ASSETS = {'ubuntu/filter.py': '5cdbf223b3be3b9cb41258a84f6ff5a67ad5a50d277f296a37e1f6cd3dffd02e', 'ubuntu/esp32-lbp3300.ppd': '518f8341cd55f3228e2f1908a3727bb38a4c2d1497e29fb2d07652538895092d', 'mac_backend.pl': '6869473df00eb0317782a44edb1794f3992951fd5eef35beab34571f5dec0f6a', 'server-renderer/render.py': '7ee565a3bb81ceaedf3e18481dff18b1a544f056be7a56f77d913f9b62403bd9', 'server-renderer/build.sh': 'c3881a5d89ad271ab66217ec2563cd101cefc364c3d2b859db1f380315eb7c36', 'server-renderer/compress.c': 'd67bf57f7c133c73d74767d9a4dc54563a67c3daf1ba8c9f5082e8c30b9f2ecf', 'server-renderer/check.py': '665b0b30830db487f2412f8313c84ef1f13460a707794fca332c555ab19b3eba'}  # ASSET_MANIFEST
+ASSETS = {'ubuntu/filter.py': '5cdbf223b3be3b9cb41258a84f6ff5a67ad5a50d277f296a37e1f6cd3dffd02e', 'ubuntu/esp32-lbp3300.ppd': '518f8341cd55f3228e2f1908a3727bb38a4c2d1497e29fb2d07652538895092d', 'mac_backend.pl': 'f87f609be90744d4dda09d386b4aef645fc61b4f212acb180c9048e4b082f0c2', 'server-renderer/render.py': '7ee565a3bb81ceaedf3e18481dff18b1a544f056be7a56f77d913f9b62403bd9', 'server-renderer/build.sh': 'c3881a5d89ad271ab66217ec2563cd101cefc364c3d2b859db1f380315eb7c36', 'server-renderer/compress.c': 'd67bf57f7c133c73d74767d9a4dc54563a67c3daf1ba8c9f5082e8c30b9f2ecf', 'server-renderer/check.py': '665b0b30830db487f2412f8313c84ef1f13460a707794fca332c555ab19b3eba'}  # ASSET_MANIFEST
 TARGET=Path('/usr/lib/cups/filter/esp32printer')
 
 
@@ -50,6 +50,7 @@ def linux_backend(source):
         "my $cache = '/Library/Caches/ESP32Printer';":"my $cache = '/var/cache/cups/esp32printer';",
         'my $job="mac-".time.': 'my $job="linux-".time.',
         "client_os=>'macos'":"client_os=>'linux'",
+        'X-Print-Client-OS: macos':'X-Print-Client-OS: linux',
         "sub canon_duplex { return $_[0] =~ /(?:^|\\s)CNDuplex(?:=True)?(?:\\s|$)/i; }":
         "sub canon_duplex { return $_[0] =~ /(?:^|\\s)(?:CNDuplex(?:=True)?|Duplex=Duplex(?:NoTumble|Tumble)|sides=two-sided-(?:long|short)-edge)(?:\\s|$)/i; }",
     }
@@ -61,7 +62,7 @@ def linux_backend(source):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('ip');parser.add_argument('name',nargs='?');args=parser.parse_args()
+    parser.add_argument('--cloud-config',type=Path);parser.add_argument('ip');parser.add_argument('name',nargs='?');args=parser.parse_args()
     if os.geteuid()!=0:raise ValueError('Run with sudo python3 install_ubuntu.py IP [NAME]')
     release=dict(line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
     if release.get('ID','').strip('"')!='ubuntu' or release.get('VERSION_ID','').strip('"') not in ('22.04','24.04'):
@@ -71,7 +72,7 @@ def main():
     if not valid_name(name):raise ValueError('Invalid printer name')
     station=p['id'];queue='ESP32_'+station.replace('-','');uri=f'esp32capt://{host}:9100/{station}'
     cache=Path('/var/cache/cups/esp32printer')/station
-    if any(Path('/var/cache/cups/esp32printer').glob('*/pending.txt')):raise ValueError('Previous result uncertain. Inspect pending.txt; no automatic reprint or deletion.')
+    if any(Path('/var/cache/cups/esp32printer').glob('*/pending.txt')) or any(Path('/var/cache/cups/esp32printer').glob('*/cloud-job.json')):raise ValueError('Previous result uncertain. Inspect pending.txt; no automatic reprint or deletion.')
     if shutil.which('lpstat'):
         jobs=subprocess.run(['lpstat','-W','not-completed','-o'],capture_output=True,text=True)
         if any(line.startswith('ESP32_esp32') for line in jobs.stdout.splitlines()):raise ValueError('Resolve queued jobs before reinstalling; nothing deleted')
@@ -112,6 +113,18 @@ def main():
         pdf=Path('/usr/lib/cups/filter/esp32pdf')
         pdf.write_text('#!/bin/sh\nexec /usr/bin/python3 /usr/lib/cups/filter/esp32printer/filter.py "$@"\n');pdf.chmod(0o755)
         cache.mkdir(parents=True,exist_ok=True);cache.chmod(0o700)
+        cloud_config=args.cloud_config or Path(__file__).resolve().parent/(station+'.cloud.json')
+        if args.cloud_config and not cloud_config.is_file():raise ValueError('Cloud configuration file not found')
+        if cloud_config.exists():
+            # Installer is standalone; validate without importing repo-only helpers.
+            raw=cloud_config.read_bytes()
+            if len(raw)>4096:raise ValueError('Cloud configuration too large')
+            c=json.loads(raw)
+            if c.get('schema')!=1 or c.get('station_id')!=station or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',c.get('token','')):raise ValueError('Invalid cloud configuration')
+            if (cache/'cloud-job.json').exists():raise ValueError('Unresolved cloud job')
+            fd=os.open(cache/'cloud.json',os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+            with os.fdopen(fd,'w') as f:json.dump(c,f)
+            (cache/'cloud.json').chmod(0o600)
         run('cupstestppd','-q',str(TARGET/'printer.ppd'))
         run('systemctl','enable','--now','cups')
         run('lpadmin','-p',queue,'-v',uri,'-P',str(TARGET/'printer.ppd'),'-D',name,

@@ -28,10 +28,10 @@ uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=6869473df00eb0317782a44edb1794f3992951fd5eef35beab34571f5dec0f6a
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/d8c1d6b994b0459a2c3155942c0fb1f04c6f3873/mac_backend.pl
+backend_sha=f87f609be90744d4dda09d386b4aef645fc61b4f212acb180c9048e4b082f0c2
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/bfd20543f79533818f081c42b52535bbba0446e1/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
-if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ]; then
+if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ] || [ -e "$cache_dir/cloud-job.json" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
   exit 1
 fi
@@ -99,6 +99,16 @@ fi
 /usr/bin/perl -pi -e 's/^\*DefaultInputSlot:.*$/*DefaultInputSlot: Cas1/; s/^\*DefaultPageSize:.*$/*DefaultPageSize: A4/; s/^\*DefaultPageRegion:.*$/*DefaultPageRegion: A4/; s/^\*DefaultCNDuplex:.*$/*DefaultCNDuplex: False/' "$work/Canon_ESP32.ppd"
 /usr/bin/install -d -m 755 "$target_dir"
 /usr/bin/install -d -m 700 "$cache_dir"
+cloud_config=${3:-$source_dir/$id.cloud.json}
+if [ -n "${3:-}" ] && [ ! -f "$cloud_config" ]; then echo "Cloud configuration file not found." >&2; exit 1; fi
+if [ -f "$cloud_config" ]; then
+  /usr/bin/perl -MJSON::PP -e '
+    local $/;open my $f,"<",$ARGV[0] or die "Cannot read cloud config";my $b=<$f>;
+    die "Cloud config too large" if length($b)>4096;my $c=decode_json($b);
+    die "Invalid cloud config" unless $c->{schema}==1 && $c->{station_id} eq $ARGV[1] && $c->{token}=~/\A[A-Za-z0-9_-]{32,256}\z/;
+  ' "$cloud_config" "$id"
+  /usr/bin/install -m 600 "$cloud_config" "$cache_dir/cloud.json"
+fi
 /usr/bin/install -m 644 "$backend" "$target_dir/mac_backend.pl"
 /usr/bin/install -m 644 "$work/Canon_ESP32.ppd" "$target_dir/Canon_ESP32.ppd"
 printf '#!/bin/sh\nexec /usr/bin/perl %s/mac_backend.pl "$@"\n' "$target_dir" > "$work/esp32capt"
@@ -128,11 +138,11 @@ EOF
 echo "Installed: $name ($host). Select A4, Cassette 1. Duplex: Canon Print Style / Binding Location; layout/orientation: application print dialog."
 # Desktop monitor runs as the logged-in user, never as the CUPS/root daemon.
 status_script="$source_dir/installers/esp32-printer-status-mac.js"
-status_sha=23d5c53814bca6de1d50210179c66b51267245232f67a4dfec0267f9211caf4f
+status_sha=207d5f64339035ce59b41be95a28f868a5ea0071ba19173171ce2405b1acd16d
 if [ ! -f "$status_script" ]; then
   status_script="$work/esp32-printer-status-mac.js"
   /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
-    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/94e1dbd528538b48a8064a6cea72c20f8ab4aa3e/installers/esp32-printer-status-mac.js -o "$status_script"
+    https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/bfd20543f79533818f081c42b52535bbba0446e1/installers/esp32-printer-status-mac.js -o "$status_script"
 fi
 [ "$(/usr/bin/shasum -a 256 "$status_script" | /usr/bin/cut -d' ' -f1)" = "$status_sha" ] || { echo 'Status monitor checksum mismatch.' >&2; exit 1; }
 /usr/bin/install -m 644 "$status_script" "$target_dir/status-mac.js"

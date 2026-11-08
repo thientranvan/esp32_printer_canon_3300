@@ -791,7 +791,7 @@ if (Test-Path -LiteralPath $CloudConfig) {
  if (Test-Path "$root\cloud-job.txt") {throw 'Unresolved cloud job; configuration was not changed'}
  [IO.File]::WriteAllText((Join-Path $root 'cloud.json'),($cloud | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
 }
-Add-Type -TypeDefinition $sourceCode -ReferencedAssemblies System.dll,System.Core.dll,System.Runtime.Serialization.dll -OutputAssembly $staged -OutputType ConsoleApplication
+Add-Type -TypeDefinition $sourceCode -ReferencedAssemblies System.dll,System.Core.dll,System.Xml.dll,System.Runtime.Serialization.dll -OutputAssembly $staged -OutputType ConsoleApplication
 & $staged --self-test
 if ($LASTEXITCODE -ne 0) { throw 'Bridge self-test failed. Existing bridge was not stopped.' }
 Add-Type @'

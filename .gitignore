@@ -13,3 +13,7 @@ credential.rtf
 
 # Public OTA image only; build_firmware_release.py excludes private credentials.
 !firmware/station.bin
+
+# Per-client cloud credentials exported by server.
+*.cloud.json
+cloud.json
