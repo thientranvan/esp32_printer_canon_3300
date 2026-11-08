@@ -18,7 +18,17 @@ Xác thực bằng bearer của chính ESP, qua HTTPS. Body JSON tối đa 512 b
 {"schema":1,"ticket":"<32..128 base64url characters>"}
 ```
 
-Ticket ngẫu nhiên ít nhất 256 bit, TTL 60 giây, ràng buộc station_id/client_id/challenge; lưu hash ticket. Không log body/ticket/bearer. Giới hạn tần suất và số client theo trạm; 403 nếu chính sách không cho tự đăng ký. Trạm được phép tin cậy máy tính cài trong LAN; cần ánh xạ rõ sang tài khoản dịch vụ/chủ trạm đang hoạt động. Không tự gán tài khoản quản trị. Cấu hình chính sách một lần phía server, không yêu cầu người dùng tải JSON cho từng máy.
+### Chính sách chốt theo yêu cầu người dùng
+
+Tự đăng ký bật mặc định cho các trạm ESP đã được server xác thực. Không yêu cầu chọn tài khoản chủ trạm, đăng nhập web, bật công tắc hoặc tải cấu hình. Cài bộ cài trong LAN của ESP là đủ để nhận quyền in LAN và cloud fallback.
+
+Client dùng principal loại `station_client`, quyền gắn trực tiếp station_id/client_id; user_id có thể null. Không cần tạo tài khoản người dùng giả hoặc gán admin. Các API submit/status/receipt kiểm tra client còn hiệu lực và trạm tương ứng, không bắt buộc có tài khoản chủ trạm. Nếu schema cũ bắt buộc user_id, dev cần migration để hỗ trợ principal này.
+
+Áp dụng cho cả ba trạm hiện có và trạm thêm sau này. Migration chuyển trạng thái chưa cấu hình/mặc định tắt sang tự đăng ký; giữ nguyên danh sách client đã thu hồi và trạng thái trạm bị quản trị viên vô hiệu hóa. Giao diện không còn bước “chọn tài khoản rồi bật tự đăng ký” trong quy trình cài. Quản trị vẫn có thể xem/thu hồi từng client hoặc khóa trạm.
+
+Lần cài đầu vẫn cần tiếp cận ESP qua LAN để xác định đúng trạm và nhận ticket. Sau khi đăng ký, máy có thể in qua server từ mạng khác. Chỉ có file cài không mang sẵn quyền in Internet tới mọi trạm; không nhúng khóa dùng chung vào bộ cài. Không thay đổi request/response, firmware hoặc định dạng token.
+
+Ticket ngẫu nhiên ít nhất 256 bit, TTL 60 giây, ràng buộc station_id/client_id/challenge; lưu hash ticket. Không log body/ticket/bearer. Giới hạn tần suất chống quá tải; không yêu cầu phê duyệt từng client. Trạm tin cậy máy tính đăng ký qua LAN. Trả 403 nếu trạm bị vô hiệu hóa hoặc client đã bị thu hồi, không trả 403 chỉ vì thiếu tài khoản chủ trạm.
 
 ### POST /api/print/v1/client/enroll
 
@@ -28,7 +38,7 @@ Chỉ HTTPS, không cần bearer cũ. Body:
 {"schema":1,"station_id":"esp32-1051db786a34","client_id":"<32 hex>","ticket":"<ticket>","verifier":"<64 lowercase hex>"}
 ```
 
-Kiểm tra `SHA256(ASCII(verifier)) == challenge` đã lưu với ticket; so sánh thời gian hằng. Kiểm tra TTL, policy và quyền hiện hành. Trả 200/201:
+Kiểm tra `SHA256(ASCII(verifier)) == challenge` đã lưu với ticket; so sánh thời gian hằng. Kiểm tra TTL, trạm và client còn hiệu lực theo principal station_client. Trả 200/201:
 
 ```json
 {"schema":1,"station_id":"esp32-1051db786a34","client_id":"<32 hex>","token":"<32..256 base64url characters>"}
@@ -48,7 +58,7 @@ Chỉ fallback khi chưa kết nối TCP LAN và chưa gửi dữ liệu. Đã c
 
 ## Nghiệm thu server
 
-1. Cài trên máy mới trong LAN, không tải JSON: chỉ sinh một client, credential không xuất hiện trong log.
+1. Trạm không gán tài khoản chủ; cài trên máy mới trong LAN, không đăng nhập/bật công tắc/tải JSON: chỉ sinh một client, credential không xuất hiện trong log.
 2. Cài lại: giữ client_id, không sinh client/printer trùng. Mất phản hồi redeem rồi retry vẫn thành công.
 3. Ticket bị chặn trên LAN không đổi được token nếu thiếu verifier. Sai trạm/challenge/verifier, ticket hết hạn và client bị thu hồi phải bị từ chối.
 4. Chặn kết nối LAN của đúng client, in một trang: file ESPJOB1 đi qua client API, renderer server không chạy, ESP in và tự báo tiến trình.
