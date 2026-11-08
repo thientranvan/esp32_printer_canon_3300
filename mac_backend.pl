@@ -17,6 +17,43 @@ my $pending = "$cache/pending.txt";
 # Cloud token is a client-scoped credential exported by server, never ESP token.
 # ponytail: fallback only before LAN connect; cross-route recovery needs confirmed server/ESP admission.
 my $stationId;
+sub enrollment_request {
+    my ($url,$body,$lan)=@_;require File::Temp;require JSON::PP;
+    my ($f,$path)=File::Temp::tempfile('esp-enroll-XXXX',TMPDIR=>1,UNLINK=>1);chmod(0600,$path);
+    print $f JSON::PP::encode_json($body);close($f);
+    my @args=('/usr/bin/curl','--silent','--fail','--connect-timeout','3','--max-time','20','--max-filesize','8192','--header','Content-Type: application/json','--data-binary',"\@$path");
+    push @args,$lan?('--noproxy','*','--header','X-ESP32-Enrollment: 1'):('--proto','=https');
+    open(my $c,'-|',@args,$url) or die "Enrollment unavailable\n";
+    my $raw='';while(length($raw)<=8192){my $n=read($c,my $part,4096);last unless $n;$raw.=$part;}
+    my $ok=close($c);unlink($path);die "Enrollment unavailable\n" unless $ok&&length($raw)<=8192;
+    my $r=eval{JSON::PP::decode_json($raw)};die "Invalid enrollment response\n" unless ref($r) eq 'HASH';return $r;
+}
+sub enroll {
+    my ($host,$id)=@_;require JSON::PP;require Digest::SHA;
+    die "Invalid enrollment destination\n" unless $host=~/\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/&&!grep{$_>255}split(/\./,$host);
+    die "Invalid station\n" unless $id=~/\Aesp32-[0-9a-f]{12}\z/;
+    die "Enrollment requires root\n" if $>;
+    $stationId=$id;$cache.="/$id";return if cloud_config();
+    die "Unresolved cloud job\n" if -e "$cache/cloud-job.json";
+    my $record="$cache/enrollment.json";my $e;
+    if(-e $record){open(my $f,'<',$record) or die "Cannot read enrollment\n";$e=eval{JSON::PP::decode_json(do{local $/;<$f>})};close($f);}
+    else{
+      open(my $random,'<','/dev/urandom') or die "No secure randomness\n";my $bytes='';read($random,$bytes,48)==48 or die "No secure randomness\n";close($random);
+      $e={client_id=>unpack('H*',substr($bytes,0,16)),verifier=>unpack('H*',substr($bytes,16))};
+      sysopen(my $f,$record,O_WRONLY|O_CREAT|O_EXCL,0600) or die "Cannot save enrollment\n";print $f JSON::PP::encode_json($e) or die "Cannot save enrollment\n";close($f) or die "Cannot save enrollment\n";
+    }
+    die "Invalid enrollment record\n" unless $e&&($e->{client_id}//'')=~/\A[0-9a-f]{32}\z/&&($e->{verifier}//'')=~/\A[0-9a-f]{64}\z/;
+    my $challenge=Digest::SHA::sha256_hex($e->{verifier});
+    my $body={schema=>1,client_id=>$e->{client_id},challenge=>$challenge,client_os=>($^O eq 'darwin'?'macos':'linux'),name=>'LAN computer'};
+    my $r;for(1..12){$r=enrollment_request("http://$host/setup/enroll",$body,1);last if $r->{ticket};sleep 1;}
+    die "Enrollment identity mismatch\n" unless ($r->{schema}//0)==1&&($r->{station_id}//'') eq $id&&($r->{client_id}//'') eq $e->{client_id}&&($r->{challenge}//'') eq $challenge&&($r->{ticket}//'')=~/\A[A-Za-z0-9_-]{32,128}\z/;
+    my $c=enrollment_request('https://quanly.lophocbinhminh.com/api/print/v1/client/enroll',{schema=>1,station_id=>$id,client_id=>$e->{client_id},ticket=>$r->{ticket},verifier=>$e->{verifier}},0);
+    die "Invalid cloud enrollment\n" unless ($c->{schema}//0)==1&&($c->{station_id}//'') eq $id&&($c->{client_id}//'') eq $e->{client_id}&&($c->{token}//'')=~/\A[A-Za-z0-9_-]{32,256}\z/;
+    sysopen(my $f,"$cache/cloud.json.new",O_WRONLY|O_CREAT|O_EXCL,0600) or die "Cannot save cloud credential\n";
+    print $f JSON::PP::encode_json({schema=>1,station_id=>$id,token=>$c->{token}}) or die "Cannot save cloud credential\n";close($f) or die "Cannot save cloud credential\n";
+    rename("$cache/cloud.json.new","$cache/cloud.json") or die "Cannot save cloud credential\n";
+    print "Cloud fallback enabled; rendering stays on this computer.\n";
+}
 sub cloud_config {
     my $path="$cache/cloud.json";return unless -e $path;
     require JSON::PP;open(my $f,'<',$path) or fail('Cannot read cloud configuration');
@@ -433,6 +470,7 @@ sub monitor {
     }
 }
 sub main {
+    if(@ARGV==3 && $ARGV[0] eq '--enroll'){enroll($ARGV[1],$ARGV[2]);return 0;}
     if(@ARGV>=3 && ($ARGV[0] eq '--monitor' || $ARGV[0] eq '--monitor-once')){
       monitor($ARGV[1],$ARGV[2],$ARGV[0] eq '--monitor-once');return 0;
     }

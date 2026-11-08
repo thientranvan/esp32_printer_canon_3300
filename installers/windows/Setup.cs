@@ -83,8 +83,7 @@ sealed class SetupWindow : Form {
     readonly ComboBox ip = new ComboBox(); readonly TextBox name = new TextBox();
     readonly Button read = new Button(); readonly Button install = new Button();
     readonly Label station = new Label(); readonly TextBox log = new TextBox();
-    StationProfile selected; bool busy; Icon ownedIcon; string cloudPath;
-    readonly Button cloud = new Button();
+    StationProfile selected; bool busy; Icon ownedIcon;
     public SetupWindow() {
         Text = "Cài máy in ESP32 — Canon LBP3300"; ClientSize = new Size(760, 490);
         MinimumSize = new Size(760, 480); StartPosition = FormStartPosition.CenterScreen;
@@ -106,11 +105,7 @@ sealed class SetupWindow : Form {
         layout.Controls.Add(station, 0, 3); layout.SetColumnSpan(station, 2);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill };
         read.Text = "Đọc trạm"; read.AutoSize = true; install.Text = "Cài đặt / Cập nhật"; install.AutoSize = true; install.Enabled = false;
-        cloud.Text="Cấu hình in qua web…";cloud.AutoSize=true;
-        cloud.Click += (s,e) => {using(var dialog=new OpenFileDialog {Filter="Cloud printer configuration (*.json)|*.json",CheckFileExists=true}){
-            if(dialog.ShowDialog(this)==DialogResult.OK){cloudPath=dialog.FileName;cloud.Text="Đã chọn cấu hình web";}
-        }};
-        actions.Controls.Add(read); actions.Controls.Add(install);actions.Controls.Add(cloud); layout.Controls.Add(actions, 0, 4); layout.SetColumnSpan(actions, 2);
+        actions.Controls.Add(read); actions.Controls.Add(install); layout.Controls.Add(actions, 0, 4); layout.SetColumnSpan(actions, 2);
         log.Multiline = true; log.ReadOnly = true; log.ScrollBars = ScrollBars.Vertical; log.Dock = DockStyle.Fill;
         layout.Controls.Add(log, 0, 5); layout.SetColumnSpan(log, 2);
         var note = new Label { Text = "Driver Canon tự tải nếu thiếu. Cài lại theo ID, không tạo máy trùng.", AutoSize = true, Dock = DockStyle.Fill };
@@ -121,7 +116,7 @@ sealed class SetupWindow : Form {
         Shown += async (s, e) => await LoadStation();
         FormClosing += (s, e) => { if (busy) { e.Cancel = true; MessageBox.Show(this, "Đang xử lý. Chờ hoàn tất để tránh ngắt cài đặt.", Text); } };
     }
-    void SetBusy(bool value) { busy = value; cloud.Enabled = !value; read.Enabled = ip.Enabled = name.Enabled = !value; install.Enabled = !value && selected != null; }
+    void SetBusy(bool value) { busy = value; read.Enabled = ip.Enabled = name.Enabled = !value; install.Enabled = !value && selected != null; }
     void Append(string value) { if (value != null && !IsDisposed) BeginInvoke((Action)(() => { log.AppendText(value + Environment.NewLine); })); }
     async Task LoadStation() {
         string host = ip.Text.Trim(); SetBusy(true); selected = null;
@@ -139,10 +134,7 @@ sealed class SetupWindow : Form {
             folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ESP32PrinterSetup-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(folder, security);
             using (var input = Assembly.GetExecutingAssembly().GetManifestResourceStream("setup.ps1")) using (var output = File.Create(Path.Combine(folder, "setup.ps1"))) input.CopyTo(output);
-            if(cloudPath!=null){
-                byte[] config=File.ReadAllBytes(cloudPath);if(config.Length>4096)throw new Exception("Cấu hình web quá lớn.");
-                File.WriteAllBytes(Path.Combine(folder,selected.id+".cloud.json"),config);
-            }
+
             File.WriteAllText(Path.Combine(folder, "runner.ps1"), Program.Runner(host, printerName), new UTF8Encoding(true));
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + Path.Combine(folder, "runner.ps1") + "\"") {

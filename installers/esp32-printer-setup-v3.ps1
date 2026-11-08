@@ -791,6 +791,37 @@ if (Test-Path -LiteralPath $CloudConfig) {
  if (Test-Path "$root\cloud-job.txt") {throw 'Unresolved cloud job; configuration was not changed'}
  [IO.File]::WriteAllText((Join-Path $root 'cloud.json'),($cloud | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
 }
+# Automatic trusted-LAN enrollment. Verifier and cloud token never cross LAN.
+if (!(Test-Path "$root\cloud.json")) {
+ try {
+  if (Test-Path "$root\cloud-job.txt") {throw 'Unresolved cloud job'}
+  $record=Join-Path $root 'enrollment.json'
+  if (Test-Path $record) {$enrollment=Get-Content -Raw $record | ConvertFrom-Json} else {
+   $random=New-Object byte[] 48
+   $rng=[Security.Cryptography.RandomNumberGenerator]::Create()
+   try {$rng.GetBytes($random)} finally {$rng.Dispose()}
+   $hex=([BitConverter]::ToString($random)).Replace('-','').ToLowerInvariant()
+   $enrollment=@{client_id=$hex.Substring(0,32);verifier=$hex.Substring(32)}
+   [IO.File]::WriteAllText($record,($enrollment | ConvertTo-Json -Compress))
+  }
+  if ($enrollment.client_id -cnotmatch '\A[0-9a-f]{32}\z' -or $enrollment.verifier -cnotmatch '\A[0-9a-f]{64}\z') {throw 'Invalid enrollment record'}
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try {$challenge=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($enrollment.verifier)))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
+  $request=@{schema=1;client_id=$enrollment.client_id;challenge=$challenge;client_os='windows';name='Windows computer'} | ConvertTo-Json -Compress
+  $reply=$null
+  for ($attempt=0;$attempt -lt 12;$attempt++) {
+   $reply=Invoke-RestMethod -Method Post -Uri "http://$StationIP/setup/enroll" -Headers @{'X-ESP32-Enrollment'='1'} -ContentType 'application/json' -Body $request -TimeoutSec 20
+   if ($reply.ticket) {break};Start-Sleep -Seconds 1
+  }
+  if ($reply.schema -ne 1 -or $reply.station_id -cne $stationId -or $reply.client_id -cne $enrollment.client_id -or $reply.challenge -cne $challenge -or $reply.ticket -cnotmatch '\A[A-Za-z0-9_-]{32,128}\z') {throw 'Enrollment identity mismatch'}
+  $redeem=@{schema=1;station_id=$stationId;client_id=$enrollment.client_id;ticket=$reply.ticket;verifier=$enrollment.verifier} | ConvertTo-Json -Compress
+  [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  $config=Invoke-RestMethod -Method Post -Uri 'https://quanly.lophocbinhminh.com/api/print/v1/client/enroll' -ContentType 'application/json' -Body $redeem -TimeoutSec 20
+  if ($config.schema -ne 1 -or $config.station_id -cne $stationId -or $config.client_id -cne $enrollment.client_id -or $config.token -cnotmatch '\A[A-Za-z0-9_-]{32,256}\z') {throw 'Invalid cloud enrollment'}
+  [IO.File]::WriteAllText((Join-Path $root 'cloud.json'),(@{schema=1;station_id=$stationId;token=$config.token} | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+  Write-Host 'Cloud fallback enabled. Rendering stays on this computer.'
+ } catch {Write-Warning 'LAN installation continues. Cloud enrollment unavailable; rerun installer after station/server update.'}
+}
 Add-Type -TypeDefinition $sourceCode -ReferencedAssemblies System.dll,System.Core.dll,System.Xml.dll,System.Runtime.Serialization.dll -OutputAssembly $staged -OutputType ConsoleApplication
 & $staged --self-test
 if ($LASTEXITCODE -ne 0) { throw 'Bridge self-test failed. Existing bridge was not stopped.' }

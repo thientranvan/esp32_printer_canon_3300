@@ -113,7 +113,7 @@ static int cloudPost(const String &path,const String &body,String &response,cons
     if(status==200||status==204)cloudView.heartbeatFailures=0;
     else {++cloudView.heartbeatFailures;snprintf(cloudView.heartbeatDiagnostic,sizeof(cloudView.heartbeatDiagnostic),"HTTP=%d %.174s",status,detail.c_str());}
   }
-  else {cloudView.http=status;if(path=="/jobs/claim")cloudView.claimHttp=status;else cloudView.eventHttp=status;}
+  else if(path!="/clients/enroll"){cloudView.http=status;if(path=="/jobs/claim")cloudView.claimHttp=status;else cloudView.eventHttp=status;}
   portEXIT_CRITICAL(&cloudLock);
   return status;
 }

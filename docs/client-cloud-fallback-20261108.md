@@ -172,3 +172,10 @@ lại sang LAN. Không triển khai remote claim từ PC, không yêu cầu PC k
 8. Xác nhận bộ cài Windows EXE/PS1, Mac, Ubuntu trên thiết bị thật trước nghiệm thu
    toàn tuyến. Test hiện tại chỉ production-code fake transport/serialization,
    C++ Prepared::parse, Mono bridge self-test; chưa thay thế ca in vật lý.
+
+## Cài đặt tự động
+
+Bộ cài mới tự đăng ký qua ESP trong LAN, không yêu cầu tải/import JSON.
+Contract bổ sung: [automatic-client-enrollment-20261108.md](automatic-client-enrollment-20261108.md).
+Cần triển khai hai API enrollment phía server trước khi nghiệm thu máy cài mới.
+Nếu chưa có API, cài LAN vẫn thành công; chạy lại bộ cài sau khi server sẵn sàng.

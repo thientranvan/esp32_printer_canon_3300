@@ -86,13 +86,14 @@ bool validNetwork(const String &ipText, const String &gatewayText, const String 
     (a&m)==(g&m) && (a&host) && (a&host)!=host && (g&host) && (g&host)!=host && a != g;
 }
 String profileJSON() {
-  return "{\"schema\":1,\"lan_metadata_version\":1,\"lan_recovery_version\":1,\"model\":\"LBP3300\",\"id\":" + jsonString(stationID) +
+  return "{\"schema\":1,\"client_enrollment_version\":1,\"lan_metadata_version\":1,\"lan_recovery_version\":1,\"model\":\"LBP3300\",\"id\":" + jsonString(stationID) +
     ",\"name\":" + jsonString(stationName) + ",\"ap_ssid\":"+jsonString(stationAP)+",\"ip\":" + jsonString(WiFi.localIP().toString()) + "}";
 }
 
 static String firmwareJSON();
 #include "cloud_print.h"
 #include "firmware_update.h"
+#include "client_enrollment.h"
 #include "realtime.h"
 #include "status_led.h"
 
@@ -454,6 +455,8 @@ void setup() {
   MDNS.addServiceTxt("pdl-datastream", "tcp", "ty", "Canon LBP3300 CAPT");
   startCaptTCP();
   server.on("/", HTTP_GET, home);
+  const char *enrollHeaders[]={"Origin","X-ESP32-Enrollment"};server.collectHeaders(enrollHeaders,2);
+  server.on("/setup/enroll",HTTP_POST,enrollClient);
   server.on("/setup/profile.json", HTTP_GET, [] {
     uint32_t mask=uint32_t(WiFi.subnetMask());
     if (WiFi.status()!=WL_CONNECTED || (uint32_t(server.client().remoteIP())&mask)!=(uint32_t(WiFi.localIP())&mask)) {
