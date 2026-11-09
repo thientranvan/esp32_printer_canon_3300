@@ -61,6 +61,9 @@ static class Program {
             "'))) -PrinterName ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encode(name) +
             "')))\r\nexit 0\r\n} catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }\r\n";
     }
+    internal static string RunnerAll() {
+        return "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\r\n$ErrorActionPreference='Stop'\r\ntry { & (Join-Path $PSScriptRoot 'setup.ps1') -AllStations; exit 0 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\r\n";
+    }
     [STAThread] static int Main(string[] args) {
         if (args.Length == 1 && args[0] == "--self-test") {
             if (!ValidIP("192.168.1.200") || ValidIP("127.1") || ValidIP("256.1.1.1") || ValidIP("192.168.1.2;whoami") ||
@@ -80,54 +83,25 @@ static class Program {
     }
 }
 sealed class SetupWindow : Form {
-    readonly ComboBox ip = new ComboBox(); readonly TextBox name = new TextBox();
-    readonly Button read = new Button(); readonly Button install = new Button();
-    readonly Label station = new Label(); readonly TextBox log = new TextBox();
-    StationProfile selected; bool busy; Icon ownedIcon;
-    public SetupWindow() {
-        Text = "Cài máy in ESP32 — Canon LBP3300"; ClientSize = new Size(760, 490);
-        MinimumSize = new Size(760, 480); StartPosition = FormStartPosition.CenterScreen;
-        Font = new Font("Segoe UI", 10); AutoScaleMode = AutoScaleMode.Dpi;
-        ownedIcon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location); Icon = ownedIcon;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 2, RowCount = 7 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); Controls.Add(layout);
-        var heading = new Label { Text = "Chọn trạm trong LAN, đặt tên rồi bấm Cài đặt.", AutoSize = true, Dock = DockStyle.Fill };
-        layout.Controls.Add(heading, 0, 0); layout.SetColumnSpan(heading, 2);
-        layout.Controls.Add(new Label { Text = "IP trạm in", AutoSize = true }, 0, 1);
-        ip.Items.AddRange(new object[] { "192.168.1.199", "192.168.1.200", "192.168.1.201" }); ip.Dock = DockStyle.Fill; ip.Text = "192.168.1.199";
-        layout.Controls.Add(ip, 1, 1); layout.Controls.Add(new Label { Text = "Tên máy in", AutoSize = true }, 0, 2);
-        name.Dock = DockStyle.Fill; name.MaxLength = 64; layout.Controls.Add(name, 1, 2);
-        station.Dock = DockStyle.Fill; station.Text = "Bấm Đọc trạm để nhận đúng tên và ID."; station.AutoEllipsis = true;
-        layout.Controls.Add(station, 0, 3); layout.SetColumnSpan(station, 2);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        read.Text = "Đọc trạm"; read.AutoSize = true; install.Text = "Cài đặt / Cập nhật"; install.AutoSize = true; install.Enabled = false;
-        actions.Controls.Add(read); actions.Controls.Add(install); layout.Controls.Add(actions, 0, 4); layout.SetColumnSpan(actions, 2);
-        log.Multiline = true; log.ReadOnly = true; log.ScrollBars = ScrollBars.Vertical; log.Dock = DockStyle.Fill;
-        layout.Controls.Add(log, 0, 5); layout.SetColumnSpan(log, 2);
-        var note = new Label { Text = "Driver Canon tự tải nếu thiếu. Cài lại theo ID, không tạo máy trùng.", AutoSize = true, Dock = DockStyle.Fill };
-        layout.Controls.Add(note, 0, 6); layout.SetColumnSpan(note, 2);
-        ip.TextChanged += (s, e) => { selected = null; install.Enabled = false; station.Text = "Bấm Đọc trạm để kiểm tra IP vừa chọn."; };
-        read.Click += async (s, e) => await LoadStation();
-        install.Click += async (s, e) => await Install();
-        Shown += async (s, e) => await LoadStation();
-        FormClosing += (s, e) => { if (busy) { e.Cancel = true; MessageBox.Show(this, "Đang xử lý. Chờ hoàn tất để tránh ngắt cài đặt.", Text); } };
+    readonly Button install=new Button(); readonly TextBox log=new TextBox(); bool busy; Icon ownedIcon;
+    public SetupWindow(){
+        Text="Cài Máy 1 · Máy 2 · Máy 3";ClientSize=new Size(720,430);MinimumSize=new Size(600,360);
+        StartPosition=FormStartPosition.CenterScreen;Font=new Font("Segoe UI",10);AutoScaleMode=AutoScaleMode.Dpi;
+        ownedIcon=Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);Icon=ownedIcon;
+        var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18),ColumnCount=1,RowCount=4};
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,58));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute,46));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));Controls.Add(layout);
+        layout.Controls.Add(new Label{Text="Một lần cài, đủ ba máy in",AutoSize=true,Font=new Font(Font,FontStyle.Bold)},0,0);
+        layout.Controls.Add(new Label{Text="Máy 1 · Máy 2 · Máy 3\nKhông cần cùng LAN. Driver tự cài nếu thiếu; server chuyển bản in đã render.",AutoSize=true},0,1);
+        install.Text="Cài đặt / Cập nhật cả 3 máy";install.AutoSize=true;layout.Controls.Add(install,0,2);
+        log.Multiline=true;log.ReadOnly=true;log.ScrollBars=ScrollBars.Vertical;log.Dock=DockStyle.Fill;layout.Controls.Add(log,0,3);
+        install.Click+=async(s,e)=>await Install();
+        FormClosing+=(s,e)=>{if(busy){e.Cancel=true;MessageBox.Show(this,"Chờ cài đặt hoàn tất.",Text);}};
     }
-    void SetBusy(bool value) { busy = value; read.Enabled = ip.Enabled = name.Enabled = !value; install.Enabled = !value && selected != null; }
-    void Append(string value) { if (value != null && !IsDisposed) BeginInvoke((Action)(() => { log.AppendText(value + Environment.NewLine); })); }
-    async Task LoadStation() {
-        string host = ip.Text.Trim(); SetBusy(true); selected = null;
-        try { selected = await Task.Run(() => Program.ReadProfile(host)); name.Text = selected.name; station.Text = selected.name + " · " + selected.id + " · " + host; }
-        catch (Exception error) { station.Text = "Không đọc được trạm. Kiểm tra IP, nguồn ESP và mạng LAN."; MessageBox.Show(this, error.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-        finally { SetBusy(false); }
-    }
-    async Task Install() {
-        if (selected == null || selected.ip != ip.Text.Trim() || !Program.ValidName(name.Text.Trim())) { MessageBox.Show(this, "Kiểm tra IP và tên máy in.", Text); return; }
-        string host = selected.ip, printerName = name.Text.Trim(), folder = null; SetBusy(true); log.Clear();
-        try {
+    void Append(string value){if(value!=null&&!IsDisposed)BeginInvoke((Action)(()=>log.AppendText(value+Environment.NewLine)));}
+    async Task Install(){
+        string folder=null;busy=true;install.Enabled=false;log.Clear();
+        try{
             var security = new DirectorySecurity(); security.SetAccessRuleProtection(true, false);
             foreach (var sid in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
                 security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid, null), FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
@@ -135,7 +109,7 @@ sealed class SetupWindow : Form {
             Directory.CreateDirectory(folder, security);
             using (var input = Assembly.GetExecutingAssembly().GetManifestResourceStream("setup.ps1")) using (var output = File.Create(Path.Combine(folder, "setup.ps1"))) input.CopyTo(output);
 
-            File.WriteAllText(Path.Combine(folder, "runner.ps1"), Program.Runner(host, printerName), new UTF8Encoding(true));
+            File.WriteAllText(Path.Combine(folder, "runner.ps1"), Program.RunnerAll(), new UTF8Encoding(true));
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + Path.Combine(folder, "runner.ps1") + "\"") {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
@@ -147,14 +121,10 @@ sealed class SetupWindow : Form {
                     process.Start(); process.BeginOutputReadLine(); process.BeginErrorReadLine(); process.WaitForExit(); return process.ExitCode;
                 }
             });
-            if (code != 0) throw new Exception("Cài đặt chưa hoàn tất. Xem lỗi trong khung phía trên; không tự gửi lại lệnh in.");
-            station.Text = "Đã cài / cập nhật: " + printerName + " · " + host;
-            MessageBox.Show(this, "Đã cài máy in. Mở ứng dụng và chọn “" + printerName + "”.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        } catch (Exception error) { Append(error.Message); MessageBox.Show(this, error.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
-        finally {
-            if (folder != null) try { Directory.Delete(folder, true); } catch (IOException) { Append("File tạm còn tại " + folder); }
-            SetBusy(false);
-        }
+            if(code!=0)throw new Exception("Chưa cài đủ ba máy. Xem thông báo và chạy lại; không tự gửi lại lệnh in.");
+            MessageBox.Show(this,"Đã cài Máy 1, Máy 2, Máy 3. Chọn máy trong Word/PDF để in.",Text);
+        }catch(Exception error){Append(error.Message);MessageBox.Show(this,error.Message,Text,MessageBoxButtons.OK,MessageBoxIcon.Error);}
+        finally{if(folder!=null)try{Directory.Delete(folder,true);}catch(IOException){}busy=false;install.Enabled=true;}
     }
-    protected override void Dispose(bool disposing) { if (disposing && ownedIcon != null) ownedIcon.Dispose(); base.Dispose(disposing); }
+    protected override void Dispose(bool disposing){if(disposing&&ownedIcon!=null)ownedIcon.Dispose();base.Dispose(disposing);}
 }

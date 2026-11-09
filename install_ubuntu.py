@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install Ubuntu 22.04/24.04 CUPS printer. sudo python3 install_ubuntu.py IP [NAME]"""
+"""Install all three Ubuntu 22.04/24.04 CUPS printers. sudo python3 install_ubuntu.py"""
 import argparse
 import hashlib
 import ipaddress
@@ -10,12 +10,13 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 
 BASE='https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/'
 # Filled with exact source digests; mismatches stop before installing code.
-ASSETS = {'ubuntu/filter.py': '5cdbf223b3be3b9cb41258a84f6ff5a67ad5a50d277f296a37e1f6cd3dffd02e', 'ubuntu/esp32-lbp3300.ppd': '518f8341cd55f3228e2f1908a3727bb38a4c2d1497e29fb2d07652538895092d', 'mac_backend.pl': '378a1a26ceaa0d163d6450839fa2d2dabb45422b921bc439aba94aacc5d1d782', 'server-renderer/render.py': '7ee565a3bb81ceaedf3e18481dff18b1a544f056be7a56f77d913f9b62403bd9', 'server-renderer/build.sh': 'c3881a5d89ad271ab66217ec2563cd101cefc364c3d2b859db1f380315eb7c36', 'server-renderer/compress.c': 'd67bf57f7c133c73d74767d9a4dc54563a67c3daf1ba8c9f5082e8c30b9f2ecf', 'server-renderer/check.py': '665b0b30830db487f2412f8313c84ef1f13460a707794fca332c555ab19b3eba'}  # ASSET_MANIFEST
+ASSETS = {'ubuntu/filter.py': '5cdbf223b3be3b9cb41258a84f6ff5a67ad5a50d277f296a37e1f6cd3dffd02e', 'ubuntu/esp32-lbp3300.ppd': '518f8341cd55f3228e2f1908a3727bb38a4c2d1497e29fb2d07652538895092d', 'mac_backend.pl': 'f4fd0dee3940e390d84d380c3564644180ef04f4c0e6f3b5ee9e56808a9ff4ef', 'server-renderer/render.py': '7ee565a3bb81ceaedf3e18481dff18b1a544f056be7a56f77d913f9b62403bd9', 'server-renderer/build.sh': 'c3881a5d89ad271ab66217ec2563cd101cefc364c3d2b859db1f380315eb7c36', 'server-renderer/compress.c': 'd67bf57f7c133c73d74767d9a4dc54563a67c3daf1ba8c9f5082e8c30b9f2ecf', 'server-renderer/check.py': '665b0b30830db487f2412f8313c84ef1f13460a707794fca332c555ab19b3eba'}  # ASSET_MANIFEST
 TARGET=Path('/usr/lib/cups/filter/esp32printer')
 
 
@@ -62,12 +63,23 @@ def linux_backend(source):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cloud-config',type=Path);parser.add_argument('ip');parser.add_argument('name',nargs='?');args=parser.parse_args()
-    if os.geteuid()!=0:raise ValueError('Run with sudo python3 install_ubuntu.py IP [NAME]')
+    parser.add_argument('--cloud-config',type=Path);parser.add_argument('--all',action='store_true');parser.add_argument('--single',action='store_true');parser.add_argument('--remote-id');parser.add_argument('ip',nargs='?');parser.add_argument('name',nargs='?');args=parser.parse_args()
+    if os.geteuid()!=0:raise ValueError('Run with sudo python3 install_ubuntu.py')
+    stations={'esp32-98c377a136b0':('192.168.1.199','Máy 1'),'esp32-1051db78a8fc':('192.168.1.200','Máy 2'),'esp32-1051db786a34':('192.168.1.201','Máy 3')}
+    if args.all or (not args.single and not args.remote_id):
+        failures=[]
+        for station,(host,name) in stations.items():
+            if subprocess.run([sys.executable,str(Path(__file__).resolve()),'--remote-id',station,host,name]).returncode:failures.append(name)
+        if failures:raise ValueError('Installation incomplete: '+', '.join(failures))
+        return
     release=dict(line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
     if release.get('ID','').strip('"')!='ubuntu' or release.get('VERSION_ID','').strip('"') not in ('22.04','24.04'):
         raise ValueError('Supported: Ubuntu 22.04 / 24.04 desktop, CUPS 2.x')
-    host,p=profile(args.ip);name=args.name or p['name']
+    if args.remote_id:
+        if args.remote_id not in stations or args.ip!=stations[args.remote_id][0]:raise ValueError('Unknown remote station')
+        host=args.ip;p={'id':args.remote_id,'name':stations[args.remote_id][1]}
+    else:host,p=profile(args.ip)
+    name=args.name or p['name']
     if args.name is None and os.isatty(0):name=input('Printer name ['+name+']: ').strip() or name
     if not valid_name(name):raise ValueError('Invalid printer name')
     station=p['id'];queue='ESP32_'+station.replace('-','');uri=f'esp32capt://{host}:9100/{station}'
@@ -125,7 +137,9 @@ def main():
             fd=os.open(cache/'cloud.json',os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
             with os.fdopen(fd,'w') as f:json.dump(c,f)
             (cache/'cloud.json').chmod(0o600)
-        if subprocess.run(['perl',str(TARGET/'backend.pl'),'--enroll',host,station]).returncode:
+        enrollment=subprocess.run(['perl',str(TARGET/'backend.pl'),'--enroll-cloud' if args.remote_id else '--enroll',host,station])
+        if args.remote_id and enrollment.returncode:raise ValueError('Remote enrollment failed; rerun installer after server update')
+        if enrollment.returncode:
             print('LAN installed. Cloud enrollment unavailable; rerun installer after station/server update.')
         run('cupstestppd','-q',str(TARGET/'printer.ppd'))
         run('systemctl','enable','--now','cups')

@@ -29,7 +29,7 @@ sub enrollment_request {
     my $r=eval{JSON::PP::decode_json($raw)};die "Invalid enrollment response\n" unless ref($r) eq 'HASH';return $r;
 }
 sub enroll {
-    my ($host,$id)=@_;require JSON::PP;require Digest::SHA;
+    my ($host,$id,$remote)=@_;require JSON::PP;require Digest::SHA;
     die "Invalid enrollment destination\n" unless $host=~/\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/&&!grep{$_>255}split(/\./,$host);
     die "Invalid station\n" unless $id=~/\Aesp32-[0-9a-f]{12}\z/;
     die "Enrollment requires root\n" if $>;
@@ -43,11 +43,17 @@ sub enroll {
       sysopen(my $f,$record,O_WRONLY|O_CREAT|O_EXCL,0600) or die "Cannot save enrollment\n";print $f JSON::PP::encode_json($e) or die "Cannot save enrollment\n";close($f) or die "Cannot save enrollment\n";
     }
     die "Invalid enrollment record\n" unless $e&&($e->{client_id}//'')=~/\A[0-9a-f]{32}\z/&&($e->{verifier}//'')=~/\A[0-9a-f]{64}\z/;
+    my $c;
+    if($remote){
+      $c=enrollment_request('https://quanly.lophocbinhminh.com/api/print/v1/client/install/enroll',
+        {schema=>1,station_id=>$id,client_id=>$e->{client_id},verifier=>$e->{verifier},client_os=>($^O eq 'darwin'?'macos':'linux'),name=>'Printer computer'},0);
+    }else{
     my $challenge=Digest::SHA::sha256_hex($e->{verifier});
     my $body={schema=>1,client_id=>$e->{client_id},challenge=>$challenge,client_os=>($^O eq 'darwin'?'macos':'linux'),name=>'LAN computer'};
     my $r;for(1..12){$r=enrollment_request("http://$host/setup/enroll",$body,1);last if $r->{ticket};sleep 1;}
     die "Enrollment identity mismatch\n" unless ($r->{schema}//0)==1&&($r->{station_id}//'') eq $id&&($r->{client_id}//'') eq $e->{client_id}&&($r->{challenge}//'') eq $challenge&&($r->{ticket}//'')=~/\A[A-Za-z0-9_-]{32,128}\z/;
-    my $c=enrollment_request('https://quanly.lophocbinhminh.com/api/print/v1/client/enroll',{schema=>1,station_id=>$id,client_id=>$e->{client_id},ticket=>$r->{ticket},verifier=>$e->{verifier}},0);
+    $c=enrollment_request('https://quanly.lophocbinhminh.com/api/print/v1/client/enroll',{schema=>1,station_id=>$id,client_id=>$e->{client_id},ticket=>$r->{ticket},verifier=>$e->{verifier}},0);
+    }
     die "Invalid cloud enrollment\n" unless ($c->{schema}//0)==1&&($c->{station_id}//'') eq $id&&($c->{client_id}//'') eq $e->{client_id}&&($c->{token}//'')=~/\A[A-Za-z0-9_-]{32,256}\z/;
     sysopen(my $f,"$cache/cloud.json.new",O_WRONLY|O_CREAT|O_EXCL,0600) or die "Cannot save cloud credential\n";
     print $f JSON::PP::encode_json({schema=>1,station_id=>$id,token=>$c->{token}}) or die "Cannot save cloud credential\n";close($f) or die "Cannot save cloud credential\n";
@@ -394,6 +400,15 @@ sub print_pages {
         $socket->autoflush(1);
     }
 }
+sub lan_profile {
+    my ($host)=@_;
+        require JSON::PP;
+        open(my $info,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2','--max-filesize','4096',"http://$host/setup/profile.json") or die 'profile';
+        my $body='';while(length($body)<=4096){my $n=read($info,my $part,1024);last unless $n;$body.=$part;}close($info) or die 'profile';
+        my $profile=JSON::PP->new->max_size(4096)->decode($body);
+        die 'Wrong LAN station' unless ($profile->{schema}//0)==1 && ($profile->{model}//'') eq 'LBP3300' && (!$stationId || ($profile->{id}//'') eq $stationId);
+        return $profile;
+}
 # Native CUPS monitor: no USB ownership, no print submission, no queue resume.
 sub monitor {
     my ($host,$queue,$once)=@_;
@@ -407,6 +422,7 @@ sub monitor {
     while(1){
       my @reasons;my $message='ESP disconnected';my $state;
       eval {
+        lan_profile($host);
         open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','2','--max-time','3',"http://$host/printer/status") or die 'curl';
         my $json='';while(length($json)<=65536){my $n=read($curl,my $part,4096);last unless $n;$json.=$part;}close($curl);
         $state=JSON::PP->new->max_size(65536)->max_depth(16)->decode($json);
@@ -470,7 +486,7 @@ sub monitor {
     }
 }
 sub main {
-    if(@ARGV==3 && $ARGV[0] eq '--enroll'){enroll($ARGV[1],$ARGV[2]);return 0;}
+    if(@ARGV==3 && ($ARGV[0] eq '--enroll'||$ARGV[0] eq '--enroll-cloud')){enroll($ARGV[1],$ARGV[2],$ARGV[0] eq '--enroll-cloud');return 0;}
     if(@ARGV>=3 && ($ARGV[0] eq '--monitor' || $ARGV[0] eq '--monitor-once')){
       monitor($ARGV[1],$ARGV[2],$ARGV[0] eq '--monitor-once');return 0;
     }
@@ -505,12 +521,9 @@ sub main {
     if ($id) { $stationId=$id; $cache .= "/$id"; $pending = "$cache/pending.txt"; }
     fail('Invalid device URI') unless $host;
     $stationHost=$host;$stationPort=$port||9100;
-    eval {
-        require JSON::PP;
-        open(my $info,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2','--max-filesize','4096',"http://$host/setup/profile.json") or die 'profile';
-        my $body='';while(length($body)<=4096){my $n=read($info,my $part,1024);last unless $n;$body.=$part;}close($info) or die 'profile';
-        my $profile=JSON::PP->new->max_size(4096)->decode($body);$metadataSupported=($profile->{lan_metadata_version}//0)>=1;$recoverySupported=($profile->{lan_recovery_version}//0)>=1;
-    };
+    my $lanIdentity=0;
+    eval {my $profile=lan_profile($host);$lanIdentity=1;
+      $metadataSupported=($profile->{lan_metadata_version}//0)>=1;$recoverySupported=($profile->{lan_recovery_version}//0)>=1;};
     my $duplex = canon_duplex($ARGV[4]);
     fail('Select Canon Print Style / Binding Location for duplex') if !$duplex && $ARGV[4] =~ /two-sided|duplex=(?:duplex|tumble)/i;
     my $collate = $ARGV[4] !~ /(?:^|\s)Collate=False(?:\s|$)/i;
@@ -533,7 +546,7 @@ sub main {
         $cloud=cloud_config();fail('Cloud receipt exists but cloud is not configured') unless $cloud;
         cloud_print($cloud,\@pages,$ARGV[3],$cloudDuplex,$collate,$job);return;
     }
-    $socket = IO::Socket::INET->new(PeerAddr => $host, PeerPort => ($port || 9100), Proto => 'tcp', Timeout => 5);
+    $socket = IO::Socket::INET->new(PeerAddr => $host, PeerPort => ($port || 9100), Proto => 'tcp', Timeout => 5) if !$stationId||$lanIdentity;
     if(!$socket){
         $cloud=cloud_config();fail('Cannot connect to ESP; cloud fallback not configured') unless $cloud;
         cloud_print($cloud,\@pages,$ARGV[3],$cloudDuplex,$collate,$job);return;

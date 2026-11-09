@@ -1,7 +1,26 @@
 ﻿#requires -RunAsAdministrator
-param([string]$StationIP, [string]$PrinterName, [switch]$ResolvePending, [string]$CloudConfig)
+param([string]$StationIP, [string]$PrinterName, [switch]$ResolvePending, [string]$CloudConfig, [switch]$AllStations, [string]$RemoteStationID, [switch]$SingleStation)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
+$knownStations=@(
+ @{ip='192.168.1.199';id='esp32-98c377a136b0';name='Máy 1'},
+ @{ip='192.168.1.200';id='esp32-1051db78a8fc';name='Máy 2'},
+ @{ip='192.168.1.201';id='esp32-1051db786a34';name='Máy 3'}
+)
+if ($AllStations -or (!$RemoteStationID -and !$SingleStation)) {
+ $failed=@()
+ foreach ($station in $knownStations) {
+  try {
+   # Separate processes isolate Add-Type/native driver declarations for each station.
+   & (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -StationIP $station.ip -PrinterName $station.name -RemoteStationID $station.id
+   if ($LASTEXITCODE -ne 0) {throw 'Station installation failed'}
+  }
+  catch {$failed+=$station.name;Write-Warning ($station.name+': installation incomplete; existing jobs were retained.')}
+ }
+ if ($failed.Count) {throw ('Installation incomplete: '+($failed -join ', '))}
+ Write-Host 'Installed Máy 1, Máy 2, Máy 3. LAN preferred; cloud available from any network.'
+ return
+}
 function Move-BridgePendingToArchive([string]$Folder) {
  $archive=Join-Path $Folder ('Archived\'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
  $files=@(Get-ChildItem "$Folder\*.capt","$Folder\*.capt.progress" -File -ErrorAction SilentlyContinue)
@@ -22,7 +41,11 @@ if (!$StationIP) { $StationIP=Read-Host 'ESP IP (for example 192.168.1.199)' }
 $address=$null
 if ($StationIP -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}$' -or ![Net.IPAddress]::TryParse($StationIP,[ref]$address) -or $address.AddressFamily -ne 'InterNetwork') { throw 'Invalid ESP IPv4 address.' }
 $StationIP=$address.ToString()
-$profile=Invoke-RestMethod -Uri "http://$StationIP/setup/profile.json" -TimeoutSec 10
+if ($RemoteStationID) {
+ $known=@($knownStations | Where-Object {$_.id -ceq $RemoteStationID -and $_.ip -ceq $StationIP})
+ if ($known.Count -ne 1) {throw 'Unknown remote station'}
+ $profile=[pscustomobject]@{schema=1;model='LBP3300';id=$RemoteStationID;name=$known[0].name;ip=$StationIP;lan_metadata_version=1;lan_recovery_version=1}
+} else {$profile=Invoke-RestMethod -Uri "http://$StationIP/setup/profile.json" -TimeoutSec 10}
 if ($profile.schema -ne 1 -or $profile.model -ne 'LBP3300' -or $profile.id -notmatch '^esp32-[0-9a-f]{12}$' -or $profile.id -eq 'esp32-000000000000' -or $profile.ip -ne $StationIP) { throw 'Target is not a supported ESP32 printer station, or its IP differs.' }
 $stationId=[string]$profile.id
 $portName="ESP32_LOCAL_$stationId"
@@ -416,7 +439,22 @@ public static class Esp32CaptBridge {
   byte[] b=new byte[72];DateTime t=DateTime.Now;Put32(b,4,(uint)page);b[16]=(byte)stage;b[17]=1;Put16(b,18,id);Put16(b,20,65116);Put16(b,22,65116);Put16(b,24,t.Year);
   b[26]=(byte)(t.Month-1);b[27]=(byte)t.Day;b[28]=(byte)t.Hour;b[29]=(byte)t.Minute;b[30]=(byte)t.Second;b[31]=1;return b;
  }
+ [System.Runtime.Serialization.DataContract] sealed class LanProfile {
+  [System.Runtime.Serialization.DataMember] public int schema;
+  [System.Runtime.Serialization.DataMember] public string id;
+  [System.Runtime.Serialization.DataMember] public string model;
+ }
+ static void VerifyLanStation(){
+  var r=(HttpWebRequest)WebRequest.Create("http://__STATION_IP__/setup/profile.json");
+  r.Proxy=null;r.AllowAutoRedirect=false;r.Timeout=1500;r.ReadWriteTimeout=1500;
+  using(var response=(HttpWebResponse)r.GetResponse())using(var input=response.GetResponseStream())using(var data=new MemoryStream()){
+   byte[] buffer=new byte[1024];int n;
+   while((n=input.Read(buffer,0,buffer.Length))>0){data.Write(buffer,0,n);Need(data.Length<=4096,"LAN profile too large");}
+   var p=CloudJson<LanProfile>(data.ToArray());Need(p!=null&&p.schema==1&&p.id=="__STATION_ID__"&&p.model=="LBP3300","Wrong LAN station; cloud required");
+  }
+ }
  static TcpClient Connect() {
+  VerifyLanStation();
   TcpClient c=new TcpClient();try{
    IAsyncResult a=c.BeginConnect("__STATION_IP__",9100,null,null);
    using(a.AsyncWaitHandle){if(!a.AsyncWaitHandle.WaitOne(5000))throw new TimeoutException("ESP not reachable");c.EndConnect(a);}
@@ -517,7 +555,7 @@ public static class Esp32CaptBridge {
 
  static string ReadStatus(){
   HttpWebRequest r=(HttpWebRequest)WebRequest.Create("http://__STATION_IP__/printer/status");r.Proxy=null;r.Timeout=2000;r.ReadWriteTimeout=2000;
-  try{return ReadStatusResponse(r);}catch(WebException){
+  try{VerifyLanStation();return ReadStatusResponse(r);}catch(Exception){
    CloudConfig c=ReadCloud();if(c==null)throw;
    r=(HttpWebRequest)WebRequest.Create("https://quanly.lophocbinhminh.com/api/print/v1/client/stations/"+c.station_id+"/status");
    r.Headers["Authorization"]="Bearer "+c.token;r.AllowAutoRedirect=false;r.Timeout=5000;r.ReadWriteTimeout=5000;
@@ -807,6 +845,11 @@ if (!(Test-Path "$root\cloud.json")) {
   if ($enrollment.client_id -cnotmatch '\A[0-9a-f]{32}\z' -or $enrollment.verifier -cnotmatch '\A[0-9a-f]{64}\z') {throw 'Invalid enrollment record'}
   $sha=[Security.Cryptography.SHA256]::Create()
   try {$challenge=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($enrollment.verifier)))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
+  [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  if ($RemoteStationID) {
+   $request=@{schema=1;station_id=$stationId;client_id=$enrollment.client_id;verifier=$enrollment.verifier;client_os='windows';name='Windows computer'} | ConvertTo-Json -Compress
+   $config=Invoke-RestMethod -Method Post -Uri 'https://quanly.lophocbinhminh.com/api/print/v1/client/install/enroll' -ContentType 'application/json' -Body $request -TimeoutSec 20
+  } else {
   $request=@{schema=1;client_id=$enrollment.client_id;challenge=$challenge;client_os='windows';name='Windows computer'} | ConvertTo-Json -Compress
   $reply=$null
   for ($attempt=0;$attempt -lt 12;$attempt++) {
@@ -817,10 +860,11 @@ if (!(Test-Path "$root\cloud.json")) {
   $redeem=@{schema=1;station_id=$stationId;client_id=$enrollment.client_id;ticket=$reply.ticket;verifier=$enrollment.verifier} | ConvertTo-Json -Compress
   [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   $config=Invoke-RestMethod -Method Post -Uri 'https://quanly.lophocbinhminh.com/api/print/v1/client/enroll' -ContentType 'application/json' -Body $redeem -TimeoutSec 20
+  }
   if ($config.schema -ne 1 -or $config.station_id -cne $stationId -or $config.client_id -cne $enrollment.client_id -or $config.token -cnotmatch '\A[A-Za-z0-9_-]{32,256}\z') {throw 'Invalid cloud enrollment'}
   [IO.File]::WriteAllText((Join-Path $root 'cloud.json'),(@{schema=1;station_id=$stationId;token=$config.token} | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
   Write-Host 'Cloud fallback enabled. Rendering stays on this computer.'
- } catch {Write-Warning 'LAN installation continues. Cloud enrollment unavailable; rerun installer after station/server update.'}
+ } catch {if ($RemoteStationID) {throw 'Remote enrollment unavailable. Rerun installer after server API is ready.'};Write-Warning 'LAN installation continues. Cloud enrollment unavailable; rerun installer after station/server update.'}
 }
 Add-Type -TypeDefinition $sourceCode -ReferencedAssemblies System.dll,System.Core.dll,System.Xml.dll,System.Runtime.Serialization.dll -OutputAssembly $staged -OutputType ConsoleApplication
 & $staged --self-test

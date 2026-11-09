@@ -1,5 +1,7 @@
 # Tự đăng ký máy tính khi cài máy in LAN
 
+**Cập nhật 09/11:** bộ cài mặc định cài đủ ba trạm từ mọi mạng, không cần LAN lần đầu. Contract ưu tiên: [all-stations-remote-install-20261109.md](all-stations-remote-install-20261109.md). Luồng ticket/LAN bên dưới giữ cho tương thích.
+
 Thay quy trình tải/import `.cloud.json` thủ công. Người dùng chỉ cài máy in, chọn IP/tên như bình thường. Installer tự đăng ký qua ESP trong LAN. ESP vẫn là nguồn telemetry duy nhất. Không render lại trên server; API nhận ESPJOB1 đã render trên máy gửi.
 
 ## API server cần triển khai

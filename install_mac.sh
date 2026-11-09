@@ -5,12 +5,39 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "Run: sudo sh install_mac.sh" >&2
   exit 1
 fi
+# One invocation installs the three known stations from any network.
+if [ "${1:-}" != --single ] && [ "${1:-}" != --remote ]; then
+  failed=0
+  while IFS='|' read -r station_ip station_id station_name; do
+    /bin/sh "$0" --remote "$station_ip" "$station_id" "$station_name" || failed=1
+  done <<'STATIONS'
+192.168.1.199|esp32-98c377a136b0|Máy 1
+192.168.1.200|esp32-1051db78a8fc|Máy 2
+192.168.1.201|esp32-1051db786a34|Máy 3
+STATIONS
+  exit "$failed"
+fi
+remote=false
+if [ "${1:-}" = --remote ]; then
+  [ "$#" -eq 4 ] || exit 1
+  remote=true; remote_id=$3; remote_name=$4
+  set -- "$2" "$remote_name"
+elif [ "${1:-}" = --single ]; then
+  shift
+fi
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 target_dir=/Library/Printers/ESP32Printer
 cache_dir=/Library/Caches/ESP32Printer
 host=${1:-}
 if [ -z "$host" ]; then printf 'ESP IPv4 address: '; IFS= read -r host; fi
 /usr/bin/perl -e 'exit !($ARGV[0] =~ /\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/ && !grep { $_ > 255 } split /\./, $ARGV[0])' "$host" || { echo 'Invalid IPv4 address.' >&2; exit 1; }
+if [ "$remote" = true ]; then
+  id=$remote_id; name=$remote_name
+  case "$host|$id" in
+    '192.168.1.199|esp32-98c377a136b0'|'192.168.1.200|esp32-1051db78a8fc'|'192.168.1.201|esp32-1051db786a34') ;;
+    *) echo 'Unknown remote station.' >&2; exit 1 ;;
+  esac
+else
 profile=$(/usr/bin/mktemp)
 trap '/bin/rm -f "$profile"' EXIT
 /usr/bin/curl --fail --silent --show-error --noproxy '*' --connect-timeout 10 --max-time 15 "http://$host/setup/profile.json" -o "$profile"
@@ -22,13 +49,14 @@ name=${2:-$(/usr/bin/plutil -extract name raw -o - "$profile")}
 [ "$(/usr/bin/plutil -extract ip raw -o - "$profile")" = "$host" ]
 /bin/rm -f "$profile"
 trap - EXIT
+fi
 queue=ESP32_$(printf '%s' "$id" | /usr/bin/tr -d '-')
 cache_dir="$cache_dir/$id"
 uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=378a1a26ceaa0d163d6450839fa2d2dabb45422b921bc439aba94aacc5d1d782
+backend_sha=f4fd0dee3940e390d84d380c3564644180ef04f4c0e6f3b5ee9e56808a9ff4ef
 backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/e0da8e9a3edf92c613fe9e320c38cb6236ca77ac/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ] || [ -e "$cache_dir/cloud-job.json" ]; then
@@ -110,7 +138,11 @@ if [ -f "$cloud_config" ]; then
   /usr/bin/install -m 600 "$cloud_config" "$cache_dir/cloud.json"
 fi
 /usr/bin/install -m 644 "$backend" "$target_dir/mac_backend.pl"
-/usr/bin/perl "$target_dir/mac_backend.pl" --enroll "$host" "$id" || echo "LAN installed. Cloud enrollment unavailable; rerun installer after station/server update." >&2
+if [ "$remote" = true ]; then
+  /usr/bin/perl "$target_dir/mac_backend.pl" --enroll-cloud "$host" "$id"
+else
+  /usr/bin/perl "$target_dir/mac_backend.pl" --enroll "$host" "$id" || echo "LAN installed. Cloud enrollment unavailable; rerun installer after station/server update." >&2
+fi
 /usr/bin/install -m 644 "$work/Canon_ESP32.ppd" "$target_dir/Canon_ESP32.ppd"
 printf '#!/bin/sh\nexec /usr/bin/perl %s/mac_backend.pl "$@"\n' "$target_dir" > "$work/esp32capt"
 /usr/bin/install -m 700 "$work/esp32capt" /usr/libexec/cups/backend/esp32capt

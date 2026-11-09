@@ -1,5 +1,7 @@
 # LAN mất kết nối: gửi CAPT đã render qua web server
 
+**Cập nhật 09/11:** bộ cài mặc định cài đủ ba trạm từ mọi mạng, không cần LAN lần đầu. Contract ưu tiên: [all-stations-remote-install-20261109.md](all-stations-remote-install-20261109.md). Luồng ticket/LAN bên dưới giữ cho tương thích.
+
 ## Bàn giao 08/11/2026
 
 Client Windows/Mac/Ubuntu đã có source và bộ kiểm thử. Chưa nghiệm thu đầu-cuối:

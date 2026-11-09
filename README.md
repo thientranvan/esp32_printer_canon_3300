@@ -1,5 +1,7 @@
 # ESP32-S3 Canon LBP3300 LAN print server
 
+Bộ cài mới: một lần chạy thêm/cập nhật **Máy 1, Máy 2, Máy 3**, không cần cùng LAN hay nhập khóa. Windows dùng [EXE](installers/ESP32PrinterSetup.exe); Mac chạy `sudo sh install_mac.sh`; Ubuntu chạy `sudo python3 install_ubuntu.py`. Cần server triển khai [API đăng ký từ xa](docs/all-stations-remote-install-20261109.md). Máy gửi render CAPT, server chỉ chuyển bản in; chỉ gửi LAN khi xác nhận đúng ID trạm.
+
 Repository: https://github.com/thientranvan/esp32_printer_canon_3300
 
 Hết giấy giữa lệnh web: [quan sát Máy 1 và bản sửa A0A1](docs/paper-out-recovery.md).
