@@ -338,13 +338,7 @@ static bool cloudCheckpoint() {
   }
 }
 // Same-USB replay requires verified buffer cleanup, not merely a Ready flag.
-static bool cloudRequestUSBRepair() {
-  if(!claimCapt(CloudOwner))return false;
-  int state=captCommand.state.load();
-  bool queued=(state==0||state==3)&&captCommand.state.compare_exchange_strong(state,6);
-  if(queued){printerRepairError.store(0);printerRepair.store(1);}
-  releaseCapt(CloudOwner);return queued;
-}
+static bool cloudRequestUSBRepair() {return captRequestUSBRepair(CloudOwner);}
 static bool cloudResetInterruptedSession(bool transportReset=false) {
   auto j=jobSnapshot();auto usb=readUSB();
   if(!j.active||strcmp(j.source,"cloud")||j.stopping()||!j.printerSession||
@@ -556,7 +550,7 @@ static void cloudTask(void *) {
 static std::atomic<bool> discardOrphanRequested{false};
 static constexpr uint32_t CaptStatusOwner=0xFFFFFFFD;
 static void captStatusTask(void *) {
-  uint8_t buffer[134];unsigned previous=~0U;
+  uint8_t buffer[134];unsigned previous=~0U;CaptRecovery::Retry repairRetry;
   while(true){
     if(readUSB().responsive && claimCapt(CaptStatusOwner)){
       if(discardOrphanRequested.exchange(false)){
@@ -575,7 +569,9 @@ static void captStatusTask(void *) {
       if(!pending.active&&pending.stopping()&&(!strcmp(pending.source,"lan")||!strcmp(pending.state,"cancelled")||!strcmp(pending.state,"failed"))){
         bool cleared=cancelCapt(CaptStatusOwner);jobFinish("cancelled");if(cleared&&pending.deleteAfterStop)jobCommand(pending.id,"delete");
       }
-      if(captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A8) && CaptStatus::word(buffer+2)>=40){
+      bool statusOK=captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A8) && CaptStatus::word(buffer+2)>=40;
+      if(statusOK){
+        captVerifyUSBRepair(buffer,CaptStatus::word(buffer+2));
         auto f=CaptStatus::decode(buffer);unsigned code=0,sub=0;char service[24]="unknown";
         if(f.service && captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA2A2) && CaptStatus::word(buffer+2)>=12 && buffer[5]){
           code=CaptStatus::word(buffer+8);sub=CaptStatus::word(buffer+10);snprintf(service,sizeof(service),"E%03X %04X",code,sub);
@@ -583,8 +579,16 @@ static void captStatusTask(void *) {
         unsigned key=f.service|f.jam<<1|f.cover<<2|f.paper<<3|f.toner<<4|code<<8;
         if(key!=previous){Serial.printf("CAPT status service=%u code=%s jam=%u cover=%u paper=%u toner=%u completed=%u\n",f.service,service,f.jam,f.cover,f.paper,f.toner,f.completed);previous=key;}
       }
-      captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A1);
+      if(statusOK)captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA0A1);
       releaseCapt(CaptStatusOwner);
+      auto u=readUSB();
+      // The status owner can repair idle/preflight/LAN interruptions, not only cloud printing.
+      // Fresh paper/jam/cover errors are never treated as lost bulk transport.
+      if(repairRetry.due(millis(),captFresh(3000),u.connected&&u.responsive,
+          captLastError.load()==ESP_ERR_TIMEOUT,captFault(),u.recovering||firmwareCheckPending.load()||
+          printerRepair.load()==1||printerRepair.load()==2)){
+        if(captRequestUSBRepair(CaptStatusOwner)){repairRetry.queued(millis());Serial.println("CAPT stale bulk timeout: queued printer-class recovery");}
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(500));
   }

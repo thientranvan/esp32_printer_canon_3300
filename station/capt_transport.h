@@ -1,5 +1,6 @@
 #pragma once
 #include "capt_status.h"
+#include "capt_recovery.h"
 
 // ponytail: one diagnostic operation at a time, 4096 bytes; add job ownership
 // and a spool before accepting concurrent print clients.
@@ -122,6 +123,25 @@ static void releaseCapt(uint32_t owner) {
   portENTER_CRITICAL(&captOwnerLock);
   if (captOwner == owner) captOwner = 0;
   portEXIT_CRITICAL(&captOwnerLock);
+}
+
+static bool captRequestUSBRepair(uint32_t owner) {
+  if(printerRepair.load()==1||printerRepair.load()==2||!claimCapt(owner))return false;
+  int state=captCommand.state.load();
+  bool queued=(state==0||state==3)&&captCommand.state.compare_exchange_strong(state,6);
+  if(queued){printerRepairError.store(0);printerRepairAwaitingStatus.store(false);printerRepair.store(1);}
+  releaseCapt(owner);return queued;
+}
+// Only a post-reset, empty, fault-free CAPT frame advances the session generation.
+// That lets existing sheet checkpoints restart without pretending ACK means ready.
+static bool captVerifyUSBRepair(const uint8_t *frame,size_t size) {
+  if(!printerRepairAwaitingStatus.load()||!frame||size<40||CaptStatus::word(frame)!=0xA0A8||
+     CaptStatus::word(frame+2)<40||CaptStatus::word(frame+2)>size)return false;
+  auto f=CaptStatus::decode(frame);
+  if(f.service||f.jam||f.cover||f.paper||(CaptStatus::word(frame+12)&0x84))return false;
+  for(unsigned i=0;i<4;++i)if(CaptStatus::word(frame+18+i*2))return false;
+  if(!printerRepairAwaitingStatus.exchange(false))return false;
+  printerEpoch.fetch_add(1);return true;
 }
 
 static void captTransferDone(usb_transfer_t *) { captCommand.done = true; }

@@ -10,6 +10,8 @@ prefix=r'''
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include "station/capt_status.h"
+#include "station/capt_recovery.h"
 using esp_err_t=int;using usb_host_client_handle_t=void*;
 const int ESP_OK=0,ESP_FAIL=1,ESP_ERR_INVALID_STATE=2,USB_TRANSFER_STATUS_COMPLETED=0;
 struct usb_transfer_t {uint8_t data_buffer[8];void *device_handle,*context;unsigned bEndpointAddress,num_bytes;int status=0;void(*callback)(usb_transfer_t*);};
@@ -18,6 +20,8 @@ struct USBStatus {bool recovering=false;unsigned recoveries=0;};
 static struct {std::atomic<int> state{6};int error=0;void *transfer=nullptr;} captCommand;
 static struct {void reset(){}} captFrames;
 static std::atomic<int> printerRepair{1},printerRepairError{0};
+static std::atomic<bool> printerRepairAwaitingStatus{false};
+static std::atomic<unsigned> printerEpoch{1};
 static struct {template<class...T>void printf(const char*,T...){}} Serial;
 static unsigned allocations=0,frees=0,failSubmit=0,submitted=0;
 static std::vector<unsigned> ops;
@@ -39,6 +43,8 @@ static void begin(){allocations=frees=submitted=failSubmit=0;ops.clear();printer
 '''
 request=Path('station/cloud_print.h').read_text()
 request=request[request.index('static bool cloudRequestUSBRepair()'):request.index('static bool cloudResetInterruptedSession(')]
+transport=Path('station/capt_transport.h').read_text()
+request=transport[transport.index('static bool captRequestUSBRepair('):transport.index('static void captTransferDone')]+request
 prefix+=r'''
 static bool ownerAvailable=true;static unsigned released=0;
 static const unsigned CloudOwner=42;
@@ -48,7 +54,7 @@ static void releaseCapt(unsigned owner){assert(owner==42);++released;}
 fresh=Path('station/capt_transport.h').read_text()
 fresh=fresh[fresh.index('static bool captFresh('):fresh.index('static bool captFault(')]
 prefix+=r'''
-static unsigned captRawSize=60,captRawAt=0,tick=0;
+static unsigned captRawSize=60,captRawAt=0,captPaperAt=0,tick=0;
 static int captTelemetryLock=0;
 #define portENTER_CRITICAL(x) (void)(x)
 #define portEXIT_CRITICAL(x) (void)(x)
@@ -56,10 +62,21 @@ static uint32_t millis(){return tick;}
 '''
 main=r'''
 int main(){
+ CaptRecovery::Retry retry;
+ assert(retry.due(3000,false,true,true,false,false));retry.queued(3000);
+ assert(!retry.due(17999,false,true,true,false,false));assert(retry.due(18000,false,true,true,false,false));retry.queued(18000);
+ assert(!retry.due(77999,false,true,true,false,false));assert(retry.due(78000,false,true,true,false,false));retry.queued(78000);
+ assert(!retry.due(300000,false,true,true,false,false));assert(!retry.due(300001,true,true,true,false,false));
+ assert(retry.attempts==0);assert(!retry.due(300002,false,true,true,true,false));assert(!retry.due(300002,false,true,false,false,false));
+ assert(!retry.due(300002,false,true,true,false,true));assert(!retry.due(300002,false,false,true,false,false));
+ retry.queued(UINT32_MAX-1000);assert(!retry.due(13998,false,true,true,false,false));assert(retry.due(13999,false,true,true,false,false));
+ uint8_t frame[60]={0xA8,0xA0,60};printerRepairAwaitingStatus=true;
+ frame[12]=0x84;assert(!captVerifyUSBRepair(frame,sizeof(frame)));frame[12]=0;frame[18]=1;assert(!captVerifyUSBRepair(frame,sizeof(frame)));
+ frame[18]=0;unsigned epoch=printerEpoch;assert(captVerifyUSBRepair(frame,sizeof(frame))&&printerEpoch==epoch+1);assert(!captVerifyUSBRepair(frame,sizeof(frame)));
  tick=2999;assert(captFresh(3000));tick=3000;assert(!captFresh(3000)&&captFresh());
  tick=10000;assert(!captFresh());captRawAt=UINT32_MAX-999;tick=1999;assert(captFresh(3000));
  tick=2000;assert(!captFresh(3000));captRawSize=0;assert(!captFresh());
- begin();captCommand.state=2;assert(!cloudRequestUSBRepair()&&captCommand.state==2);
+ begin();printerRepair=0;captCommand.state=2;assert(!cloudRequestUSBRepair()&&captCommand.state==2);
  captCommand.state=3;ownerAvailable=false;assert(!cloudRequestUSBRepair()&&captCommand.state==3);
  ownerAvailable=true;assert(cloudRequestUSBRepair()&&captCommand.state==6&&printerRepair==1);
  assert(!cloudRequestUSBRepair()&&captCommand.state==6);
@@ -89,5 +106,5 @@ int main(){
 '''
 with tempfile.TemporaryDirectory() as tmp:
  p=Path(tmp)/'check.cpp';p.write_text(prefix+block+request+fresh+main);out=Path(tmp)/'check'
- subprocess.run(['/Library/Developer/CommandLineTools/usr/bin/clang++','-std=c++11','-isysroot','/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk',str(p),'-o',str(out)],check=True)
+ subprocess.run(['/Library/Developer/CommandLineTools/usr/bin/clang++','-std=c++11','-I',str(Path.cwd()),'-isysroot','/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk',str(p),'-o',str(out)],check=True)
  subprocess.run([str(out)],check=True)

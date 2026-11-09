@@ -25,8 +25,9 @@ struct USBStatus {
 static USBStatus usbStatus = {};
 static std::atomic<uint32_t> printerEpoch{0};
 // Printer-class soft reset, then CLEAR_FEATURE(ENDPOINT_HALT) on both bulk pipes.
-// Requested only by interrupted cloud owner; USB client owns all lifecycle work.
+// Requested under the CAPT arbiter; USB client owns all lifecycle work.
 static std::atomic<int> printerRepair{0},printerRepairError{0}; // 0 idle, 1 queued, 2 active, 3 ACK, 4 failed
+static std::atomic<bool> printerRepairAwaitingStatus{false};
 static bool usbTaskStarted = false;
 static portMUX_TYPE usbLock = portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<int> usbDaemonError{0};
@@ -168,6 +169,9 @@ static void finishPrinterRepair(USBContext &context,USBStatus &status,int error)
   context.repairStep=0;context.probeDone=false;
   captFrames.reset();captCommand.error=error;captCommand.state.store(3);
   printerRepairError.store(error);printerRepair.store(error==ESP_OK?3:4);
+  printerRepairAwaitingStatus.store(error==ESP_OK);
+  // A pre-reset CAPT frame can never verify reset or authorize a replay.
+  portENTER_CRITICAL(&captTelemetryLock);captRawSize=0;captRawAt=0;captPaperAt=0;portEXIT_CRITICAL(&captTelemetryLock);
   status.recovering=false;publishUSB(status);
   Serial.printf("USB printer repair result=%d; CAPT verification still required\n",error);
 }
