@@ -17,3 +17,7 @@ Firmware trước có lỗi gói reset; telemetry chỉ có ESP_FAIL tổng hợ
 ## Trạng thái triển khai
 
 Đã lưu mẫu read-only qua LAN, không chiếm COM và không chủ động reset/hủy lệnh. Bản sửa được build/kiểm thử trước khi nạp. OTA khởi động lại ESP làm mất phiên/checkpoint RAM, nên cần người dùng chọn xử lý lệnh đang dở và đối chiếu số tờ đã ra. Chưa tự gửi lại 22 mặt hoặc coi completed=0 là chắc chắn chưa có giấy.
+
+## Kết quả thực tế sau nạp
+
+Người dùng chọn hủy lệnh dở và nạp. Đã hủy đúng job; cloud resolved, printer_cancel unverified. Khởi động lại riêng ESP bằng lưu nguyên cấu hình mạng, máy in giữ nguồn. Nạp OTA qua LAN thành công; GET /status xác nhận FW 2026112101. Sau 10–25 giây CAPT vẫn stale, bulk OUT A0A8 timeout, repair_state=4/error=-1 sau 1–2 lần repair. Do đó sửa recipient chưa giải quyết toàn bộ lỗi thực tế. Chưa gửi trang thử hoặc tự in lại lệnh cũ. Cần thêm diagnostic chỉ rõ step/control transfer status hoặc điều tra reset/re-enumeration an toàn; không khẳng định đã phục hồi.
