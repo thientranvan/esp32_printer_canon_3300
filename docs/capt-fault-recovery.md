@@ -17,7 +17,7 @@ The exclusive cloud owner first atomically reserves maintenance state 6.
 The USB client waits for existing control probes and all bulk transfers to
 finish, halts/flushes empty bulk pipes, then serializes:
 
-1. Printer Class SOFT_RESET: `21 02 00 00 00 00 00 00` (interface 0).
+1. Printer Class SOFT_RESET: `23 02 00 00 00 00 00 00` (recipient OTHER, interface number 0; corrected 21/11/2026).
 2. CLEAR_FEATURE(ENDPOINT_HALT): bulk OUT `01`, then bulk IN `82`.
 3. Clear host endpoint halts; resume read-only CAPT polling.
 

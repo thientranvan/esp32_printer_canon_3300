@@ -34,7 +34,7 @@ static int usb_host_endpoint_clear(void *d,unsigned ep){assert(d);ops.push_back(
 static int usb_host_transfer_submit_control(void*,usb_transfer_t *t){
  ++submitted;assert(t->num_bytes==8&&t->bEndpointAddress==0);
  unsigned step=static_cast<USBContext*>(t->context)->repairStep;
- uint8_t reset[]={0x21,2,0,0,0,0,0,0},clear[]={2,1,0,0,uint8_t(step==2?1:0x82),0,0,0};
+ uint8_t reset[]={0x23,2,0,0,0,0,0,0},clear[]={2,1,0,0,uint8_t(step==2?1:0x82),0,0,0};
  assert(!memcmp(t->data_buffer,step==1?reset:clear,8));ops.push_back(step);
  return step==failSubmit?ESP_FAIL:ESP_OK;
 }

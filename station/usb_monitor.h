@@ -148,7 +148,7 @@ static esp_err_t startPrinterRepair(usb_host_client_handle_t client,USBContext &
   esp_err_t error=usb_host_transfer_alloc(8,0,&context.probe);
   if(error!=ESP_OK)return error;
   auto *t=context.probe;
-  const uint8_t reset[]={0x21,2,0,0,0,0,0,0}; // Printer Class SOFT_RESET, interface 0.
+  const uint8_t reset[]={0x23,2,0,0,0,0,0,0}; // Printer Class SOFT_RESET: recipient OTHER, interface number 0 (Linux usblp).
   const uint8_t clear[]={0x02,1,0,0,uint8_t(step==2?0x01:0x82),0,0,0};
   memcpy(t->data_buffer,step==1?reset:clear,8);
   t->device_handle=context.device;t->bEndpointAddress=0;t->num_bytes=8;
