@@ -19,7 +19,7 @@ assert(!ClientEnrollment::ticket("bad ticket"));}
     subprocess.run(['c++','-std=c++11','-I',str(root),str(cpp),'-o',str(work/'check')],check=True)
     subprocess.run([str(work/'check')],check=True)
     source=(root/'mac_backend.pl').read_text().split('sub cloud_config {')[0]
-    source=source.replace("'/Library/Caches/ESP32Printer'",repr(str(work))).replace('die "Enrollment requires root\\n" if $>;','')
+    source=source.replace("'/Library/Application Support/ESP32Printer'",repr(str(work))).replace('die "Enrollment requires root\\n" if $>;','')
     source+='''
 sub cloud_config {return;}
 my $calls=0;

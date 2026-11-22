@@ -27,7 +27,7 @@ elif [ "${1:-}" = --single ]; then
 fi
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 target_dir=/Library/Printers/ESP32Printer
-cache_dir=/Library/Caches/ESP32Printer
+cache_dir="/Library/Application Support/ESP32Printer"
 host=${1:-}
 if [ -z "$host" ]; then printf 'ESP IPv4 address: '; IFS= read -r host; fi
 /usr/bin/perl -e 'exit !($ARGV[0] =~ /\A(?:[0-9]{1,3}\.){3}[0-9]{1,3}\z/ && !grep { $_ > 255 } split /\./, $ARGV[0])' "$host" || { echo 'Invalid IPv4 address.' >&2; exit 1; }
@@ -52,16 +52,23 @@ trap - EXIT
 fi
 queue=ESP32_$(printf '%s' "$id" | /usr/bin/tr -d '-')
 cache_dir="$cache_dir/$id"
+legacy_cache_dir="/Library/Caches/ESP32Printer/$id"
 uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=f4fd0dee3940e390d84d380c3564644180ef04f4c0e6f3b5ee9e56808a9ff4ef
+backend_sha=2accaf22d8d3cf6575ebf14dc4c432e6e8b6197eef64442adc6c1ea38fc7fcf8
 backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/9e0188055c91e7d37e695a929fe1a73d3bf252cc/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
-if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ] || [ -e "$cache_dir/cloud-job.json" ]; then
+if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ] || [ -e "$cache_dir/cloud-job.json" ] || [ -e "$legacy_cache_dir/pending.txt" ] || [ -e "$legacy_cache_dir/cloud-job.json" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2
   exit 1
+fi
+# Persistent state must not live under an OS-purgeable cache directory.
+# Preserve legacy identity/receipts; never merge two independently active stores.
+if [ ! -d "$cache_dir" ] && [ -d "$legacy_cache_dir" ]; then
+  /usr/bin/install -d -m 700 "$cache_dir"
+  /bin/cp -pR "$legacy_cache_dir/." "$cache_dir/"
 fi
 current_uri=$(/usr/bin/lpstat -v "$queue" 2>/dev/null || true)
 if [ -n "$current_uri" ]; then

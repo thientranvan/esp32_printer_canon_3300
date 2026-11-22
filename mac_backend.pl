@@ -12,7 +12,7 @@ my $socket;my $activeJob;my $faultElapsed=0;
 sub active_time {return time-$faultElapsed;}
 my $stationHost;my $stationPort=9100;my $metadataSupported=0;my $recoverySupported=0;my $resumeBase=0;
 my @completedSheets=(0);my $lastCompleted=-1;
-my $cache = '/Library/Caches/ESP32Printer';
+my $cache = '/Library/Application Support/ESP32Printer';
 my $pending = "$cache/pending.txt";
 # Cloud token is a client-scoped credential exported by server, never ESP token.
 # ponytail: fallback only before LAN connect; cross-route recovery needs confirmed server/ESP admission.

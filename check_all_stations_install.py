@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory() as tmp:
    assert r.stdout.splitlines()==ids and r.returncode==int(fail),(r.stdout,r.stderr)
  # Actual Perl enrollment path: no LAN call, stable identity, reject response mismatch.
  source=(ROOT/'mac_backend.pl').read_text().split('sub cloud_config {')[0]
- source=source.replace("'/Library/Caches/ESP32Printer'",repr(str(folder))).replace('die "Enrollment requires root\\n" if $>;','')
+ source=source.replace("'/Library/Application Support/ESP32Printer'",repr(str(folder))).replace('die "Enrollment requires root\\n" if $>;','')
  source+='''
 sub cloud_config{return;}
 my $base=$cache;my $id='esp32-1051db786a34';mkdir "$base/$id",0700;my $saved;my $wrong=0;my $calls=0;
@@ -38,7 +38,7 @@ die 'wrong credential saved' if -e "$cache/cloud.json";
  # Production main() with wrong LAN profile: must not open printing TCP socket.
  cache=folder/'cache';(cache/ids[2]).mkdir(parents=True)
  curl=folder/'curl';curl.write_text('#!/usr/bin/env python3\nprint(\''+json.dumps({'schema':1,'id':ids[1],'model':'LBP3300'})+'\')\n');curl.chmod(0o755)
- backend=(ROOT/'mac_backend.pl').read_text().replace("'/Library/Caches/ESP32Printer'",repr(str(cache))).replace("'/usr/bin/curl'",repr(str(curl)))
+ backend=(ROOT/'mac_backend.pl').read_text().replace("'/Library/Application Support/ESP32Printer'",repr(str(cache))).replace("'/usr/bin/curl'",repr(str(curl)))
  main=folder/'backend.pl';main.write_text(backend)
  def packet(op,data=b''):return struct.pack('<HH',op,len(data)+4)+data
  params=bytearray(40);params[2:5]=b'\x94\x2a\x02'
