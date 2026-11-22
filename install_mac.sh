@@ -67,8 +67,12 @@ fi
 # Persistent state must not live under an OS-purgeable cache directory.
 # Preserve legacy identity/receipts; never merge two independently active stores.
 if [ ! -d "$cache_dir" ] && [ -d "$legacy_cache_dir" ]; then
-  /usr/bin/install -d -m 700 "$cache_dir"
-  /bin/cp -pR "$legacy_cache_dir/." "$cache_dir/"
+  /usr/bin/install -d -m 700 "$(dirname "$cache_dir")"
+  migration=$(/usr/bin/mktemp -d "$cache_dir.migrate.XXXXXX")
+  if ! /bin/cp -pR "$legacy_cache_dir/." "$migration/"; then
+    /bin/rm -rf "$migration"; exit 1
+  fi
+  /usr/bin/perl -e 'rename($ARGV[0],$ARGV[1]) or die "Cannot publish migrated state\n"' "$migration" "$cache_dir"
 fi
 current_uri=$(/usr/bin/lpstat -v "$queue" 2>/dev/null || true)
 if [ -n "$current_uri" ]; then

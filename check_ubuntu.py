@@ -24,7 +24,35 @@ for opts in ('PageSize=Letter','Duplex=bad','sides=bad'):
  except ValueError:pass
  else:raise AssertionError(opts)
 backend=installer.linux_backend((ROOT/'mac_backend.pl').read_text())
-assert "client_os=>'linux'" in backend and "'/var/cache/cups/esp32printer'" in backend
+assert "client_os=>'linux'" in backend and "'/var/lib/esp32printer'" in backend
+# Real migration: keep identity/receipt, refuse unresolved state, never overwrite target.
+with tempfile.TemporaryDirectory() as tmp:
+ old=Path(tmp)/'cache';new=Path(tmp)/'lib';old.mkdir()
+ (old/'cloud.json').write_text('credential');(old/'enrollment.json').write_text('identity')
+ (old/'cloud-completed.json').write_text('receipt')
+ (old/'pending.txt').touch()
+ try:installer.migrate_state(old,new)
+ except ValueError:pass
+ else:raise AssertionError('Migrated unresolved job')
+ assert not new.exists();(old/'pending.txt').unlink()
+ installer.migrate_state(old,new)
+ for name in ('cloud.json','enrollment.json','cloud-completed.json'):assert (new/name).read_bytes()==(old/name).read_bytes()
+ assert (new/'cloud.json').stat().st_mode&0o777==0o600 and new.stat().st_mode&0o777==0o700
+ (new/'cloud.json').write_text('keep existing');installer.migrate_state(old,new)
+ assert (new/'cloud.json').read_text()=='keep existing'
+ failed=Path(tmp)/'copy-failed'
+ original=installer.shutil.copy2
+ def broken(*args,**kwargs):raise OSError('Simulated copy failure')
+ installer.shutil.copy2=broken
+ try:
+  try:installer.migrate_state(old,failed)
+  except OSError:pass
+  else:raise AssertionError('Copy error ignored')
+ finally:installer.shutil.copy2=original
+ assert not failed.exists(),'Published partial state'
+ installer.migrate_state(old,failed)
+ assert (failed/'enrollment.json').read_text()=='identity'
+
 compressed=bytes(8)+struct.pack('<II',1,3)+b'abc'
 page=renderer.page_stream(compressed,True)
 assert page[9]&8

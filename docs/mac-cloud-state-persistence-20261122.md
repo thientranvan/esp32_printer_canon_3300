@@ -14,7 +14,7 @@ Mac backend, installer và configure_cloud.py dùng `/Library/Application Suppor
 
 Installer chỉ sao chép legacy state khi đích chưa tồn tại, giữ bytes/quyền của credential/identity/receipt; không trộn hai identity. Legacy pending/cloud-job chưa giải quyết hoặc CUPS có job đang chờ sẽ chặn migration/cài. Không xóa marker hoặc gửi lại job chưa rõ kết quả để ép cài.
 
-Ubuntu vẫn giữ đường dẫn Linux hiện có; chỉ cập nhật rule chuyển backend Mac sang Linux cho source mới. Windows không đổi nơi lưu state.
+Bản sửa tiếp theo cùng ngày chuyển Ubuntu sang `/var/lib/esp32printer`, có migration từ cache; Windows giữ ProgramData. Xem installer-state-storage-20261122.md.
 
 ## Kiểm tra
 

@@ -48,7 +48,7 @@ def valid_name(name):
 
 def linux_backend(source):
     replacements={
-        "my $cache = '/Library/Application Support/ESP32Printer';":"my $cache = '/var/cache/cups/esp32printer';",
+        "my $cache = '/Library/Application Support/ESP32Printer';":"my $cache = '/var/lib/esp32printer';",
         'my $job="mac-".time.': 'my $job="linux-".time.',
         "client_os=>'macos'":"client_os=>'linux'",
         'X-Print-Client-OS: macos':'X-Print-Client-OS: linux',
@@ -59,6 +59,21 @@ def linux_backend(source):
         if source.count(old)!=1:raise ValueError('Backend source changed; update installer')
         source=source.replace(old,new)
     return source
+
+
+def migrate_state(legacy,folder):
+    for path in (legacy,folder):
+        if any((path/name).exists() for name in ('pending.txt','cloud-job.json')):
+            raise ValueError('Unresolved job; state not migrated')
+    if not folder.exists() and legacy.is_dir():
+        folder.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        with tempfile.TemporaryDirectory(prefix='.state-migrate-',dir=folder.parent) as work:
+            staged=Path(work)/'station'
+            shutil.copytree(legacy,staged,copy_function=shutil.copy2)
+            staged.chmod(0o700)
+            for name in ('cloud.json','enrollment.json'):
+                if (staged/name).exists():(staged/name).chmod(0o600)
+            staged.rename(folder)
 
 
 def main():
@@ -83,13 +98,15 @@ def main():
     if args.name is None and os.isatty(0):name=input('Printer name ['+name+']: ').strip() or name
     if not valid_name(name):raise ValueError('Invalid printer name')
     station=p['id'];queue='ESP32_'+station.replace('-','');uri=f'esp32capt://{host}:9100/{station}'
-    cache=Path('/var/cache/cups/esp32printer')/station
-    if any(Path('/var/cache/cups/esp32printer').glob('*/pending.txt')) or any(Path('/var/cache/cups/esp32printer').glob('*/cloud-job.json')):raise ValueError('Previous result uncertain. Inspect pending.txt; no automatic reprint or deletion.')
+    cache=Path('/var/lib/esp32printer')/station
+    roots=[Path('/var/lib/esp32printer'),Path('/var/cache/cups/esp32printer')]
+    if any(next(root.glob('*/'+name),None) for root in roots for name in ('pending.txt','cloud-job.json')):raise ValueError('Previous result uncertain. Inspect pending.txt; no automatic reprint or deletion.')
     if shutil.which('lpstat'):
         jobs=subprocess.run(['lpstat','-W','not-completed','-o'],capture_output=True,text=True)
         if any(line.startswith('ESP32_esp32') for line in jobs.stdout.splitlines()):raise ValueError('Resolve queued jobs before reinstalling; nothing deleted')
         old=subprocess.run(['lpstat','-v',queue],capture_output=True,text=True)
         if old.returncode==0 and not old.stdout.strip().endswith('/'+station):raise ValueError('Queue belongs to another device')
+    migrate_state(Path('/var/cache/cups/esp32printer')/station,cache)
     print('Installing:',name,host,station,flush=True)
     run('apt-get','update')
     run('apt-get','install','-y','cups','cups-client','cups-filters','cups-ipp-utils','python3',

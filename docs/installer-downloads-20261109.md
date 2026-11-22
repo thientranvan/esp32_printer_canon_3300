@@ -42,10 +42,12 @@ Trang ESP đã đổi nội dung/lệnh tải theo luồng ba máy trong firmwar
 ## SHA-256 snapshot bộ cài hiện tại
 
 - `installers/ESP32PrinterSetup.exe`: `df45e3f6012839b96c6f60c57e53149a16fa88b63c9be0f7ebda5f779ea68574`
-- `install_mac.sh`: `5363a3c9208e2c042558410bc8ee88385675b3e8d92aad320ea9511a2b935f0d`
-- `install_ubuntu.py`: `65aa2b60b6cb72873fd47abcd2776ad04bd849a218f007da1efdd6dbb35639ec`
+- `install_mac.sh`: `0885c8b345be48ecb5c782bd2234d4c8951483395055f02e36b14f7574f7cc2c`
+- `install_ubuntu.py`: `92b4fd183147cac78b33ab70113b791ea5a95f2e93aae828c56e091cce78db6c`
 - `installers/esp32-printer-setup-v3.ps1`: `dbd7e377d05caa4d617d41ba52f456559b1faa3b414f60818598f7e80f5200fa`
 
 Các docs liên quan: [remote install contract](https://github.com/thientranvan/esp32_printer_canon_3300/blob/main/docs/all-stations-remote-install-20261109.md), [Mac acceptance](https://github.com/thientranvan/esp32_printer_canon_3300/blob/main/docs/all-stations-mac-acceptance-20261109.md). Source bộ cài đã lên Git trước thay đổi trang ESP; cập nhật này không yêu cầu người dùng cài lại chỉ để đổi văn bản download.
 
 Cập nhật 22/11: bộ cài Mac giữ credential/checkpoint/receipt tại `/Library/Application Support/ESP32Printer/<station_id>` thay vì cache; Mac đã cài bản cũ nên chạy lại lúc hàng đợi rảnh. Không cần cập nhật firmware cho thay đổi này.
+
+Cập nhật bổ sung 22/11: Ubuntu lưu state ở `/var/lib/esp32printer` và migration từ cache cũ. Mac/Ubuntu migration qua staging + rename, chặn lệnh chưa giải quyết. Windows giữ ProgramData; EXE không đổi. Cập nhật checksum/mirror cả hai script theo snapshot mới.

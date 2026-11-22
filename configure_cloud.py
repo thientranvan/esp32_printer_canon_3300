@@ -42,7 +42,7 @@ def main():
     raw=a.config.read_bytes();c=validate(raw)
     if os.name=='nt':folder=Path(os.environ['ProgramData'])/'ESP32Printer/Stations'/c['station_id']
     elif sys.platform=='darwin':folder=Path('/Library/Application Support/ESP32Printer')/c['station_id']
-    else:folder=Path('/var/cache/cups/esp32printer')/c['station_id']
+    else:folder=Path('/var/lib/esp32printer')/c['station_id']
     save(raw,folder,c['station_id']);print('Cloud fallback configured:',c['station_id'])
 
 
