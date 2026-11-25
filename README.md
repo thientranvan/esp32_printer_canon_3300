@@ -1,6 +1,6 @@
 # ESP32-S3 Canon LBP3300 LAN print server
 
-Bản thử AirPrint/IPP **2026112501** đã có tại [firmware/experimental](firmware/experimental/README.md): URF/PWG → Hi-SCoA trên ESP, không renderer VPS cho đường LAN. **Chưa nghiệm thu điện thoại/giấy thật, chưa bật trên OTA chính thức.** Xem [phạm vi và cách thử](docs/airprint-implementation-20261125.md).
+AirPrint/IPP preview **2026112502** được phát hành qua OTA theo yêu cầu người dùng: URF/PWG → Hi-SCoA trên ESP, không renderer VPS cho đường LAN. **Chưa nghiệm thu điện thoại/giấy thật.** Bo chỉ cập nhật khi rảnh. Xem [release OTA](docs/airprint-ota-release-20261125.md) và [giới hạn tính năng](docs/airprint-implementation-20261125.md).
 
 Mac từ 22/11/2026 lưu identity, khóa cloud và receipt bền vững trong `/Library/Application Support/ESP32Printer/<station_id>`; cài lại bộ cài mới lúc hàng đợi rảnh để di chuyển dữ liệu cache cũ.
 

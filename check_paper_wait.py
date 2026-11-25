@@ -10,6 +10,7 @@ harness=r'''
 #include <cstdio>
 static unsigned now=1,cloudFaultTime=0,clears=0,waits=0;
 static bool cloudTracking=true,cancel=false;static int paper=0;
+static struct {bool value=false;bool load(){return value;}} ippBusy;
 static uint8_t cloudBuffer[64];static int cloudLock=0,jobLock=0;
 #define portENTER_CRITICAL(x) (void)(x)
 #define portEXIT_CRITICAL(x) (void)(x)

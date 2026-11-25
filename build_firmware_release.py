@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix='esp32-public-ota-') as build:
  subprocess.run([shutil.which('arduino-cli') or '/opt/homebrew/bin/arduino-cli','compile',
   '--fqbn','esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=default,FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB',
   '--build-property','tools.ctags.cmd.path=/usr/bin/true',
-  '--build-property','compiler.cpp.extra_flags=-DESP32_PUBLIC_OTA_BUILD',
+  '--build-property','compiler.cpp.extra_flags=-DESP32_PUBLIC_OTA_BUILD -DESP32_AIRPRINT_EXPERIMENTAL',
   '--build-property','compiler.c.elf.extra_flags=-Wl,--wrap=enum_install,--wrap=enum_process',
   '--build-path',build,str(ROOT/'station')],check=True,env=env)
  image=Path(build,'station.ino.bin').read_bytes()
@@ -24,5 +24,5 @@ with tempfile.TemporaryDirectory(prefix='esp32-public-ota-') as build:
  target=ROOT/'firmware';target.mkdir(exist_ok=True)
  # One Git commit must publish both files. Hash mismatch across CDN caches fails closed.
  (target/'station.bin').write_bytes(image)
- (target/'latest.json').write_text(json.dumps({'schema':1,'version':version,'board':'esp32-s3-n16r8','bytes':len(image),'sha256':hashlib.sha256(image).hexdigest()},indent=2)+'\n')
+ (target/'latest.json').write_text(json.dumps({'schema':1,'version':version,'board':'esp32-s3-n16r8','bytes':len(image),'sha256':hashlib.sha256(image).hexdigest(),'release_stage':'airprint-preview','hardware_validated':False},indent=2)+'\n')
  print(f'Public OTA {version}: {len(image)} bytes; no private build artifacts copied.')

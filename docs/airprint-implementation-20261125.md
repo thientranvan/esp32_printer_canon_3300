@@ -1,5 +1,7 @@
 # AirPrint/IPP LBP3300 — bản thử 2026112501
 
+**Cập nhật tiếp cùng ngày:** người dùng yêu cầu OTA cho các bo. Bản 2026112502 bật IPP trên public OTA; job AirPrint báo source `lan` để tương thích điều khiển server. Chưa nghiệm thu hardware. Những đoạn mô tả chỉ-build/OTA chưa bật bên dưới ghi lại giai đoạn 2026112501. Xem [release OTA](airprint-ota-release-20261125.md).
+
 ## Phạm vi theo người dùng
 
 Người dùng yêu cầu triển khai driverless LAN; sau đó chọn **chưa có thiết bị, chỉ build bản thử**. Chưa nạp lên Máy 1/2/3, chưa thay stable OTA, chưa xác nhận iPhone/Android phát hiện hoặc giấy thật. Bản thử riêng, không gọi là hỗ trợ AirPrint đã nghiệm thu.

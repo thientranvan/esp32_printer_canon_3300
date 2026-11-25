@@ -139,7 +139,7 @@ static String jobStatusJSON(const PrintControl::Job &j) {
 }
 static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
-  auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && (!strcmp(j.source,"lan")||!strcmp(j.source,"ipp"));
+  auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
   String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||!captFresh())?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
   String body="{\"schema\":1,\"wifi_diagnostics\":"+wifiDiagnosticsJSON()+",\"firmware\":"+firmwareJSON()+",\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
@@ -276,7 +276,7 @@ static bool cloudCounters(unsigned *c) {
     if(cloudTracking&&!cloudRecovery.observe(c[3]))return false;
     unsigned done=cloudRecovery.confirmed;
     portENTER_CRITICAL(&cloudLock);cloudView.completed=done;portEXIT_CRITICAL(&cloudLock);
-    auto j=jobSnapshot();if(j.active&&(!strcmp(j.source,"cloud")||!strcmp(j.source,"ipp"))){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
+    auto j=jobSnapshot();if(j.active&&(!strcmp(j.source,"cloud")||ippBusy.load())){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
     auto flags=CaptStatus::decode(cloudBuffer);
     if(!cloudPollPaper())return false;
     // Cloud renderer selects Cassette 1. General A0A8 does not reliably keep

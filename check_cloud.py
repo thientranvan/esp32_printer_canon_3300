@@ -175,6 +175,7 @@ static uint8_t cloudBuffer[4096];static int cloudLock=0,jobLock=0;
 #define pdMS_TO_TICKS(x) (x)
 static struct {unsigned completed;} cloudView;
 static PrintRecovery::Checkpoint cloudRecovery;static bool cloudTracking=true;
+static struct {bool value=false;bool load(){return value;}} ippBusy;
 static uint32_t cloudFaultTime=0,tick=0;
 static uint32_t millis(){return tick;}
 static PrintControl::Job currentJob;
@@ -220,6 +221,9 @@ int main(){
  // Rejected acknowledgement cannot produce a false Ready or replay.
  latched=true;rejectClear=true;assert(!cloudCounters(c));assert(errorClears==2&&misprintClears==1);
  latched=false;rejectClear=false;
+ // AirPrint uses LAN source for existing server controls but shares this counter engine.
+ strcpy(currentJob.source,"lan");ippBusy.value=true;currentJob.completed=0;queries=10;
+ assert(cloudCounters(c)&&currentJob.completed==2);ippBusy.value=false;strcpy(currentJob.source,"cloud");
  queries=serviceQueries=0;cancelOnWait=true;assert(!cloudCounters(c));assert(queries==1&&currentJob.stopping());
  puts("PASS: production cloud service/jam/cover/paper wait, ready in same session, preserved progress, cancellation during fault");
 }

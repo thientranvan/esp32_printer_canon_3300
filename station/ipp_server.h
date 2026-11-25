@@ -117,7 +117,7 @@ static void printTask(void*){
   // Keep the firmware admission gate while handing the reserved USB owner to the engine.
   releaseCapt(CaptFirmwareOwner);while(!claimCapt(CloudOwner))vTaskDelay(pdMS_TO_TICKS(10));
   Prepared::Job job;bool valid=Prepared::parse(spool,spoolSize,job);String name=String("ipp-")+id;
-  jobBegin(name.c_str(),"ipp",true);jobMetadata(title,"AirPrint","ipp");jobProgress(jobPages,0);
+  jobBegin(name.c_str(),"lan",true);jobMetadata(title,"AirPrint","ipp");jobProgress(jobPages,0);
   std::vector<uint8_t> flags;for(auto side:job.plan)flags.push_back(side.flag);cloudRecovery.begin(name.c_str(),flags,printerEpoch.load());jobRecoveryProgress(cloudRecovery);
   portENTER_CRITICAL(&lock);ippState=5;portEXIT_CRITICAL(&lock);
   bool done=valid&&cloudPrint(job);cloudTracking=false;
