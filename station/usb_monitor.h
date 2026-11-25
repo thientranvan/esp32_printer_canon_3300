@@ -28,6 +28,8 @@ static std::atomic<uint32_t> printerEpoch{0};
 // Requested under the CAPT arbiter; USB client owns all lifecycle work.
 static std::atomic<int> printerRepair{0},printerRepairError{0}; // 0 idle, 1 queued, 2 active, 3 ACK, 4 failed
 static std::atomic<bool> printerRepairAwaitingStatus{false};
+static std::atomic<unsigned> printerRepairStep{0};
+static std::atomic<int> printerRepairTransferStatus{-1};
 static bool usbTaskStarted = false;
 static portMUX_TYPE usbLock = portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<int> usbDaemonError{0};
@@ -153,7 +155,7 @@ static esp_err_t startPrinterRepair(usb_host_client_handle_t client,USBContext &
   memcpy(t->data_buffer,step==1?reset:clear,8);
   t->device_handle=context.device;t->bEndpointAddress=0;t->num_bytes=8;
   t->callback=printerProbeDone;t->context=&context;
-  context.probeDone=false;context.repairStep=step;
+  context.probeDone=false;context.repairStep=step;printerRepairStep.store(step);printerRepairTransferStatus.store(-1);
   error=usb_host_transfer_submit_control(client,t);
   if(error!=ESP_OK){usb_host_transfer_free(t);context.probe=nullptr;context.repairStep=0;}
   return error;
@@ -180,7 +182,7 @@ static void servicePrinterRepair(usb_host_client_handle_t client,USBContext &con
     if(!context.probeDone)return; // Never free or reuse an in-flight control request.
     int error=context.gone?ESP_ERR_INVALID_STATE:
       context.probe->status==USB_TRANSFER_STATUS_COMPLETED?ESP_OK:ESP_FAIL;
-    unsigned step=context.repairStep;
+    unsigned step=context.repairStep;printerRepairTransferStatus.store(int(context.probe->status));
     usb_host_transfer_free(context.probe);context.probe=nullptr;context.probeDone=false;
     if(error==ESP_OK&&step<3){
       error=startPrinterRepair(client,context,step+1);
@@ -191,7 +193,7 @@ static void servicePrinterRepair(usb_host_client_handle_t client,USBContext &con
   if(printerRepair.load()!=1)return;
   if(context.gone||!context.device||!context.claimed){finishPrinterRepair(context,status,ESP_ERR_INVALID_STATE);return;}
   if(context.probe||captCommand.transfer)return;
-  status.recovering=true;++status.recoveries;publishUSB(status);printerRepair.store(2);
+  status.recovering=true;++status.recoveries;publishUSB(status);printerRepair.store(2);printerRepairStep.store(0);printerRepairTransferStatus.store(-1);
   int error=ESP_OK;
   for(unsigned ep:{0x01u,0x82u}){
     if(error==ESP_OK)error=usb_host_endpoint_halt(context.device,ep);

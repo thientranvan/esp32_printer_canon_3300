@@ -13,6 +13,7 @@
 #include "device_secret.h"
 #endif
 static std::atomic<bool> firmwareCheckPending{false},cloudClaiming{false};
+static std::atomic<bool> ippBusy{false};
 String devicePassword;
 #include "usb_monitor.h"
 #include "capt_tcp.h"
@@ -94,6 +95,7 @@ static String firmwareJSON();
 #include "cloud_print.h"
 #include "firmware_update.h"
 #include "client_enrollment.h"
+#include "ipp_server.h"
 #include "realtime.h"
 #include "status_led.h"
 
@@ -741,6 +743,9 @@ void setup() {
   if(xTaskCreate(realtimeTask,"dashboard-events",12288,nullptr,1,nullptr)!=pdPASS)Serial.println("Dashboard SSE task failed");
   startCloud();
   startFirmwareUpdate();
+#ifdef ESP32_AIRPRINT_EXPERIMENTAL
+  if(healthy&&!AirPrint::start())Serial.println("IPP experimental startup failed; discovery disabled");
+#endif
   const esp_reset_reason_t resetReason = esp_reset_reason();
   if (resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||
       resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT) {

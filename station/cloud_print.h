@@ -18,6 +18,7 @@ static CloudView cloudView={"disabled","","",0,0,0,0,0,0,0,false};
 static bool cloudBusy() { return cloudWorking.load(); }
 static CloudView cloudSnapshot() { portENTER_CRITICAL(&cloudLock); auto v=cloudView; portEXIT_CRITICAL(&cloudLock); return v; }
 static void cloudState(const char *state,const char *error="",const char *waitReason="") {
+  if(ippBusy.load())return;
   portENTER_CRITICAL(&cloudLock); strlcpy(cloudView.state,state,sizeof(cloudView.state)); strlcpy(cloudView.error,error,sizeof(cloudView.error)); strlcpy(cloudView.waitReason,waitReason,sizeof(cloudView.waitReason)); portEXIT_CRITICAL(&cloudLock);
 }
 static String cloudStatusJSON() {
@@ -138,7 +139,7 @@ static String jobStatusJSON(const PrintControl::Job &j) {
 }
 static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
 static String cloudHeartbeatBody() {
-  auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && !strcmp(j.source,"lan");
+  auto u=readUSB();auto j=jobSnapshot();bool lanJob=j.id[0] && (!strcmp(j.source,"lan")||!strcmp(j.source,"ipp"));
   String printer=u.recovering?"recovering":(u.error||captFault())?"error":!u.connected?"disconnected":(!u.responsive||!captFresh())?"unresponsive":(lanJob&&j.active)?"busy_lan":cloudWorking.load()?"busy_cloud":"idle";
   String body="{\"schema\":1,\"wifi_diagnostics\":"+wifiDiagnosticsJSON()+",\"firmware\":"+firmwareJSON()+",\"status_source\":\"esp32\",\"boot_id\":"+jsonString(cloudBoot)+",\"name\":"+jsonString(stationName)+
     ",\"ip\":"+jsonString(WiFi.localIP().toString())+",\"uptime_s\":"+millis()/1000+
@@ -275,7 +276,7 @@ static bool cloudCounters(unsigned *c) {
     if(cloudTracking&&!cloudRecovery.observe(c[3]))return false;
     unsigned done=cloudRecovery.confirmed;
     portENTER_CRITICAL(&cloudLock);cloudView.completed=done;portEXIT_CRITICAL(&cloudLock);
-    auto j=jobSnapshot();if(j.active&&!strcmp(j.source,"cloud")){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
+    auto j=jobSnapshot();if(j.active&&(!strcmp(j.source,"cloud")||!strcmp(j.source,"ipp"))){jobProgress(j.total,done);jobRecoveryProgress(cloudRecovery);}
     auto flags=CaptStatus::decode(cloudBuffer);
     if(!cloudPollPaper())return false;
     // Cloud renderer selects Cassette 1. General A0A8 does not reliably keep
@@ -467,7 +468,7 @@ static void cloudTask(void *) {
         id="";lease="";state="";error="";
         portENTER_CRITICAL(&cloudLock);cloudView.job[0]=0;cloudView.progressKnown=false;cloudView.total=cloudView.completed=cloudView.submitted=0;portEXIT_CRITICAL(&cloudLock);
       }
-    }else if(!firmwareCheckPending.load() && !jobSnapshot().needsCleanup() && captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
+    }else if(!ippBusy.load() && !firmwareCheckPending.load() && !jobSnapshot().needsCleanup() && captFresh() && !captFault() && readUSB().connected && readUSB().responsive && !readUSB().recovering && !captTCPState.load() && strcmp(jobSnapshot().state,"uncertain") && strcmp(jobSnapshot().state,"waiting_printer")) {
       cloudClaiming.store(true);
       struct ClaimGuard {~ClaimGuard(){cloudClaiming.store(false);}} claimGuard;
       if(firmwareCheckPending.load()){vTaskDelay(pdMS_TO_TICKS(100));continue;}

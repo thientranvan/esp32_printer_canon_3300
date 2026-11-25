@@ -28,7 +28,7 @@ static void captTransferFailed(int error,unsigned endpoint) {
 }
 static String captTransportJSON() {
   return String("{\"repair_state\":")+printerRepair.load()+",\"repair_error\":"+printerRepairError.load()+",\"state\":"+captCommand.state.load()+",\"failures\":"+captFailures.load()+
-    ",\"first_error\":"+captFirstError.load()+",\"first_opcode\":"+captFirstOpcode.load()+",\"first_endpoint\":"+captFirstEndpoint.load()+
+    ",\"repair_step\":"+printerRepairStep.load()+",\"repair_transfer_status\":"+printerRepairTransferStatus.load()+",\"first_error\":"+captFirstError.load()+",\"first_opcode\":"+captFirstOpcode.load()+",\"first_endpoint\":"+captFirstEndpoint.load()+
     ",\"last_error\":"+captLastError.load()+",\"opcode\":"+captFailureOpcode.load()+
     ",\"endpoint\":"+captFailureEndpoint.load()+",\"error_age_ms\":"+
     (captFailures.load()?String(uint32_t(millis()-captFailureAt.load())):String("null"))+"}";

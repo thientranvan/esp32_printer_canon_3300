@@ -21,6 +21,8 @@ static struct {std::atomic<int> state{6};int error=0;void *transfer=nullptr;} ca
 static struct {void reset(){}} captFrames;
 static std::atomic<int> printerRepair{1},printerRepairError{0};
 static std::atomic<bool> printerRepairAwaitingStatus{false};
+static std::atomic<unsigned> printerRepairStep{0};
+static std::atomic<int> printerRepairTransferStatus{-1};
 static std::atomic<unsigned> printerEpoch{1};
 static struct {template<class...T>void printf(const char*,T...){}} Serial;
 static unsigned allocations=0,frees=0,failSubmit=0,submitted=0;
@@ -88,6 +90,7 @@ int main(){
   while(c.probe){unsigned step=c.repairStep;c.probe->status=step==failure?ESP_FAIL:0;c.probe->callback(c.probe);servicePrinterRepair(nullptr,c,s);}
   assert(allocations==frees&&!s.recovering&&captCommand.state==3);
   assert(printerRepair==(failure?4:3));assert(submitted==(failure?failure:3));
+  assert(printerRepairStep==(failure?failure:3)&&printerRepairTransferStatus==(failure?ESP_FAIL:0));
   if(!failure)assert((ops==std::vector<unsigned>{0x101,0x201,0x182,0x282,1,2,3,0x301,0x382}));
  }
  for(unsigned failure=1;failure<=3;++failure){
