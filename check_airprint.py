@@ -50,6 +50,18 @@ for(size_t n=0;n<b.size();++n){auto bad=b;bad.resize(n);Request rejected;assert(
 Response bad(1);bad.bytes[3]=2;bad.group(2);bad.number(0x21,"copies",0);bad.end();Request no;assert(!parseBytes(bad.bytes,no));
 Response huge(1);huge.bytes[3]=2;huge.text(0x42,"job-name",std::string(129,'X'));huge.end();assert(!parseBytes(huge.bytes,no));
 Response options(1);options.bytes[3]=2;options.group(2);options.text(0x44,"sides","not-supported");options.end();assert(!parseBytes(options.bytes,no));
+// Replies must use the version requested by IPP clients (Android/CUPS probes 1.1).
+for(unsigned major:{1u,2u}){auto v=request();v[0]=major;v[1]=major==1?1:0;Request q;assert(parseBytes(v,q));Response answer(q);assert(answer.bytes[0]==v[0]&&answer.bytes[1]==v[1]);}
+// Android media-col, including nested media-size and margins, is not a flat keyword.
+Response media(17);media.bytes[3]=4;media.group(2);media.attr(0x34,"media-col",nullptr,0);
+media.text(0x4a,"","media-size");media.attr(0x34,"",nullptr,0);
+media.text(0x4a,"","x-dimension");media.number(0x21,"",21000);media.text(0x4a,"","y-dimension");media.number(0x21,"",29700);media.attr(0x37,"",nullptr,0);
+media.text(0x4a,"","media-type");media.text(0x44,"","stationery");media.text(0x4a,"","media-source");media.text(0x44,"","main");media.text(0x4a,"","media-top-margin");media.number(0x21,"",508);
+media.attr(0x37,"",nullptr,0);media.end();Request a4;assert(parseBytes(media.bytes,a4));
+for(size_t n=0;n<media.bytes.size();++n){auto truncated=media.bytes;truncated.resize(n);Request q;assert(!parseBytes(truncated,q));}
+auto letter=media.bytes;for(size_t i=0;i+4<=letter.size();++i)if(u32(letter.data()+i)==21000){letter[i+2]=0xff;break;}Request q;assert(!parseBytes(letter,q));
+Response target(12);target.bytes[3]=9;target.text(0x45,"job-uri","ipp://192.168.1.199:631/ipp/print/1234");target.end();Request poll;assert(parseBytes(target.bytes,poll)&&poll.job==1234);
+
 }
 ''')
  check=folder/'ipp';subprocess.run(['c++','-std=c++11','-fsanitize=address,undefined','-I'+str(ROOT),str(harness),'-o',str(check)],check=True);subprocess.run([str(check)],check=True)

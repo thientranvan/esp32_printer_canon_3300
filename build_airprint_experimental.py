@@ -1,8 +1,11 @@
 """Build opt-in AirPrint image. Never change stable firmware/latest.json or flash a board."""
 from pathlib import Path
-import hashlib,json,os,re,shutil,subprocess,tempfile
+import hashlib,json,os,re,shutil,subprocess,tempfile,argparse
 ROOT=Path(__file__).resolve().parent
-VERSION=2026112501
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--version',type=int,default=2026112501)
+VERSION=parser.parse_args().version
+if not 1<=VERSION<=0xffffffff:parser.error('version must be 1..4294967295')
 folder=ROOT/'firmware/experimental';folder.mkdir(exist_ok=True)
 env=os.environ.copy()
 python_envs=sorted((Path.home()/'.espressif/python_env').glob('idf*_env/bin'))

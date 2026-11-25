@@ -1,0 +1,13 @@
+{
+ NAME "ESP printer attributes (read only)"
+ OPERATION Get-Printer-Attributes
+ GROUP operation-attributes-tag
+ ATTR charset attributes-charset utf-8
+ ATTR language attributes-natural-language en
+ ATTR uri printer-uri $uri
+ ATTR keyword requested-attributes all
+ STATUS successful-ok
+ EXPECT printer-uri-supported OF-TYPE uri
+ EXPECT document-format-supported OF-TYPE mimeMediaType
+ EXPECT printer-is-accepting-jobs OF-TYPE boolean
+}

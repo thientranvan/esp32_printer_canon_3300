@@ -629,7 +629,7 @@ void setup() {
   server.on("/status", HTTP_GET, [] {
     if (!authorized()) return;
     USBStatus usb = readUSB();
-    String json = String("{\"firmware\":")+firmwareJSON()+",\"wifi_diagnostics\":"+wifiDiagnosticsJSON()+",\"status_source\":\"esp32\",\"server_queue\":"+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
+    String json = String("{\"ipp\":")+ippDiagnosticsJSON()+",\"firmware\":"+firmwareJSON()+",\"wifi_diagnostics\":"+wifiDiagnosticsJSON()+",\"status_source\":\"esp32\",\"server_queue\":"+serverQueueSnapshot()+",\"queue_command\":"+queueCommandJSON()+",\"job_control\":"+jobStatusJSON()+",\"station\":" + profileJSON() + ",\"network\":{\"ip\":" + jsonString(stationIP.toString()) + ",\"gateway\":" + jsonString(stationGateway.toString()) + ",\"mask\":" + jsonString(stationMask.toString()) + ",\"dns\":" + jsonString(stationDNS.toString()) + "},\"cloud\":" + cloudStatusJSON() + ",\"healthy\":" + (healthy ? "true" : "false") +
       ",\"connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
       ",\"connecting\":" + (connecting ? "true" : "false") +
       ",\"ssid\":" + jsonString(WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("")) +

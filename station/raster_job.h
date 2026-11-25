@@ -14,17 +14,17 @@ namespace RasterJob {
 inline uint32_t be32(const uint8_t *p){return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];}
 inline void le32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=n>>(8*i);}
 inline void le16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
-struct Format {unsigned width=0,height=0,bits=0,space=0;bool urf=false;};
+struct Format {unsigned width=0,height=0,bits=0,space=0,dpi=0;bool urf=false;};
 inline bool format(const uint8_t *h,bool urf,Format &f){
  f.urf=urf;f.width=be32(h+(urf?12:372));f.height=be32(h+(urf?16:376));f.bits=urf?h[0]:be32(h+388);
- unsigned dpi=be32(h+(urf?20:276));f.space=urf?(h[1]==0||h[1]==4?18:h[1]==1||h[1]==5?19:999):be32(h+400);
+ unsigned dpi=be32(h+(urf?20:276));f.dpi=dpi;f.space=urf?(h[1]==0||h[1]==4?18:h[1]==1||h[1]==5?19:999):be32(h+400);
  if(dpi!=600||(!urf&&be32(h+280)!=600)||f.width<4958||f.width>4962||f.height<7012||f.height>7016)return false;
  if(!((f.bits==1&&(f.space==18||f.space==3))||(f.bits==8&&f.space==18)||(f.bits==24&&f.space==19)))return false;
  if(!urf&&(be32(h+396)!=0||be32(h+392)!=(f.width*f.bits+7)/8||be32(h+384)!=(f.bits==1?1:8)||be32(h+420)!=(f.bits==24?3:1)))return false;
  return true;
 }
 // Read: bool(uint8_t*,size_t). Output: bool(const uint8_t*,size_t). AtEnd: bool().
-template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,AtEnd end,unsigned copies,unsigned duplex,unsigned &pages,void *(*allocate)(size_t)=std::malloc){
+template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,AtEnd end,unsigned copies,unsigned duplex,unsigned &pages,void *(*allocate)(size_t)=std::malloc,Format *observed=nullptr){
  pages=0;if(!copies||copies>99||duplex<1||duplex>3)return false;
  uint8_t magic[4];if(!read(magic,4))return false;bool urf=!memcmp(magic,"UNIR",4);
  unsigned declared=0;
@@ -38,7 +38,7 @@ template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,
  static const uint8_t threshold[16]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};
  while(!end()){
   if(pages==40)return false;
-  uint8_t header[1796]={};if(!read(header,urf?32:1796))return false;Format f;if(!format(header,urf,f))return false;
+  uint8_t header[1796]={};if(!read(header,urf?32:1796))return false;Format f;bool validFormat=format(header,urf,f);if(observed)*observed=f;if(!validFormat)return false;
   // Do not silently convert document-level duplex differently from the IPP job.
   if(urf){unsigned mode=header[2];if(mode>3||(mode&&mode!=(duplex==1?1:duplex==2?3:2)))return false;}
   else if(bool(be32(header+272))!=(duplex!=1)||(duplex!=1&&bool(be32(header+368))!=(duplex==3)))return false;

@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "channel": "samsung-compatibility-canary",
+  "version": 2026112503,
+  "board": "esp32-s3-n16r8",
+  "file": "airprint-2026112503.bin",
+  "bytes": 1419680,
+  "sha256": "66f02afc67ae8b6f6e0d4a939e2108ec2f3b86f92bba4011cf9e3aabfbf60fe1",
+  "hardware_validated": false,
+  "protocol_validation_on_machine1": true
+}
