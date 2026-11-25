@@ -9,13 +9,14 @@ namespace AirPrint {
 static WiFiServer listener(631);
 static portMUX_TYPE lock=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t *spool=nullptr;static size_t spoolSize=0;
-static unsigned jobId=0,nextId=1,ippState=3,jobPages=0,copies=1,duplex=1;
+static unsigned jobId=0,nextId=1,ippState=3,jobPages=0,jobCompleted=0,copies=1,duplex=1;
 static char title[129]="AirPrint";static bool pending=false;
 
 struct Diagnostic {unsigned requests=0,operation=0,http=0,status=0,width=0,height=0,dpi=0,bits=0,space=0;size_t received=0;uint32_t at=0;char attribute[129]={},format[64]={},phase[32]="idle";};
 static Diagnostic diagnostic,lastFailure;
-static void beginRequest(){portENTER_CRITICAL(&lock);++diagnostic.requests;diagnostic.operation=diagnostic.http=diagnostic.status=0;diagnostic.received=0;diagnostic.width=diagnostic.height=diagnostic.dpi=diagnostic.bits=diagnostic.space=0;diagnostic.format[0]=0;diagnostic.at=millis();diagnostic.attribute[0]=0;strcpy(diagnostic.phase,"http");portEXIT_CRITICAL(&lock);}
-static void recordRequest(const Ipp::Request&r,size_t received,const char*phase){portENTER_CRITICAL(&lock);diagnostic.operation=r.operation;strlcpy(diagnostic.format,r.format.c_str(),sizeof(diagnostic.format));diagnostic.received=received;strlcpy(diagnostic.attribute,r.attribute.c_str(),sizeof(diagnostic.attribute));strlcpy(diagnostic.phase,phase,sizeof(diagnostic.phase));portEXIT_CRITICAL(&lock);}
+static void publishDiagnostic(const Diagnostic &d){portENTER_CRITICAL(&lock);unsigned count=diagnostic.requests;diagnostic=d;diagnostic.requests=count;portEXIT_CRITICAL(&lock);}
+static void beginRequest(Diagnostic &d){d.at=millis();strcpy(d.phase,"http");portENTER_CRITICAL(&lock);d.requests=++diagnostic.requests;diagnostic=d;portEXIT_CRITICAL(&lock);}
+static void recordRequest(Diagnostic &d,const Ipp::Request&r,size_t received,const char*phase){d.operation=r.operation;strlcpy(d.format,r.format.c_str(),sizeof(d.format));d.received=received;strlcpy(d.attribute,r.attribute.c_str(),sizeof(d.attribute));strlcpy(d.phase,phase,sizeof(d.phase));publishDiagnostic(d);}
 static String diagnosticsJSON(){portENTER_CRITICAL(&lock);auto d=diagnostic;auto e=lastFailure;portEXIT_CRITICAL(&lock);return String("{\"enabled\":true,\"requests\":")+d.requests+",\"operation\":"+d.operation+",\"format\":"+jsonString(d.format)+",\"width\":"+d.width+",\"height\":"+d.height+",\"dpi\":"+d.dpi+",\"bits\":"+d.bits+",\"space\":"+d.space+",\"http\":"+d.http+",\"ipp_status\":"+d.status+",\"received\":"+String(uint32_t(d.received))+",\"age_ms\":"+(d.at?String(uint32_t(millis()-d.at)):String("null"))+",\"attribute\":"+jsonString(d.attribute)+",\"phase\":"+jsonString(d.phase)+",\"last_error_operation\":"+e.operation+",\"last_error_http\":"+e.http+",\"last_error_status\":"+e.status+",\"last_error_phase\":"+jsonString(e.phase)+",\"last_error_attribute\":"+jsonString(e.attribute)+",\"last_error_format\":"+jsonString(e.format)+",\"last_error_width\":"+e.width+",\"last_error_height\":"+e.height+",\"last_error_dpi\":"+e.dpi+",\"last_error_bits\":"+e.bits+",\"last_error_space\":"+e.space+",\"last_error_age_ms\":"+(e.at?String(uint32_t(millis()-e.at)):String("null"))+"}";}
 static const size_t MaxBody=64*1024*1024;
 struct Body {
@@ -33,14 +34,14 @@ struct Body {
  bool read(uint8_t *p,size_t n){while(n){if(!next()){failed=true;return false;}size_t part=min(n,chunked?chunk:remaining);if(part>MaxBody-consumed||!raw(p,part)){failed=true;return false;}consumed+=part;p+=part;n-=part;if(chunked){chunk-=part;if(!chunk){uint8_t crlf[2];if(!raw(crlf,2)||memcmp(crlf,"\r\n",2)){failed=true;return false;}}}else remaining-=part;}return true;}
  bool end(){bool more=next();return !more&&!failed;}
 };
-static void reply(WiFiClient &client,Ipp::Response &r){portENTER_CRITICAL(&lock);diagnostic.http=200;diagnostic.status=Ipp::u16(r.bytes.data()+2);if(diagnostic.status>=0x0400&&(diagnostic.status!=0x0507||!lastFailure.status))lastFailure=diagnostic;portEXIT_CRITICAL(&lock);r.end();client.printf("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %u\r\n\r\n",unsigned(r.bytes.size()));size_t at=0;while(at<r.bytes.size()){size_t n=client.write(r.bytes.data()+at,r.bytes.size()-at);if(!n)break;at+=n;}}
-static void httpError(WiFiClient &c,unsigned code){portENTER_CRITICAL(&lock);diagnostic.http=code;strcpy(diagnostic.phase,"http-error");if(code!=404||!lastFailure.status)lastFailure=diagnostic;portEXIT_CRITICAL(&lock);c.printf("HTTP/1.1 %u Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",code);}
+static void reply(WiFiClient &client,Ipp::Response &r,Diagnostic &d){portENTER_CRITICAL(&lock);d.http=200;d.status=Ipp::u16(r.bytes.data()+2);if(d.status>=0x0400&&(d.status!=0x0507||!lastFailure.status))lastFailure=d;portEXIT_CRITICAL(&lock);publishDiagnostic(d);r.end();client.printf("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %u\r\n\r\n",unsigned(r.bytes.size()));size_t at=0;while(at<r.bytes.size()){size_t n=client.write(r.bytes.data()+at,r.bytes.size()-at);if(!n)break;at+=n;}if(at!=r.bytes.size()){strcpy(d.phase,"response-write-failed");portENTER_CRITICAL(&lock);lastFailure=d;portEXIT_CRITICAL(&lock);publishDiagnostic(d);}}
+static void httpError(WiFiClient &c,unsigned code,Diagnostic &d){portENTER_CRITICAL(&lock);d.http=code;strcpy(d.phase,"http-error");if(code!=404||!lastFailure.status)lastFailure=d;portEXIT_CRITICAL(&lock);publishDiagnostic(d);c.printf("HTTP/1.1 %u Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",code);}
 static std::string uri(){return std::string("ipp://")+WiFi.localIP().toString().c_str()+":631/ipp/print";}
 static void jobAttributes(Ipp::Response &r){
- portENTER_CRITICAL(&lock);unsigned id=jobId,state=ippState,pages=jobPages;portEXIT_CRITICAL(&lock);
- auto j=jobSnapshot();r.group(2);r.text(0x45,"job-printer-uri",uri());r.text(0x42,"job-name",title);r.text(0x42,"job-originating-user-name","LAN client");r.number(0x21,"job-id",id);r.text(0x45,"job-uri",uri()+"/"+std::to_string(id));r.number(0x23,"job-state",state);
+ portENTER_CRITICAL(&lock);unsigned id=jobId,state=ippState,pages=jobPages,completed=jobCompleted;char name[129];strlcpy(name,title,sizeof(name));portEXIT_CRITICAL(&lock);
+ auto j=jobSnapshot();r.group(2);r.text(0x45,"job-printer-uri",uri());r.text(0x42,"job-name",name);r.text(0x42,"job-originating-user-name","LAN client");r.number(0x21,"job-id",id);r.text(0x45,"job-uri",uri()+"/"+std::to_string(id));r.number(0x23,"job-state",state);
  r.text(0x44,"job-state-reasons",state==9?"job-completed-successfully":state==7?"job-canceled-by-user":state==8?"aborted-by-system":state==5?"job-printing":"job-incoming");
- r.number(0x21,"job-impressions",pages);r.number(0x21,"job-impressions-completed",j.matches((std::string("ipp-")+std::to_string(id)).c_str())?j.completed:0);
+ r.number(0x21,"job-impressions",pages);r.number(0x21,"job-impressions-completed",j.matches((std::string("ipp-")+std::to_string(id)).c_str())?j.completed:completed);
 }
 static void mediaCollection(Ipp::Response &r,const char *name){
  r.attr(0x34,name,nullptr,0);r.text(0x4a,"","media-size");r.attr(0x34,"",nullptr,0);
@@ -69,73 +70,78 @@ static void printerAttributes(Ipp::Response &r){
  r.boolean("color-supported",false);r.text(0x44,"print-color-mode-default","monochrome");r.text(0x44,"print-color-mode-supported","monochrome");
  r.resolution("printer-resolution-default");r.resolution("printer-resolution-supported");r.resolution("pwg-raster-document-resolution-supported");
  r.text(0x44,"pwg-raster-document-type-supported","black_1");r.text(0x44,"","sgray_1");r.text(0x44,"","sgray_8");r.text(0x44,"","srgb_8");
- r.text(0x44,"pwg-raster-document-sheet-back","normal");
- first=true;for(const char *v:{"V1.4","W8","SRGB24","RS600","DM1"}){r.text(0x44,first?"urf-supported":"",v);first=false;}
+ r.text(0x44,"pwg-raster-document-sheet-back","rotated");
+ first=true;for(const char *v:{"V1.4","W8","SRGB24","RS600","DM3"}){r.text(0x44,first?"urf-supported":"",v);first=false;}
  r.range("copies-supported",1,99);r.number(0x21,"copies-default",1);r.number(0x21,"number-up-default",1);r.number(0x21,"number-up-supported",1);
  r.text(0x44,"multiple-document-handling-default","separate-documents-collated-copies");r.text(0x44,"multiple-document-handling-supported","separate-documents-collated-copies");
  r.boolean("multiple-document-jobs-supported",false);r.number(0x23,"orientation-requested-default",3);r.number(0x23,"orientation-requested-supported",3);
  r.number(0x21,"printer-up-time",millis()/1000);r.number(0x23,"print-quality-default",4);r.number(0x23,"print-quality-supported",4);
 }
 static void handle(WiFiClient &client){
- beginRequest();Body body{client};String line;if(!body.line(line,256)||!line.startsWith("POST /ipp/print")||(!line.endsWith(" HTTP/1.1")&&!line.endsWith(" HTTP/1.0"))){httpError(client,404);return;}
+ Diagnostic d;beginRequest(d);Body body{client};String line;if(!body.line(line,256)||!line.startsWith("POST /ipp/print")||(!line.endsWith(" HTTP/1.1")&&!line.endsWith(" HTTP/1.0"))){httpError(client,404,d);return;}
  String target=line.substring(5,line.lastIndexOf(' '));unsigned pathJob=0;
  if(target!="/ipp/print"){
-  if(!target.startsWith("/ipp/print/")||target.length()<=11){httpError(client,404);return;}
-  for(size_t i=11;i<target.length();++i){char c=target[i];if(c<'0'||c>'9'||pathJob>(0x7fffffff-unsigned(c-'0'))/10){httpError(client,404);return;}pathJob=pathJob*10+c-'0';}if(!pathJob){httpError(client,404);return;}
+  if(!target.startsWith("/ipp/print/")||target.length()<=11){httpError(client,404,d);return;}
+  for(size_t i=11;i<target.length();++i){char c=target[i];if(c<'0'||c>'9'||pathJob>(0x7fffffff-unsigned(c-'0'))/10){httpError(client,404,d);return;}pathJob=pathJob*10+c-'0';}if(!pathJob){httpError(client,404,d);return;}
  }
  bool lengthSeen=false,transferSeen=false,type=false,expect=false;unsigned headers=0;
  while(body.line(line,1024)&&line.length()){
-  if((headers+=line.length())>8192){httpError(client,431);return;}int colon=line.indexOf(':');if(colon<=0){httpError(client,400);return;}
+  if((headers+=line.length())>8192){httpError(client,431,d);return;}int colon=line.indexOf(':');if(colon<=0){httpError(client,400,d);return;}
   String key=line.substring(0,colon),value=line.substring(colon+1);key.toLowerCase();value.trim();
-  if(key=="content-length"){if(lengthSeen||!value.length()){httpError(client,400);return;}lengthSeen=true;for(char c:value){if(c<'0'||c>'9'||body.remaining>(MaxBody-unsigned(c-'0'))/10){httpError(client,413);return;}body.remaining=body.remaining*10+c-'0';}}
-  else if(key=="transfer-encoding"){if(transferSeen||value!="chunked"){httpError(client,400);return;}transferSeen=true;body.chunked=true;}
+  if(key=="content-length"){if(lengthSeen||!value.length()){httpError(client,400,d);return;}lengthSeen=true;for(char c:value){if(c<'0'||c>'9'||body.remaining>(MaxBody-unsigned(c-'0'))/10){httpError(client,413,d);return;}body.remaining=body.remaining*10+c-'0';}}
+  else if(key=="transfer-encoding"){if(transferSeen||value!="chunked"){httpError(client,400,d);return;}transferSeen=true;body.chunked=true;}
   else if(key=="content-type")type=value=="application/ipp";
-  else if(key=="expect"){if(value!="100-continue"){httpError(client,417);return;}expect=true;}
-  else if(key=="origin"){httpError(client,403);return;}
+  else if(key=="expect"){if(value!="100-continue"){httpError(client,417,d);return;}expect=true;}
+  else if(key=="origin"){httpError(client,403,d);return;}
  }
- if(line.length()||!type||lengthSeen==transferSeen){httpError(client,400);return;}
+ if(line.length()||!type||lengthSeen==transferSeen){httpError(client,400,d);return;}
  if(expect)client.print("HTTP/1.1 100 Continue\r\n\r\n");
  Ipp::Request request;auto read=[&](uint8_t*p,size_t n){return body.read(p,n);};
- if(!Ipp::parse(read,request)){recordRequest(request,body.consumed,"attributes-rejected");Ipp::Response r(request,0x0400);reply(client,r);return;}
- recordRequest(request,body.consumed,"attributes-ok");
+ if(!Ipp::parse(read,request)){recordRequest(d,request,body.consumed,"attributes-rejected");Ipp::Response r(request,0x0400);reply(client,r,d);return;}
+ recordRequest(d,request,body.consumed,"attributes-ok");
  std::string host=std::string("ipp://esp32-")+stationID.substring(12).c_str()+".local";
  std::string address=std::string("ipp://")+WiFi.localIP().toString().c_str();
- if(!request.uri.empty()&&request.uri!=address+":631/ipp/print"&&request.uri!=address+"/ipp/print"&&request.uri!=host+":631/ipp/print"&&request.uri!=host+"/ipp/print"){Ipp::Response r(request,0x0406);reply(client,r);return;}
- if(pathJob){if(request.job&&request.job!=pathJob){Ipp::Response r(request,0x0406);reply(client,r);return;}request.job=pathJob;}
+ if(!request.uri.empty()&&request.uri!=address+":631/ipp/print"&&request.uri!=address+"/ipp/print"&&request.uri!=host+":631/ipp/print"&&request.uri!=host+"/ipp/print"){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
+ if(pathJob){if(request.job&&request.job!=pathJob){Ipp::Response r(request,0x0406);reply(client,r,d);return;}request.job=pathJob;}
  Ipp::Response response(request);
  if(request.operation==11)printerAttributes(response);
  else if(request.operation==8){
-  if(request.job!=jobId||!ippBusy.load()){Ipp::Response r(request,0x0406);reply(client,r);return;}
-  String id=String("ipp-")+jobId;if(!jobCommand(id,"cancel")){Ipp::Response r(request,0x0404);reply(client,r);return;}
+  if(request.job!=jobId||!ippBusy.load()){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
+  String id=String("ipp-")+jobId;if(!jobCommand(id,"cancel")){Ipp::Response r(request,0x0404);reply(client,r,d);return;}
  }else if(request.operation==9){
-  if(request.operation==9&&(!jobId||request.job!=jobId)){Ipp::Response r(request,0x0406);reply(client,r);return;}
+  if(request.operation==9&&(!jobId||request.job!=jobId)){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
   if(jobId)jobAttributes(response);
  }else if(request.operation==10){if(jobId)jobAttributes(response);}
- else if(request.operation==4){if(request.format!="image/urf"&&request.format!="image/pwg-raster"){Ipp::Response r(request,0x040a);reply(client,r);return;}}
+ else if(request.operation==4){if(request.format!="image/urf"&&request.format!="image/pwg-raster"){Ipp::Response r(request,0x040a);reply(client,r,d);return;}}
  else if(request.operation==2){
-  if(request.format!="image/urf"&&request.format!="image/pwg-raster"){Ipp::Response r(request,0x040a);reply(client,r);return;}
-  auto usb=readUSB();if(!usb.connected||!usb.responsive||!captFresh()||captFault()){Ipp::Response r(request,0x0506);reply(client,r);return;}
-  if(ippBusy.exchange(true)){Ipp::Response r(request,0x0507);reply(client,r);return;}
+  if(request.format!="image/urf"&&request.format!="image/pwg-raster"){Ipp::Response r(request,0x040a);reply(client,r,d);return;}
+  auto usb=readUSB();if(!usb.connected||!usb.responsive||!captFresh()||captFault()){Ipp::Response r(request,0x0506);reply(client,r,d);return;}
+  if(ippBusy.exchange(true)){Ipp::Response r(request,0x0507);reply(client,r,d);return;}
   bool reserved=false;uint32_t reserveAt=millis();do{if(firmwareReserve()){reserved=true;break;}if(!firmwareIdle()||firmwareCheckPending.load())break;vTaskDelay(pdMS_TO_TICKS(25));}while(uint32_t(millis()-reserveAt)<2000);
-  if(!reserved){ippBusy=false;Ipp::Response r(request,0x0507);reply(client,r);return;}
+  if(!reserved){ippBusy=false;Ipp::Response r(request,0x0507);reply(client,r,d);return;}
   spool=static_cast<uint8_t*>(ps_malloc(Prepared::Limit));spoolSize=0;unsigned pages=0;
-  recordRequest(request,body.consumed,"receiving-raster");
+  recordRequest(d,request,body.consumed,"receiving-raster");
   RasterJob::Format detected;bool firstRasterRead=true;
   auto rasterRead=[&](uint8_t*p,size_t n){if(!read(p,n))return false;if(firstRasterRead){firstRasterRead=false;return n==4&&!memcmp(p,request.format=="image/urf"?"UNIR":"RaS2",4);}return true;};
-  bool valid=spool&&RasterJob::convert(rasterRead,[&](const uint8_t*p,size_t n){if(n>Prepared::Limit-spoolSize)return false;memcpy(spool+spoolSize,p,n);spoolSize+=n;portENTER_CRITICAL(&lock);diagnostic.received=body.consumed;portEXIT_CRITICAL(&lock);vTaskDelay(pdMS_TO_TICKS(1));return true;},[&]{return body.end();},request.copies,request.duplex,pages,ps_malloc,&detected);
-  portENTER_CRITICAL(&lock);diagnostic.width=detected.width;diagnostic.height=detected.height;diagnostic.dpi=detected.dpi;diagnostic.bits=detected.bits;diagnostic.space=detected.space;portEXIT_CRITICAL(&lock);
+  bool valid=spool&&RasterJob::convert(rasterRead,[&](const uint8_t*p,size_t n){if(n>Prepared::Limit-spoolSize)return false;memcpy(spool+spoolSize,p,n);spoolSize+=n;d.received=body.consumed;publishDiagnostic(d);vTaskDelay(pdMS_TO_TICKS(1));return true;},[&]{return body.end();},request.copies,request.duplex,pages,ps_malloc,&detected);
+  d.width=detected.width;d.height=detected.height;d.dpi=detected.dpi;d.bits=detected.bits;d.space=detected.space;publishDiagnostic(d);
   if(valid){RasterJob::le16(spool+8,pages);Prepared::Job verify;valid=Prepared::parse(spool,spoolSize,verify);}
-  if(!valid){recordRequest(request,body.consumed,detected.error);free(spool);spool=nullptr;firmwareRelease();ippBusy=false;Ipp::Response r(request,0x0411);reply(client,r);return;}
-  recordRequest(request,body.consumed,"accepted");
-  portENTER_CRITICAL(&lock);jobId=nextId++;ippState=3;jobPages=pages*request.copies;strlcpy(title,request.title.c_str(),sizeof(title));pending=true;portEXIT_CRITICAL(&lock);
+  if(!valid){recordRequest(d,request,body.consumed,detected.error);free(spool);spool=nullptr;firmwareRelease();ippBusy=false;Ipp::Response r(request,0x0411);reply(client,r,d);return;}
+  recordRequest(d,request,body.consumed,"accepted");
+  portENTER_CRITICAL(&lock);jobId=nextId++;ippState=3;jobCompleted=0;jobPages=pages*request.copies;strlcpy(title,request.title.c_str(),sizeof(title));pending=true;portEXIT_CRITICAL(&lock);
   jobAttributes(response);
- }else{Ipp::Response r(request,0x0501);reply(client,r);return;}
- reply(client,response);
+ }else{Ipp::Response r(request,0x0501);reply(client,r,d);return;}
+ reply(client,response,d);
 }
+// A slow raster upload must not block Android's printer/job polling connection.
+static std::atomic<unsigned> httpClients{0};
+static void clientTask(void *arg){auto *client=static_cast<WiFiClient*>(arg);handle(*client);client->stop();delete client;--httpClients;vTaskDelete(nullptr);}
 static void serverTask(void*){
  listener.begin();while(true){WiFiClient client=listener.accept();if(!client){vTaskDelay(pdMS_TO_TICKS(10));continue;}
   auto mask=uint32_t(WiFi.subnetMask());if(!WiFi.isConnected()||!mask||(uint32_t(client.remoteIP())&mask)!=(uint32_t(WiFi.localIP())&mask)){client.stop();continue;}
-  handle(client);client.stop();
+  if(httpClients.load()>=2){client.print("HTTP/1.1 503 Busy\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");client.stop();continue;}
+  auto *connection=new(std::nothrow) WiFiClient(client);if(!connection){client.stop();continue;}
+  ++httpClients;if(xTaskCreate(clientTask,"ipp-http",16384,connection,1,nullptr)!=pdPASS){--httpClients;connection->stop();delete connection;}
  }
 }
 static void printTask(void*){
@@ -152,19 +158,20 @@ static void printTask(void*){
   if(!done&&jobSnapshot().stopping())cancelCapt(CloudOwner);
   bool cancelled=jobSnapshot().stopping();
   jobFinish(done?"completed":cancelled?"cancelled":cloudPreflight?"failed":"uncertain");
-  portENTER_CRITICAL(&lock);ippState=done?9:cancelled?7:8;portEXIT_CRITICAL(&lock);
+  auto finished=jobSnapshot();
+  portENTER_CRITICAL(&lock);jobCompleted=finished.completed;ippState=done?9:cancelled?7:8;portEXIT_CRITICAL(&lock);
   releaseCapt(CloudOwner);free(spool);spool=nullptr;spoolSize=0;firmwareCheckPending=false;ippBusy=false;
  }
 }
 static bool start(){
  nextId=(esp_random()&0x3fffffff)+1;
  TaskHandle_t worker=nullptr;if(xTaskCreate(printTask,"ipp-print",12288,nullptr,1,&worker)!=pdPASS)return false;
- if(xTaskCreate(serverTask,"ipp-server",16384,nullptr,1,nullptr)!=pdPASS){vTaskDelete(worker);return false;}
+ if(xTaskCreate(serverTask,"ipp-server",4096,nullptr,1,nullptr)!=pdPASS){vTaskDelete(worker);return false;}
  MDNS.addService("ipp","tcp",631);MDNS.addServiceTxt("ipp","tcp","txtvers","1");MDNS.addServiceTxt("ipp","tcp","qtotal","1");MDNS.addServiceTxt("ipp","tcp","rp","ipp/print");
  MDNS.addServiceTxt("ipp","tcp","ty","Canon LBP3300");MDNS.addServiceTxt("ipp","tcp","note",stationName.c_str());MDNS.addServiceTxt("ipp","tcp","pdl","image/urf,image/pwg-raster");
  MDNS.addServiceTxt("ipp","tcp","UUID",(String("00000000-0000-4000-8000-")+stationID.substring(6)).c_str());
  MDNS.addServiceTxt("ipp","tcp","priority","0");MDNS.addServiceTxt("ipp","tcp","usb_MFG","Canon");MDNS.addServiceTxt("ipp","tcp","usb_MDL","LBP3300");
- MDNS.addServiceTxt("ipp","tcp","URF","V1.4,CP1,W8,SRGB24,RS600,DM1");MDNS.addServiceTxt("ipp","tcp","Color","F");MDNS.addServiceTxt("ipp","tcp","Duplex","T");
+ MDNS.addServiceTxt("ipp","tcp","URF","V1.4,CP1,W8,SRGB24,RS600,DM3");MDNS.addServiceTxt("ipp","tcp","Color","F");MDNS.addServiceTxt("ipp","tcp","Duplex","T");
  mdns_service_instance_name_set("_ipp","_tcp",stationName.c_str());
  mdns_service_subtype_add_for_host(nullptr,"_ipp","_tcp",nullptr,"_universal");return true;
 }

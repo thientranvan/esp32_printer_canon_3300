@@ -53,3 +53,19 @@ Kênh OTA chung vẫn 2026112502. Canary 2026112504 chưa được nghiệm thu 
 Đã nạp 2026112504 riêng Máy 1 lúc rảnh; xác nhận version qua /status, CAPT fresh/không lỗi. Get-Printer-Attributes IPP1.1 và Android A4 media-col Validate-Job live đều PASS. check_airprint.py (ASan/UBSan, pixel và buffer/framing) và check_cloud_http.py PASS. Chờ lượt Samsung mới; chưa có xác nhận giấy trên 2504.
 
 Lượt Samsung mới trên 2026112504: sau khoảng 29 giây diagnostic receiving-raster đã nhận 3.932.004 byte. Sau đó ESP tạo job ipp-326968377 và xác nhận completed 2/2 mặt, CAPT fresh, không cờ lỗi. Chưa có xác nhận giấy/nội dung từ người dùng tại thời điểm ghi; số mặt là số ESP báo, không tự quy thành số tờ thực tế. Không còn lỗi raster-rejected trong lượt này. Chưa xác định chắc lỗi cũ là timeout socket; buffering là thay đổi đã giúp lượt mới đi hết pipeline.
+
+## Xác nhận giấy và lỗi còn lại — 2026112505
+
+Người dùng xác nhận Samsung đã ra giấy trên 2504, nhưng tài liệu dọc chọn long-edge thì mặt sau ngược 180°; điện thoại vẫn báo lỗi thay vì hoàn tất. Không coi 2504 là nghiệm thu đủ.
+
+Canary 2505 đổi PWG sheet-back từ normal sang rotated và URF DM1 sang DM3 (cả IPP và mDNS). Đây là thông tin renderer client dùng để xoay mặt sau; không sửa chiều raster CAPT của Windows/Mac/web. Chưa khẳng định đúng chiều giấy cho tới lượt thử thật.
+
+HTTP IPP trước đây chỉ xử lý một kết nối: nhận/chuyển raster giữ listener nên truy vấn trạng thái đồng thời phải chờ. Tách listener và tối đa hai handler có giới hạn tài nguyên, vẫn chỉ nhận một job in; diagnostics riêng từng request tránh trộn lỗi giữa upload và polling. Không tăng queue hoặc phát lại tài liệu. Bộ đếm IPP hoàn tất giữ riêng khi job Mac/web khác thay snapshot. Ghi phase response-write-failed nếu gửi response không đủ; không tự in lại.
+
+Raster chuyển hàng nguồn sang allocation stdlib nhỏ, dựng 592 byte mono trong RAM cục bộ rồi memcpy vào band PSRAM, thay vì sửa từng bit trực tiếp trên PSRAM. Giữ output đối chiếu pixel không đổi. Mục tiêu giảm thời gian giữ request; chưa có số đo tốc độ trên ESP ở phiên này.
+
+Check live không in: `python3 check_ipp_live.py 192.168.1.199`; giữ một request Get-Printer-Attributes thiếu byte cuối và yêu cầu kết nối thứ hai vẫn trả lời dưới timeout ba giây, đồng thời kiểm tra rotated/DM3. Sau lượt in thật có thể thêm `--completed-job <id>` để kiểm tra Get-Job-Attributes trả completed qua job-uri.
+
+Trước OTA 2505, chạy check_ipp_live.py trên 2504 đã tái hiện socket.timeout ở kết nối thứ hai trong 3 giây khi kết nối Get-Printer-Attributes đầu còn thiếu delimiter; không gửi Print-Job hoặc tác động USB. Đây là bằng chứng head-of-line blocking, chưa đủ kết luận duy nhất nguyên nhân thông báo lỗi của Samsung. Bộ test raster/pixel/ASan/UBSan và check_cloud.py PASS sau sửa.
+
+Sau khi job web hoàn tất 6/6, OTA riêng Máy 1 lên 2026112505, xác nhận version qua /status và CAPT fresh. Cùng check_ipp_live.py trên bo mới PASS: kết nối thứ hai trả thành công khi request đầu còn thiếu byte, quảng bá rotated/DM3 đúng. Đã yêu cầu thử lại Samsung tài liệu dọc hai trang long-edge và kiểm tra cả giấy lẫn thông báo điện thoại. Canary chưa lên manifest OTA chung.

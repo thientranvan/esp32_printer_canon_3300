@@ -30,7 +30,7 @@ template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,
  unsigned declared=0;
  if(urf){uint8_t rest[8];if(!read(rest,8)||memcmp(rest,"AST\0",4))return false;declared=be32(rest+4);if(declared>40&&declared!=0xffffffff)return false;}
  else if(memcmp(magic,"RaS2",4))return false;
- std::unique_ptr<uint8_t,decltype(&std::free)> row(static_cast<uint8_t*>(allocate(4962*3)),std::free),band(static_cast<uint8_t*>(allocate(592*70)),std::free),encoded(static_cast<uint8_t*>(allocate(592*70*2+64)),std::free);
+ std::unique_ptr<uint8_t,decltype(&std::free)> row(static_cast<uint8_t*>(std::malloc(4962*3)),std::free),band(static_cast<uint8_t*>(allocate(592*70)),std::free),encoded(static_cast<uint8_t*>(allocate(592*70*2+64)),std::free);
  if(!row||!band||!encoded)return false;
  uint8_t job[16]={'E','S','P','J','O','B','1','\n'};le16(job+10,copies);job[12]=duplex;job[13]=1;
  if(!out(job,16))return false;
@@ -58,13 +58,14 @@ template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,
    }
    for(unsigned r=0;r<=repeat;++r,++y){
     if(y<120||y>=120+6774)continue;
-    uint8_t *dst=band.get()+rows*592;memset(dst,0,592);
+    uint8_t mono[592]={};uint8_t *dst=mono;
     for(unsigned col=0;col<4736;++col){unsigned sx=col+120,value;
      if(f.bits==1){bool bit=row.get()[sx/8]&(128>>(sx%8));value=f.space==3?(bit?0:255):(bit?255:0);}
      else if(f.bits==8)value=row.get()[sx];
      else value=(77*row.get()[sx*3]+150*row.get()[sx*3+1]+29*row.get()[sx*3+2]+128)>>8;
      if(value<unsigned(threshold[((y-120)&3)*4+(col&3)])*16+8)dst[col/8]|=128>>(col%8);
     }
+    memcpy(band.get()+rows*592,mono,592);
     if(++rows==70||y==120+6774-1){
      size_t n=hiscoa_compress_band(encoded.get(),592*70*2+64,band.get(),592,rows,y==120+6774-1?HISCOA_EOB_LAST:HISCOA_EOB_NORMAL,&hiscoa_default_params);
      if(!n||n>=592*70*2+64)return false;uint8_t length[4];le32(length,n);

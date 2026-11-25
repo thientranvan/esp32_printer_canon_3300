@@ -4,7 +4,7 @@
 #include <mbedtls/sha256.h>
 #include <cJSON.h>
 #ifndef ESP32_FIRMWARE_VERSION
-#define ESP32_FIRMWARE_VERSION 2026112504
+#define ESP32_FIRMWARE_VERSION 2026112505
 #endif
 static constexpr unsigned FirmwareVersion=ESP32_FIRMWARE_VERSION;
 static constexpr const char *FirmwareBoard="esp32-s3-n16r8";
