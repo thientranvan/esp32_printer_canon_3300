@@ -16,9 +16,9 @@ struct String:std::string {
  String &operator=(const char*s){std::string::operator=(s);return *this;}
 };
 struct WiFiClient {
- std::string bytes;size_t at=0;bool stall=false;unsigned fragment=1;
+ std::string bytes;size_t at=0;bool stall=false;unsigned fragment=1,reads=0;
  int available(){return stall?0:int(std::min<size_t>(fragment,bytes.size()-at));}
- int read(uint8_t*p,size_t n){n=std::min(n,bytes.size()-at);memcpy(p,bytes.data()+at,n);at+=n;return n;}
+ int read(uint8_t*p,size_t n){++reads;n=std::min(n,bytes.size()-at);memcpy(p,bytes.data()+at,n);at+=n;return n;}
  bool connected(){return stall||at<bytes.size();}
 };
 static const size_t MaxBody=64*1024*1024;

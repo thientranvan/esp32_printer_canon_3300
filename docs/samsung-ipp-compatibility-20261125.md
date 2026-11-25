@@ -36,3 +36,18 @@ ipptool -V 2.0 -tv -T 10 ipp://192.168.1.199:631/ipp/print tests/airprint/ipp/an
 Chưa đẩy manifest 2026112503 lên kênh OTA chung trong thời gian canary. Bộ cài máy tính không liên quan hai lỗi IPP này.
 
 Artifact canary: firmware/experimental/airprint-2026112503.bin + JSON SHA-256/size. Build lại bằng `python3 build_airprint_experimental.py --version 2026112503`. `firmware/latest.json` và station.bin vẫn giữ 2026112502 để không tự cập nhật Máy 2/3 khi Samsung chưa thử xong.
+
+## Lượt Samsung thật và canary 2026112504
+
+Lượt một trang người dùng gửi bằng Dịch vụ in mặc định đã tới Print-Job, MIME image/pwg-raster. Header nhận được 4960 × 7015, 600 dpi, gray8/color space 18. FW 2026112503 trả 0x0411 ở bước chuyển raster; chưa tạo job IPP, chưa có giấy xác nhận. USB/CAPT fresh và các job cloud sau đó vẫn hoàn tất. Đây không phải bằng chứng Samsung đã in được.
+
+2026112504 thử riêng Máy 1:
+
+- Body HTTP dùng buffer 4096 byte, giảm socket read từng byte khi giải mã RLE; giữ framing, giới hạn dung lượng, timeout và kiểm tra đầu vào.
+- Chờ tối đa 2 giây cho USB owner chẩn đoán thoáng qua; không chiếm phiên in/OTA/cloud thực sự đang bận.
+- Giữ lỗi raster trước các lỗi busy/HTTP404 phụ; phân biệt lỗi size/DPI/color/order/stride/bits-per-color/channel-count/duplex/RLE/read. Cập nhật số byte khi xuất band và phase receiving-raster.
+- Test socket đọc nhỏ vượt biên buffer: 10.000 byte đọc từng byte chỉ cần ba lần đọc socket, đồng thời giữ test input phân mảnh/chunked/timeout và đối chiếu pixel libcups.
+
+Kênh OTA chung vẫn 2026112502. Canary 2026112504 chưa được nghiệm thu Samsung, không tự phát hành cho Máy 2/3.
+
+Đã nạp 2026112504 riêng Máy 1 lúc rảnh; xác nhận version qua /status, CAPT fresh/không lỗi. Get-Printer-Attributes IPP1.1 và Android A4 media-col Validate-Job live đều PASS. check_airprint.py (ASan/UBSan, pixel và buffer/framing) và check_cloud_http.py PASS. Chờ lượt Samsung mới; chưa có xác nhận giấy trên 2504.

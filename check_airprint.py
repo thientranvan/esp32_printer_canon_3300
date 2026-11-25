@@ -78,6 +78,10 @@ int main(){
  for(const char*raw:{"x\r\n","4000001\r\n","1\r\naXX","0\r\nx\r\n","1;ignored=yes\r\na\r\n0\r\n\r\n"}){
   WiFiClient c;c.bytes=raw;Body b(c);b.chunked=true;uint8_t p[5];bool ok=b.read(p,5);assert(!ok&&b.failed);
  }
+ // Tiny decoder reads must reuse socket blocks, even across a buffer boundary.
+ WiFiClient bulk;bulk.fragment=8192;bulk.bytes=std::string(10000,'z');Body buffered(bulk);buffered.remaining=bulk.bytes.size();
+ for(unsigned i=0;i<10000;++i){uint8_t byte;assert(buffered.read(&byte,1)&&byte=='z');}
+ assert(buffered.end()&&bulk.reads==3);
  WiFiClient c;c.stall=true;Body timeout(c);timeout.remaining=1;uint8_t p;assert(!timeout.read(&p,1)&&tick>=15000);
 }
 ''')

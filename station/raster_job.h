@@ -14,13 +14,13 @@ namespace RasterJob {
 inline uint32_t be32(const uint8_t *p){return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];}
 inline void le32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=n>>(8*i);}
 inline void le16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
-struct Format {unsigned width=0,height=0,bits=0,space=0,dpi=0;bool urf=false;};
+struct Format {unsigned width=0,height=0,bits=0,space=0,dpi=0;bool urf=false;const char *error="raster-read";};
 inline bool format(const uint8_t *h,bool urf,Format &f){
  f.urf=urf;f.width=be32(h+(urf?12:372));f.height=be32(h+(urf?16:376));f.bits=urf?h[0]:be32(h+388);
  unsigned dpi=be32(h+(urf?20:276));f.dpi=dpi;f.space=urf?(h[1]==0||h[1]==4?18:h[1]==1||h[1]==5?19:999):be32(h+400);
- if(dpi!=600||(!urf&&be32(h+280)!=600)||f.width<4958||f.width>4962||f.height<7012||f.height>7016)return false;
- if(!((f.bits==1&&(f.space==18||f.space==3))||(f.bits==8&&f.space==18)||(f.bits==24&&f.space==19)))return false;
- if(!urf&&(be32(h+396)!=0||be32(h+392)!=(f.width*f.bits+7)/8||be32(h+384)!=(f.bits==1?1:8)||be32(h+420)!=(f.bits==24?3:1)))return false;
+ if(dpi!=600||(!urf&&be32(h+280)!=600)||f.width<4958||f.width>4962||f.height<7012||f.height>7016){f.error="raster-size-dpi";return false;}
+ if(!((f.bits==1&&(f.space==18||f.space==3))||(f.bits==8&&f.space==18)||(f.bits==24&&f.space==19))){f.error="raster-color";return false;}
+ if(!urf){if(be32(h+396)!=0){f.error="raster-order";return false;}if(be32(h+392)!=(f.width*f.bits+7)/8){f.error="raster-stride";return false;}if(be32(h+384)!=(f.bits==1?1:8)){f.error="raster-bits-color";return false;}if(be32(h+420)!=(f.bits==24?3:1)){f.error="raster-colors";return false;}}
  return true;
 }
 // Read: bool(uint8_t*,size_t). Output: bool(const uint8_t*,size_t). AtEnd: bool().
@@ -40,8 +40,8 @@ template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,
   if(pages==40)return false;
   uint8_t header[1796]={};if(!read(header,urf?32:1796))return false;Format f;bool validFormat=format(header,urf,f);if(observed)*observed=f;if(!validFormat)return false;
   // Do not silently convert document-level duplex differently from the IPP job.
-  if(urf){unsigned mode=header[2];if(mode>3||(mode&&mode!=(duplex==1?1:duplex==2?3:2)))return false;}
-  else if(bool(be32(header+272))!=(duplex!=1)||(duplex!=1&&bool(be32(header+368))!=(duplex==3)))return false;
+  if(urf){unsigned mode=header[2];if(mode>3||(mode&&mode!=(duplex==1?1:duplex==2?3:2))){if(observed)observed->error="raster-duplex";return false;}}
+  else if(bool(be32(header+272))!=(duplex!=1)||(duplex!=1&&bool(be32(header+368))!=(duplex==3))){if(observed)observed->error="raster-duplex";return false;}
   uint8_t params[68]={};memcpy(params,parameters,44);le16(params+44,0xd0a4);le16(params+46,12);
   if(hiscoa_format_params(params+48,8,&hiscoa_default_params)!=8)return false;
   le16(params+56,0xd0a1);le16(params+58,4);le16(params+60,0xd0a2);le16(params+62,4);le32(params+64,(6774+69)/70);
@@ -53,8 +53,8 @@ template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,
    while(x<rowBytes){
     uint8_t run;if(!read(&run,1))return false;
     if(run==128){memset(row.get()+x,f.space==3?0:255,rowBytes-x);x=rowBytes;}
-    else if(run>128){size_t n=size_t(257-run)*pixel;if(n>rowBytes-x||!read(row.get()+x,n))return false;x+=n;}
-    else{size_t n=size_t(run+1)*pixel;if(n>rowBytes-x||!read(row.get()+x,pixel))return false;for(size_t j=pixel;j<n;j+=pixel)memcpy(row.get()+x+j,row.get()+x,pixel);x+=n;}
+    else if(run>128){size_t n=size_t(257-run)*pixel;if(n>rowBytes-x){if(observed)observed->error="raster-literal";return false;}if(!read(row.get()+x,n))return false;x+=n;}
+    else{size_t n=size_t(run+1)*pixel;if(n>rowBytes-x){if(observed)observed->error="raster-repeat";return false;}if(!read(row.get()+x,pixel))return false;for(size_t j=pixel;j<n;j+=pixel)memcpy(row.get()+x+j,row.get()+x,pixel);x+=n;}
    }
    for(unsigned r=0;r<=repeat;++r,++y){
     if(y<120||y>=120+6774)continue;
