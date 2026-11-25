@@ -10,7 +10,7 @@ static WiFiServer listener(631);
 static portMUX_TYPE lock=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t *spool=nullptr;static size_t spoolSize=0;
 static unsigned jobId=0,nextId=1,ippState=3,jobPages=0,jobCompleted=0,copies=1,duplex=1;
-static char title[129]="AirPrint";static bool pending=false;
+static char title[129]="AirPrint",jobUser[129]="LAN client";static bool pending=false,receiving=false;static std::atomic<bool> receiveCancelled{false};
 
 struct Diagnostic {unsigned requests=0,operation=0,http=0,status=0,width=0,height=0,dpi=0,bits=0,space=0,line=0;bool writeFailed=false;size_t received=0;uint32_t at=0;char attribute[129]={},format[64]={},phase[32]="idle";};
 static Diagnostic diagnostic,lastFailure;
@@ -38,10 +38,10 @@ static void reply(WiFiClient &client,Ipp::Response &r,Diagnostic &d){portENTER_C
 static void httpError(WiFiClient &c,unsigned code,Diagnostic &d){portENTER_CRITICAL(&lock);d.http=code;strcpy(d.phase,"http-error");if(code!=404||!lastFailure.status)lastFailure=d;portEXIT_CRITICAL(&lock);publishDiagnostic(d);c.printf("HTTP/1.1 %u Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",code);}
 static std::string uri(){return std::string("ipp://")+WiFi.localIP().toString().c_str()+":631/ipp/print";}
 static void jobAttributes(Ipp::Response &r){
- portENTER_CRITICAL(&lock);unsigned id=jobId,state=ippState,pages=jobPages,completed=jobCompleted;char name[129];strlcpy(name,title,sizeof(name));portEXIT_CRITICAL(&lock);
- auto j=jobSnapshot();r.group(2);r.text(0x45,"job-printer-uri",uri());r.text(0x42,"job-name",name);r.text(0x42,"job-originating-user-name","LAN client");r.number(0x21,"job-id",id);r.text(0x45,"job-uri",uri()+"/"+std::to_string(id));r.number(0x23,"job-state",state);
+ portENTER_CRITICAL(&lock);unsigned id=jobId,state=ippState,pages=jobPages,completed=jobCompleted;char name[129],user[129];strlcpy(name,title,sizeof(name));strlcpy(user,jobUser,sizeof(user));portEXIT_CRITICAL(&lock);
+ auto j=jobSnapshot();r.group(2);r.text(0x45,"job-printer-uri",uri());r.text(0x42,"job-name",name);r.text(0x42,"job-originating-user-name",user);r.number(0x21,"job-id",id);r.text(0x45,"job-uri",uri()+"/"+std::to_string(id));r.number(0x23,"job-state",state);
  r.text(0x44,"job-state-reasons",state==9?"job-completed-successfully":state==7?"job-canceled-by-user":state==8?"aborted-by-system":state==5?"job-printing":"job-incoming");
- r.number(0x21,"job-impressions",pages);r.number(0x21,"job-impressions-completed",j.matches((std::string("ipp-")+std::to_string(id)).c_str())?j.completed:completed);
+ if(pages)r.number(0x21,"job-impressions",pages);else r.attr(0x12,"job-impressions",nullptr,0);r.number(0x21,"job-impressions-completed",j.matches((std::string("ipp-")+std::to_string(id)).c_str())?j.completed:completed);
 }
 static void mediaCollection(Ipp::Response &r,const char *name){
  r.attr(0x34,name,nullptr,0);r.text(0x4a,"","media-size");r.attr(0x34,"",nullptr,0);
@@ -103,53 +103,68 @@ static void handle(WiFiClient &client){
  std::string address=std::string("ipp://")+WiFi.localIP().toString().c_str();
  if(!request.uri.empty()&&request.uri!=address+":631/ipp/print"&&request.uri!=address+"/ipp/print"&&request.uri!=host+":631/ipp/print"&&request.uri!=host+"/ipp/print"){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
  if(pathJob){if(request.job&&request.job!=pathJob){Ipp::Response r(request,0x0406);reply(client,r,d);return;}request.job=pathJob;}
+ portENTER_CRITICAL(&lock);unsigned knownJob=jobId,knownState=ippState;char owner[129];strlcpy(owner,jobUser,sizeof(owner));portEXIT_CRITICAL(&lock);
  Ipp::Response response(request);
  if(request.operation==11)printerAttributes(response);
  else if(request.operation==8){
-  if(request.job!=jobId||!ippBusy.load()){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
-  String id=String("ipp-")+jobId;if(!jobCommand(id,"cancel")){Ipp::Response r(request,0x0404);reply(client,r,d);return;}
+  if(request.job!=knownJob||!ippBusy.load()){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
+  portENTER_CRITICAL(&lock);bool incoming=receiving&&jobId==request.job;if(incoming)receiveCancelled=true;portEXIT_CRITICAL(&lock);
+  if(incoming){reply(client,response,d);return;}
+  String id=String("ipp-")+knownJob;if(!jobCommand(id,"cancel")){Ipp::Response r(request,0x0404);reply(client,r,d);return;}
  }else if(request.operation==9){
-  if(request.operation==9&&(!jobId||request.job!=jobId)){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
-  if(jobId)jobAttributes(response);
- }else if(request.operation==10){if(jobId)jobAttributes(response);}
+  if(request.operation==9&&(!knownJob||request.job!=knownJob)){Ipp::Response r(request,0x0406);reply(client,r,d);return;}
+  if(knownJob)jobAttributes(response);
+ }else if(request.operation==10){if(knownJob&&Ipp::jobVisible(request,knownState,owner))jobAttributes(response);}
  else if(request.operation==4){if(request.format!="image/urf"&&request.format!="image/pwg-raster"){Ipp::Response r(request,0x040a);reply(client,r,d);return;}}
  else if(request.operation==2){
   if(request.format!="image/urf"&&request.format!="image/pwg-raster"){Ipp::Response r(request,0x040a);reply(client,r,d);return;}
   auto usb=readUSB();if(!usb.connected||!usb.responsive||!captFresh()||captFault()){Ipp::Response r(request,0x0506);reply(client,r,d);return;}
   if(ippBusy.exchange(true)){Ipp::Response r(request,0x0507);reply(client,r,d);return;}
-  bool reserved=false;uint32_t reserveAt=millis();do{if(firmwareReserve()){reserved=true;break;}if(!firmwareIdle()||firmwareCheckPending.load())break;vTaskDelay(pdMS_TO_TICKS(25));}while(uint32_t(millis()-reserveAt)<2000);
-  if(!reserved){ippBusy=false;Ipp::Response r(request,0x0507);reply(client,r,d);return;}
+  // Raster reception needs the admission gate, not USB ownership. Status polling must continue.
+  if(firmwareCheckPending.exchange(true)){ippBusy=false;Ipp::Response r(request,0x0507);reply(client,r,d);return;}
+  bool reserved=false;uint32_t reserveAt=millis();do{
+   if(firmwareIdle()){reserved=true;break;}
+   if(cloudBusy()||captTCPState.load()||jobSnapshot().active||cloudNeedsInspection.load())break;
+   vTaskDelay(pdMS_TO_TICKS(25));
+  }while(uint32_t(millis()-reserveAt)<2000);
+  if(!reserved){firmwareCheckPending=false;ippBusy=false;Ipp::Response r(request,0x0507);reply(client,r,d);return;}
+  // Android polls Get-Jobs while uploading; publish the incoming job before reading raster.
+  receiveCancelled=false;
+  portENTER_CRITICAL(&lock);jobId=nextId++;ippState=4;jobPages=jobCompleted=0;receiving=true;strlcpy(title,request.title.c_str(),sizeof(title));strlcpy(jobUser,request.user.c_str(),sizeof(jobUser));portEXIT_CRITICAL(&lock);
   spool=static_cast<uint8_t*>(ps_malloc(Prepared::Limit));spoolSize=0;unsigned pages=0;
   recordRequest(d,request,body.consumed,"receiving-raster");
   const char *outputError=nullptr;RasterJob::Format detected;bool firstRasterRead=true;
-  auto rasterRead=[&](uint8_t*p,size_t n){if(!read(p,n))return false;if(firstRasterRead){firstRasterRead=false;return n==4&&!memcmp(p,request.format=="image/urf"?"UNIR":"RaS2",4);}return true;};
+  auto rasterRead=[&](uint8_t*p,size_t n){if(receiveCancelled.load())return false;if(!read(p,n))return false;if(firstRasterRead){firstRasterRead=false;return n==4&&!memcmp(p,request.format=="image/urf"?"UNIR":"RaS2",4);}return true;};
   bool valid=spool&&RasterJob::convert(rasterRead,[&](const uint8_t*p,size_t n){if(n>Prepared::Limit-spoolSize){outputError="spool-full";return false;}memcpy(spool+spoolSize,p,n);spoolSize+=n;d.received=body.consumed;publishDiagnostic(d);vTaskDelay(pdMS_TO_TICKS(1));return true;},[&]{return body.end();},request.copies,request.duplex,pages,ps_malloc,&detected);
   d.line=detected.line;d.width=detected.width;d.height=detected.height;d.dpi=detected.dpi;d.bits=detected.bits;d.space=detected.space;publishDiagnostic(d);
   if(valid){RasterJob::le16(spool+8,pages);Prepared::Job verify;valid=Prepared::parse(spool,spoolSize,verify);}
-  if(!valid){recordRequest(d,request,body.consumed,!spool?"spool-memory":outputError?outputError:body.failed?body.error:detected.error);free(spool);spool=nullptr;firmwareRelease();ippBusy=false;Ipp::Response r(request,0x0411);reply(client,r,d);return;}
+  portENTER_CRITICAL(&lock);if(receiveCancelled.load())valid=false;receiving=false;if(valid){ippState=3;jobPages=pages*request.copies;pending=true;}portEXIT_CRITICAL(&lock);
+  if(!valid){portENTER_CRITICAL(&lock);receiving=false;ippState=receiveCancelled.load()?7:8;portEXIT_CRITICAL(&lock);recordRequest(d,request,body.consumed,receiveCancelled.load()?"job-cancelled":!spool?"spool-memory":outputError?outputError:body.failed?body.error:detected.error);free(spool);spool=nullptr;firmwareCheckPending=false;ippBusy=false;Ipp::Response r(request,receiveCancelled.load()?0x0508:0x0411);reply(client,r,d);return;}
   recordRequest(d,request,body.consumed,"accepted");
-  portENTER_CRITICAL(&lock);jobId=nextId++;ippState=3;jobCompleted=0;jobPages=pages*request.copies;strlcpy(title,request.title.c_str(),sizeof(title));pending=true;portEXIT_CRITICAL(&lock);
   jobAttributes(response);
  }else{Ipp::Response r(request,0x0501);reply(client,r,d);return;}
  reply(client,response,d);
 }
-// A slow raster upload must not block Android's printer/job polling connection.
-static std::atomic<unsigned> httpClients{0};
-static void clientTask(void *arg){auto *client=static_cast<WiFiClient*>(arg);handle(*client);client->stop();delete client;--httpClients;vTaskDelete(nullptr);}
+// Fixed workers keep socket polling independent of raster conversion without task-allocation churn.
+static QueueHandle_t connections=nullptr;
+static void clientTask(void*){
+ while(true){WiFiClient *client=nullptr;if(xQueueReceive(connections,&client,portMAX_DELAY)!=pdTRUE)continue;
+  handle(*client);client->stop();delete client;
+ }
+}
 static void serverTask(void*){
  listener.begin();while(true){WiFiClient client=listener.accept();if(!client){vTaskDelay(pdMS_TO_TICKS(10));continue;}
   auto mask=uint32_t(WiFi.subnetMask());if(!WiFi.isConnected()||!mask||(uint32_t(client.remoteIP())&mask)!=(uint32_t(WiFi.localIP())&mask)){client.stop();continue;}
-  if(httpClients.load()>=2){client.print("HTTP/1.1 503 Busy\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");client.stop();continue;}
   auto *connection=new(std::nothrow) WiFiClient(client);if(!connection){client.stop();continue;}
-  ++httpClients;if(xTaskCreate(clientTask,"ipp-http",16384,connection,1,nullptr)!=pdPASS){--httpClients;connection->stop();delete connection;}
+  if(xQueueSend(connections,&connection,0)!=pdTRUE){connection->print("HTTP/1.1 503 Busy\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");connection->stop();delete connection;}
  }
 }
 static void printTask(void*){
  while(true){
   portENTER_CRITICAL(&lock);bool ready=pending;pending=false;unsigned id=jobId;portEXIT_CRITICAL(&lock);
   if(!ready){vTaskDelay(pdMS_TO_TICKS(20));continue;}
-  // Keep the firmware admission gate while handing the reserved USB owner to the engine.
-  releaseCapt(CaptFirmwareOwner);while(!claimCapt(CloudOwner))vTaskDelay(pdMS_TO_TICKS(10));
+  // Keep the admission gate; acquire USB only after the full raster has been validated.
+  while(!claimCapt(CloudOwner))vTaskDelay(pdMS_TO_TICKS(10));
   Prepared::Job job;bool valid=Prepared::parse(spool,spoolSize,job);String name=String("ipp-")+id;
   jobBegin(name.c_str(),"lan",true);jobMetadata(title,"AirPrint","ipp");jobProgress(jobPages,0);
   std::vector<uint8_t> flags;for(auto side:job.plan)flags.push_back(side.flag);cloudRecovery.begin(name.c_str(),flags,printerEpoch.load());jobRecoveryProgress(cloudRecovery);
@@ -165,8 +180,11 @@ static void printTask(void*){
 }
 static bool start(){
  nextId=(esp_random()&0x3fffffff)+1;
- TaskHandle_t worker=nullptr;if(xTaskCreate(printTask,"ipp-print",12288,nullptr,1,&worker)!=pdPASS)return false;
- if(xTaskCreate(serverTask,"ipp-server",4096,nullptr,1,nullptr)!=pdPASS){vTaskDelete(worker);return false;}
+ connections=xQueueCreate(2,sizeof(WiFiClient*));if(!connections)return false;
+ TaskHandle_t worker=nullptr,http[2]={nullptr,nullptr};
+ bool ready=xTaskCreate(printTask,"ipp-print",12288,nullptr,1,&worker)==pdPASS;
+ for(unsigned i=0;i<2&&ready;++i)ready=xTaskCreate(clientTask,"ipp-http",16384,nullptr,1,&http[i])==pdPASS;
+ if(!ready||xTaskCreate(serverTask,"ipp-server",4096,nullptr,1,nullptr)!=pdPASS){if(worker)vTaskDelete(worker);for(auto task:http)if(task)vTaskDelete(task);vQueueDelete(connections);connections=nullptr;return false;}
  MDNS.addService("ipp","tcp",631);MDNS.addServiceTxt("ipp","tcp","txtvers","1");MDNS.addServiceTxt("ipp","tcp","qtotal","1");MDNS.addServiceTxt("ipp","tcp","rp","ipp/print");
  MDNS.addServiceTxt("ipp","tcp","ty","Canon LBP3300");MDNS.addServiceTxt("ipp","tcp","note",stationName.c_str());MDNS.addServiceTxt("ipp","tcp","pdl","image/urf,image/pwg-raster");
  MDNS.addServiceTxt("ipp","tcp","UUID",(String("00000000-0000-4000-8000-")+stationID.substring(6)).c_str());

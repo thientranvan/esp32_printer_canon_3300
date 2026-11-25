@@ -66,6 +66,12 @@ media.text(0x4a,"","media-type");media.text(0x44,"","stationery");media.text(0x4
 media.attr(0x37,"",nullptr,0);media.end();Request a4;assert(parseBytes(media.bytes,a4));
 for(size_t n=0;n<media.bytes.size();++n){auto truncated=media.bytes;truncated.resize(n);Request q;assert(!parseBytes(truncated,q));}
 auto letter=media.bytes;for(size_t i=0;i+4<=letter.size();++i)if(u32(letter.data()+i)==21000){letter[i+2]=0xff;break;}Request q;assert(!parseBytes(letter,q));
+// Android looks up its incoming job while the document is still uploading.
+Response mine(25);mine.bytes[3]=10;mine.text(0x42,"requesting-user-name","Android");mine.boolean("my-jobs",true);mine.end();Request lookup;assert(parseBytes(mine.bytes,lookup));assert(lookup.myJobs&&lookup.whichJobs=="not-completed");
+assert(jobVisible(lookup,4,"Android")&&jobVisible(lookup,5,"Android"));
+assert(!jobVisible(lookup,9,"Android")&&!jobVisible(lookup,4,"Other"));
+lookup.whichJobs="completed";assert(jobVisible(lookup,9,"Android")&&!jobVisible(lookup,4,"Android"));
+lookup.whichJobs="all";assert(jobVisible(lookup,4,"Android")&&jobVisible(lookup,9,"Android"));
 Response target(12);target.bytes[3]=9;target.text(0x45,"job-uri","ipp://192.168.1.199:631/ipp/print/1234");target.end();Request poll;assert(parseBytes(target.bytes,poll)&&poll.job==1234);
 
 }

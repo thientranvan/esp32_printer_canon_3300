@@ -8,7 +8,7 @@ inline unsigned u16(const uint8_t *p){return unsigned(p[0])<<8|p[1];}
 inline uint32_t u32(const uint8_t *p){return uint32_t(u16(p))<<16|u16(p+2);}
 inline void w16(std::vector<uint8_t>&v,unsigned n){v.push_back(n>>8);v.push_back(n);}
 inline void w32(std::vector<uint8_t>&v,uint32_t n){w16(v,n>>16);w16(v,n);}
-struct Request {unsigned major=2,minor=0,operation=0;uint32_t id=0;unsigned copies=1,duplex=1,job=0;std::string format="image/urf",title="AirPrint",uri,attribute;};
+struct Request {unsigned major=2,minor=0,operation=0;uint32_t id=0;unsigned copies=1,duplex=1,job=0;bool myJobs=false;std::string format="image/urf",title="AirPrint",uri,attribute,user="LAN client",whichJobs="not-completed";};
 // Parses only bounded attributes, leaves raster unread. Unknown mandatory options are rejected.
 template<class Read> bool parse(Read read,Request &r){
  uint8_t h[8];if(!read(h,8)||(h[0]!=1&&h[0]!=2)||h[1]>1)return false;r.major=h[0];r.minor=h[1];r.operation=u16(h+2);r.id=u32(h+4);if(!r.id)return false;
@@ -49,6 +49,9 @@ template<class Read> bool parse(Read read,Request &r){
   if(name=="document-format"){if(tag!=0x49)return false;r.format=text;}
   else if(name=="job-name"){if(b>128)return false;for(auto c:value)if(c<32||c==127)return false;r.title=text;}
   else if(name=="printer-uri"){if(tag!=0x45||b>256)return false;r.uri=text;}
+  else if(name=="requesting-user-name"){if(tag!=0x42||b>128)return false;for(auto c:value)if(c<32||c==127)return false;r.user=text;}
+  else if(name=="my-jobs"){if(tag!=0x22||b!=1||value[0]>1)return false;r.myJobs=value[0];}
+  else if(name=="which-jobs"){if(tag!=0x44||(text!="not-completed"&&text!="completed"&&text!="all"))return false;r.whichJobs=text;}
   else if(name=="copies"){if(tag!=0x21||b!=4||!u32(value.data())||u32(value.data())>99)return false;r.copies=u32(value.data());}
   else if(name=="job-id"){if(tag!=0x21||b!=4)return false;r.job=u32(value.data());}
   else if(name=="sides"){if(tag!=0x44)return false;if(text=="one-sided")r.duplex=1;else if(text=="two-sided-long-edge")r.duplex=2;else if(text=="two-sided-short-edge")r.duplex=3;else return false;}
@@ -65,6 +68,10 @@ template<class Read> bool parse(Read read,Request &r){
   else if(name=="page-ranges"||name=="job-password")return false;
  }
  return false;
+}
+inline bool jobVisible(const Request &r,unsigned state,const std::string &owner){
+ if(r.myJobs&&r.user!=owner)return false;
+ return r.whichJobs=="all"||(r.whichJobs=="completed"?state>=7:state<7);
 }
 struct Response {
  std::vector<uint8_t> bytes;

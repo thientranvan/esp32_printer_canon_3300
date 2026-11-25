@@ -741,11 +741,11 @@ void setup() {
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
   if(xTaskCreate(realtimeTask,"dashboard-events",12288,nullptr,1,nullptr)!=pdPASS)Serial.println("Dashboard SSE task failed");
-  startCloud();
-  startFirmwareUpdate();
 #ifdef ESP32_AIRPRINT_EXPERIMENTAL
   if(healthy&&!AirPrint::start())Serial.println("IPP experimental startup failed; discovery disabled");
 #endif
+  startCloud();
+  startFirmwareUpdate();
   const esp_reset_reason_t resetReason = esp_reset_reason();
   if (resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||
       resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT) {
