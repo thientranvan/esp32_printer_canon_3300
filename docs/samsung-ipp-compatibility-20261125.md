@@ -95,3 +95,9 @@ Canary trung gian 2507 được dùng riêng Máy 1 để self-check, chưa phá
 Đã OTA Máy 1 lên 2509 lúc rảnh, /status xác nhận version và CAPT fresh. Hai lượt `check_ipp_live.py 192.168.1.199 --incoming-job` liên tiếp PASS, giữ incoming qua các chu kỳ status rồi cancel; không có trang raster hoặc lệnh USB in. Đã yêu cầu lượt Samsung mới. Còn chờ giấy thực tế, đúng chiều và trạng thái hoàn tất trên điện thoại; chưa phát hành manifest OTA chung.
 
 Lượt Samsung mới trên 2509 đã tạo IPP job 129930498 và hoàn tất theo Get-Jobs(which-jobs=all)/Get-Job-Attributes: job-state=9, job-impressions=2, job-impressions-completed=2. Không suy từ job_control chung vì có job web tiếp theo thay snapshot. Không còn lỗi mới của lượt này trong diagnostic; last_error vẫn là header-only job-cancelled từ self-check trước. Đã hỏi người dùng xác nhận giấy, chiều long-edge và thông báo hoàn tất Samsung; chưa có phản hồi tại thời điểm ghi. Fixture read-only `tests/airprint/ipp/get-completed-job.test` chạy bằng `ipptool -T 5 -d job-id=129930498 ipp://192.168.1.199:631/ipp/print tests/airprint/ipp/get-completed-job.test` đã PASS.
+
+## Người dùng nghiệm thu và phát hành
+
+Người dùng xác nhận lượt Samsung trên 2026112509: đúng giấy, đúng chiều long-edge cho tài liệu dọc, điện thoại báo hoàn tất. Kết quả giấy độc lập khớp bộ đếm IPP completed 2/2. Không cần cài bộ driver máy tính cho Dịch vụ in mặc định Samsung.
+
+Promote đúng binary 2509 đã nạp/thử (SHA-256 11d1d959818054909b26f8b1b1bb37058b063b497f20feccb8f1e50b3bb4e379) vào firmware/station.bin và latest.json trong cùng commit. Máy 2/3 cập nhật theo cơ chế OTA hiện có khi online/rảnh; chưa xác nhận firmware thực chạy trên hai bo trong đợt này. Giữ release_stage=airprint-preview/hardware_validated=false cho toàn profile: đây chưa phải chứng nhận Mopria/AirPrint, chưa nghiệm thu điện thoại short-edge, iOS, mọi loại tài liệu hoặc mọi tình huống lỗi giấy. Bộ cài Windows/Mac/Ubuntu không đổi trong đợt sửa IPP này.
