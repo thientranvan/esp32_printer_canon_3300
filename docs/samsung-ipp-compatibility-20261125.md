@@ -51,3 +51,5 @@ Lượt một trang người dùng gửi bằng Dịch vụ in mặc định đ�
 Kênh OTA chung vẫn 2026112502. Canary 2026112504 chưa được nghiệm thu Samsung, không tự phát hành cho Máy 2/3.
 
 Đã nạp 2026112504 riêng Máy 1 lúc rảnh; xác nhận version qua /status, CAPT fresh/không lỗi. Get-Printer-Attributes IPP1.1 và Android A4 media-col Validate-Job live đều PASS. check_airprint.py (ASan/UBSan, pixel và buffer/framing) và check_cloud_http.py PASS. Chờ lượt Samsung mới; chưa có xác nhận giấy trên 2504.
+
+Lượt Samsung mới trên 2026112504: sau khoảng 29 giây diagnostic receiving-raster đã nhận 3.932.004 byte. Sau đó ESP tạo job ipp-326968377 và xác nhận completed 2/2 mặt, CAPT fresh, không cờ lỗi. Chưa có xác nhận giấy/nội dung từ người dùng tại thời điểm ghi; số mặt là số ESP báo, không tự quy thành số tờ thực tế. Không còn lỗi raster-rejected trong lượt này. Chưa xác định chắc lỗi cũ là timeout socket; buffering là thay đổi đã giúp lượt mới đi hết pipeline.
