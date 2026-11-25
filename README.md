@@ -149,7 +149,7 @@ Cloud mặc định tắt, cần token riêng mỗi trạm từ server. In LAN v
 Dữ liệu trạng thái mới: [ESP tự đọc USB, báo trạng thái và quản lý lệnh đã nhận](docs/status-parity.md).
 
 Dev server triển khai theo [contract đầy đủ](docs/server-contract.md), không cần mở
-port router. ESP không chuyển PDF/Word sang CAPT; renderer phía server là bắt buộc.
+port router. Firmware hiện tại nhận CAPT đã dựng từ máy gửi hoặc VPS, chưa có IPP/URF/PWG cho điện thoại. Renderer VPS chỉ cần cho đường VPS tự dựng tài liệu; không phải yêu cầu bắt buộc của phần cứng ESP. Xem [nghiên cứu AirPrint/raster 25/11](docs/airprint-raster-research-20261125.md).
 Đã bàn giao contract tại `/var/www/lop1/docs/esp32-printer-contract.md` qua SSH
 `binhminh`; chỉ thêm tài liệu, không sửa ứng dụng/database/dịch vụ server.
 
