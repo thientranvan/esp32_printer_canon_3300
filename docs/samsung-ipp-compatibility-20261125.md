@@ -69,3 +69,11 @@ Check live không in: `python3 check_ipp_live.py 192.168.1.199`; giữ một req
 Trước OTA 2505, chạy check_ipp_live.py trên 2504 đã tái hiện socket.timeout ở kết nối thứ hai trong 3 giây khi kết nối Get-Printer-Attributes đầu còn thiếu delimiter; không gửi Print-Job hoặc tác động USB. Đây là bằng chứng head-of-line blocking, chưa đủ kết luận duy nhất nguyên nhân thông báo lỗi của Samsung. Bộ test raster/pixel/ASan/UBSan và check_cloud.py PASS sau sửa.
 
 Sau khi job web hoàn tất 6/6, OTA riêng Máy 1 lên 2026112505, xác nhận version qua /status và CAPT fresh. Cùng check_ipp_live.py trên bo mới PASS: kết nối thứ hai trả thành công khi request đầu còn thiếu byte, quảng bá rotated/DM3 đúng. Đã yêu cầu thử lại Samsung tài liệu dọc hai trang long-edge và kiểm tra cả giấy lẫn thông báo điện thoại. Canary chưa lên manifest OTA chung.
+
+## Lượt chưa in trên 2505, chẩn đoán 2506
+
+Samsung tiếp tục báo Print error. Mẫu đầu trùng lúc Máy 1 có job cloud 4 mặt; khi cloud hoàn tất 4/4 và user gửi mới, đã bắt Print-Job PWG thật: 4960×7015, 600dpi, gray8/space18, nhận 524160 byte rồi trả 0x0411 sau khoảng 4,6 giây. Chưa tạo job IPP, chưa gửi trang tới USB. Vì vậy busy/cloud không giải thích hết lỗi; chưa khẳng định điện thoại ngắt trước hay firmware từ chối trước.
+
+2505 ghi đè phase raster bằng response-write-failed; thông tin này không đủ kết luận nguyên nhân. Canary 2506 giữ phase gốc và tách response_write_failed thành boolean, thêm last_error_received và raster_line, phân biệt EOF/timeout/read/framing, row-repeat overflow và spool/memory. Đã nạp riêng Máy 1 lúc rảnh, xác nhận version và CAPT fresh. Chờ lượt Samsung thật để xác định nhánh lỗi; không phát hành OTA chung.
+
+Test bổ sung: libcups tạo raster gray không đều >524160 byte (URF/PWG), decoder Hi-SCoA độc lập đối chiếu pixel sau dithering; HTTP chunk 32760/65520 byte qua buffer 4096 và read từng byte, tổng 600000 byte. check_airprint.py PASS với ASan/UBSan; chưa xem đây là thay thế capture thực tế Samsung. Không lưu tài liệu/pixel/username/password/token từ điện thoại.

@@ -18,6 +18,7 @@ int main(int argc,char **argv){
  for(unsigned y=0;y<h.cupsHeight;y++){
   memset(line,255,h.cupsBytesPerLine);
   if(y>=200&&y<240){if(h.cupsBitsPerPixel==1)memset(line+40,0,30);else for(unsigned x=320;x<560;x++)memset(line+x*h.cupsNumColors,0,h.cupsNumColors);}
+  if(argc>5&&atoi(argv[5])&&h.cupsBitsPerPixel==8&&y>=200&&y<2200)for(unsigned x=320;x<832;++x)line[x]=((x*13+y*29)^(x>>2))&255;
   if(cupsRasterWritePixels(r,line,h.cupsBytesPerLine)!=h.cupsBytesPerLine)return 3;
  }
  }

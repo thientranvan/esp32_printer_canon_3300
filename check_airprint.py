@@ -36,6 +36,12 @@ with tempfile.TemporaryDirectory(prefix='esp-airprint-check-') as tmp:
    assert struct.unpack_from('<H',r.stdout,8)[0]==3 and r.stdout[12]==duplex
    if duplex!=1:assert subprocess.run([str(executable),'1'],input=raw,capture_output=True).returncode==2
 
+ # Nonuniform gray rows exercise literal runs beyond common HTTP chunk boundaries.
+ for apple in [0,1]:
+  raw=subprocess.check_output([str(generator),str(apple),'8','1','1','1'])
+  assert len(raw)>524160
+  r=subprocess.run([str(executable),'1','1'],input=raw,capture_output=True);assert r.returncode==0,r.stderr.decode()[:3000]
+
  # Production raster packet code under a memory budget / admission failure.
  harness=folder/'ipp.cpp';harness.write_text(r'''
 #include "station/ipp_protocol.h"
@@ -77,6 +83,14 @@ int main(){
  }
  for(const char*raw:{"x\r\n","4000001\r\n","1\r\naXX","0\r\nx\r\n","1;ignored=yes\r\na\r\n0\r\n\r\n"}){
   WiFiClient c;c.bytes=raw;Body b(c);b.chunked=true;uint8_t p[5];bool ok=b.read(p,5);assert(!ok&&b.failed);
+ }
+ // CUPS/Android upload chunks crossing socket buffer and raster read boundaries.
+ for(unsigned chunkSize:{32760u,65520u}){
+  WiFiClient wire;wire.fragment=4096;unsigned left=600000;
+  while(left){unsigned part=std::min(left,chunkSize);char hex[32];snprintf(hex,sizeof(hex),"%x\r\n",part);wire.bytes+=hex;wire.bytes+=std::string(part,'z')+"\r\n";left-=part;}
+  wire.bytes+="0\r\n\r\n";Body framed(wire);framed.chunked=true;
+  for(unsigned i=0;i<600000;++i){uint8_t byte;assert(framed.read(&byte,1)&&byte=='z');}
+  assert(framed.end()&&framed.consumed==600000);
  }
  // Tiny decoder reads must reuse socket blocks, even across a buffer boundary.
  WiFiClient bulk;bulk.fragment=8192;bulk.bytes=std::string(10000,'z');Body buffered(bulk);buffered.remaining=bulk.bytes.size();

@@ -14,7 +14,7 @@ namespace RasterJob {
 inline uint32_t be32(const uint8_t *p){return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];}
 inline void le32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=n>>(8*i);}
 inline void le16(uint8_t *p,unsigned n){p[0]=n;p[1]=n>>8;}
-struct Format {unsigned width=0,height=0,bits=0,space=0,dpi=0;bool urf=false;const char *error="raster-read";};
+struct Format {unsigned width=0,height=0,bits=0,space=0,dpi=0,line=0;bool urf=false;const char *error="raster-read";};
 inline bool format(const uint8_t *h,bool urf,Format &f){
  f.urf=urf;f.width=be32(h+(urf?12:372));f.height=be32(h+(urf?16:376));f.bits=urf?h[0]:be32(h+388);
  unsigned dpi=be32(h+(urf?20:276));f.dpi=dpi;f.space=urf?(h[1]==0||h[1]==4?18:h[1]==1||h[1]==5?19:999):be32(h+400);
@@ -48,7 +48,7 @@ template<class Read,class Output,class AtEnd> bool convert(Read read,Output out,
   if(!out(params,sizeof(params)))return false;
   unsigned y=0,rows=0;size_t rowBytes=(f.width*f.bits+7)/8,pixel=f.bits==24?3:1;
   while(y<f.height){
-   uint8_t repeat;if(!read(&repeat,1)||unsigned(repeat)+1>f.height-y)return false;
+   if(observed)observed->line=y;uint8_t repeat;if(!read(&repeat,1))return false;if(unsigned(repeat)+1>f.height-y){if(observed)observed->error="raster-row-repeat";return false;}
    size_t x=0;
    while(x<rowBytes){
     uint8_t run;if(!read(&run,1))return false;

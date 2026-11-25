@@ -14,7 +14,10 @@ int main(int argc,char **argv){unsigned pages=0;std::vector<uint8_t> bytes;
   const void *p=band.data;size_t remaining=band.size;uint8_t decoded[592*70];size_t length=sizeof(decoded);
   hiscoa_decompress_band(&p,&remaining,decoded,&length,592,&hiscoa_default_params);assert(!remaining&&length&&length%592==0);
   for(size_t i=0;i<length;++i){unsigned row=y+i/592,col=(i%592)*8+120;uint8_t expected=0;
-   for(unsigned bit=0;bit<8;++bit)if(row>=200&&row<240&&col+bit>=320&&col+bit<560)expected|=128>>bit;
+   for(unsigned bit=0;bit<8;++bit){unsigned sx=col+bit;bool ink=row>=200&&row<240&&sx>=320&&sx<560;
+    if(argc>2&&atoi(argv[2])&&row>=200&&row<2200&&sx>=320&&sx<832){static const unsigned threshold[16]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};unsigned value=((sx*13+row*29)^(sx>>2))&255;ink=value<threshold[((row-120)&3)*4+((sx-120)&3)]*16+8;}
+    if(ink)expected|=128>>bit;
+   }
    assert(decoded[i]==expected);
   }
   y+=length/592;
