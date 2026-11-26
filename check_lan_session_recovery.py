@@ -62,6 +62,7 @@ int main(){
  assert(!lanResetInterruptedSession(42,cloudRecovery)&&!cleaned);
  queries=0;assert(!lanResetInterruptedSession(42,cloudRecovery)&&!cleaned&&cloudRecovery.confirmed==1);
  begin();processing=0x84;count=0;cloudRecovery.observed=3;assert(!lanResetInterruptedSession(42,cloudRecovery)&&!cleaned);
+ begin();cloudRecovery.epoch=6;assert(!lanResetInterruptedSession(42,cloudRecovery)&&ops.empty());
  begin();j.sessionEpoch=6;assert(!lanResetInterruptedSession(42,cloudRecovery)&&ops.empty());
  begin();j.command("job","cancel");assert(!lanResetInterruptedSession(42,cloudRecovery)&&ops.empty());
  begin();j.active=true;assert(!lanResetInterruptedSession(42,cloudRecovery)&&ops.empty());
