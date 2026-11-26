@@ -57,8 +57,8 @@ uri="esp32capt://$host:9100/$id"
 printf 'Station: %s / %s / %s\n' "$name" "$id" "$host"
 driver_filter=/Library/Printers/Canon/CUPSCAPT2/Bins/capdftopdl
 driver_ppd=/Library/Printers/PPDs/Contents/Resources/CNMC2LBP3300AUK.ppd.gz
-backend_sha=2accaf22d8d3cf6575ebf14dc4c432e6e8b6197eef64442adc6c1ea38fc7fcf8
-backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/0b6eb708ef685b6488d4cddc3920e652d851c2bd/mac_backend.pl
+backend_sha=c60ce214776d80adee2d2224fdff85bddc81ca61d6904367bf7a3145f52cd698
+backend_url=https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/54373614f8a7e9f8cdfdbc1c15d718b12e5f4e0b/mac_backend.pl
 jobs=$(/usr/bin/lpstat -W not-completed -o 2>/dev/null | /usr/bin/grep -E '^(ESP32_esp32|Canon_LBP3300_ESP32)-' || true)
 if [ -n "$jobs" ] || [ -e "$cache_dir/pending.txt" ] || [ -e "$cache_dir/cloud-job.json" ] || [ -e "$legacy_cache_dir/pending.txt" ] || [ -e "$legacy_cache_dir/cloud-job.json" ]; then
   echo 'Resolve existing/uncertain print jobs before installing; no jobs were deleted.' >&2

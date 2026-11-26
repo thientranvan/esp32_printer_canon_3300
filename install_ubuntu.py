@@ -16,7 +16,7 @@ import urllib.request
 
 BASE='https://raw.githubusercontent.com/thientranvan/esp32_printer_canon_3300/main/'
 # Filled with exact source digests; mismatches stop before installing code.
-ASSETS = {'ubuntu/filter.py': '5cdbf223b3be3b9cb41258a84f6ff5a67ad5a50d277f296a37e1f6cd3dffd02e', 'ubuntu/esp32-lbp3300.ppd': '518f8341cd55f3228e2f1908a3727bb38a4c2d1497e29fb2d07652538895092d', 'mac_backend.pl': '2accaf22d8d3cf6575ebf14dc4c432e6e8b6197eef64442adc6c1ea38fc7fcf8', 'server-renderer/render.py': '7ee565a3bb81ceaedf3e18481dff18b1a544f056be7a56f77d913f9b62403bd9', 'server-renderer/build.sh': 'c3881a5d89ad271ab66217ec2563cd101cefc364c3d2b859db1f380315eb7c36', 'server-renderer/compress.c': 'd67bf57f7c133c73d74767d9a4dc54563a67c3daf1ba8c9f5082e8c30b9f2ecf', 'server-renderer/check.py': '665b0b30830db487f2412f8313c84ef1f13460a707794fca332c555ab19b3eba'}  # ASSET_MANIFEST
+ASSETS = {'ubuntu/filter.py': '5cdbf223b3be3b9cb41258a84f6ff5a67ad5a50d277f296a37e1f6cd3dffd02e', 'ubuntu/esp32-lbp3300.ppd': '518f8341cd55f3228e2f1908a3727bb38a4c2d1497e29fb2d07652538895092d', 'mac_backend.pl': 'c60ce214776d80adee2d2224fdff85bddc81ca61d6904367bf7a3145f52cd698', 'server-renderer/render.py': '7ee565a3bb81ceaedf3e18481dff18b1a544f056be7a56f77d913f9b62403bd9', 'server-renderer/build.sh': 'c3881a5d89ad271ab66217ec2563cd101cefc364c3d2b859db1f380315eb7c36', 'server-renderer/compress.c': 'd67bf57f7c133c73d74767d9a4dc54563a67c3daf1ba8c9f5082e8c30b9f2ecf', 'server-renderer/check.py': '665b0b30830db487f2412f8313c84ef1f13460a707794fca332c555ab19b3eba'}  # ASSET_MANIFEST
 TARGET=Path('/usr/lib/cups/filter/esp32printer')
 
 
@@ -49,7 +49,7 @@ def valid_name(name):
 def linux_backend(source):
     replacements={
         "my $cache = '/Library/Application Support/ESP32Printer';":"my $cache = '/var/lib/esp32printer';",
-        'my $job="mac-".time.': 'my $job="linux-".time.',
+        "return 'mac-'.substr($digest->hexdigest,0,56);": "return 'linux-'.substr($digest->hexdigest,0,56);",
         "client_os=>'macos'":"client_os=>'linux'",
         'X-Print-Client-OS: macos':'X-Print-Client-OS: linux',
         "sub canon_duplex { return $_[0] =~ /(?:^|\\s)CNDuplex(?:=True)?(?:\\s|$)/i; }":
