@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "version": 2026112603,
+  "version": 2026112606,
   "board": "esp32-s3-n16r8",
-  "bytes": 1424656,
-  "sha256": "927a94aaebd3f47762da3084228e29532a468893eaa6531c139d10e035a8a024",
+  "bytes": 1425568,
+  "sha256": "8c7d85a6131156732cf3f7d07cde261e03a94c50f9d8b48b9a16707dcdaaac0f",
   "release_stage": "airprint-preview",
   "hardware_validated": false
 }

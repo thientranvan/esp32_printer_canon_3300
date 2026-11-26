@@ -134,7 +134,7 @@ static std::atomic<int> cloudCommandResult{0};
 static bool cloudHeartbeat(bool force=false) {return cloudOnline.load();}
 static String jobStatusJSON(const PrintControl::Job &j) {
   return String("{\"recovery\":{\"automatic\":")+(j.automaticRecovery?"true":"false")+",\"confirmed_sheets\":"+(j.automaticRecovery?String(j.completedSheets):String("null"))+",\"next_sheet\":"+(j.automaticRecovery&&strcmp(j.state,"completed")?String(j.completedSheets+1):String("null"))+"},\"title\":"+jsonString(j.title)+",\"client_name\":"+jsonString(j.client)+",\"client_os\":"+jsonString(j.os)+",\"progress_known\":"+(j.total?"true":"false")+",\"progress_unit\":\"impressions\",\"actions\":{\"pause\":"+(j.canPause()?"true":"false")+",\"resume\":"+(j.canResume()?"true":"false")+",\"cancel\":"+(j.canCancel()?"true":"false")+",\"delete\":"+(j.canDelete()?"true":"false")+"},\"id\":"+jsonString(j.id)+",\"source\":"+jsonString(j.source)+",\"state\":"+jsonString(j.state)+
-    ",\"request\":"+jsonString(j.request)+",\"printer_cancel\":"+jsonString(j.printerCancel)+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
+    ",\"request\":"+jsonString(j.request)+",\"printer_cancel\":"+jsonString(j.printerCancel)+",\"cancel_failed_opcode\":"+j.cancelOpcode+",\"cancel_reply\":"+j.cancelReply+",\"printer_session\":"+j.printerSession+",\"session_epoch\":"+j.sessionEpoch+",\"printer_epoch\":"+printerEpoch.load()+",\"active\":"+(j.active?"true":"false")+",\"controllable\":"+(j.controllable?"true":"false")+
     ",\"total\":"+j.total+",\"completed\":"+j.completed+"}";
 }
 static String jobStatusJSON() {return jobStatusJSON(jobSnapshot());}
@@ -233,16 +233,22 @@ static bool cancelCapt(uint32_t owner,bool report) {
   auto j=jobSnapshot();uint8_t buffer[80],offline[2]={1,0},id[2];
   bool ok=!j.printerSession&&!j.unresolved();
   bool acquired=false;
-  if(j.printerSession&&j.sessionEpoch==printerEpoch.load()&&readUSB().connected){
+  if(j.printerSession&&(j.sessionEpoch==printerEpoch.load()||(report&&j.stopping()))&&readUSB().connected){
     for(unsigned i=0;i<20&&!(acquired=claimCapt(owner));++i)vTaskDelay(pdMS_TO_TICKS(50));
   }
   if(acquired){
-    auto command=[&](unsigned op,const uint8_t *p=nullptr,size_t n=0){return captExchange(buffer,sizeof(buffer),owner,op,p,n);};
-    ok=command(0xE0A6,offline,2)&&command(0xE0A3)&&command(0xE0A2)&&command(0xE0A4);
+    portENTER_CRITICAL(&jobLock);if(currentJob.matches(j.id))currentJob.cancelOpcode=currentJob.cancelReply=0;portEXIT_CRITICAL(&jobLock);
+    auto command=[&](unsigned op,const uint8_t *p=nullptr,size_t n=0){
+      bool result=captExchange(buffer,sizeof(buffer),owner,op,p,n);
+      if(!result){portENTER_CRITICAL(&jobLock);if(currentJob.matches(j.id)&&!currentJob.cancelOpcode){currentJob.cancelOpcode=op;currentJob.cancelReply=Prepared::u16(buffer+4);}portEXIT_CRITICAL(&jobLock);}
+      return result;
+    };
+    auto cleanup=[&](){
+    bool cleared=command(0xE0A6,offline,2)&&command(0xE0A3)&&command(0xE0A2)&&command(0xE0A4);
     // Discard leaves historical counters. Canon GoOnline(page 0) starts an empty
     // buffer; stop it again so existing LAN clients also see a clean baseline.
     uint8_t online[16]={};cloudPut32(online,0xADEADBEE);
-    if(ok)ok=command(0xE0A5,online,sizeof(online))&&command(0xE0A6,offline,2);
+    if(cleared)cleared=command(0xE0A5,online,sizeof(online))&&command(0xE0A6,offline,2);
     uint8_t info[72]={};info[16]=4;info[17]=1;cloudPut16(info+18,j.printerSession);cloudPut16(info+20,65116);cloudPut16(info+22,65116);
     cloudPut16(id,j.printerSession);
     // Release even when an earlier cleanup command fails; never report cleared then.
@@ -250,7 +256,18 @@ static bool cancelCapt(uint32_t owner,bool report) {
     bool idle=command(0xA0A8)&&Prepared::u16(buffer+2)>=40&&!(Prepared::u16(buffer+12)&0x84);
     if(idle){auto f=CaptStatus::decode(buffer);idle=!f.service&&!f.jam&&!f.cover&&!f.paper;
       for(unsigned i=0;i<4;++i)idle=idle&&!Prepared::u16(buffer+18+i*2);}
-    ok=ok&&ended&&released&&idle;
+    return cleared&&ended&&released&&idle;
+    };
+    // A live reservation rejects a second reservation (CAPT 0x87). Use it first.
+    if(j.sessionEpoch==printerEpoch.load())ok=cleanup();
+    if(!ok&&report&&j.stopping()){
+      uint8_t reservation[8]={0,0,30};
+      if(command(0xA3A2)&&command(0xA2A0,reservation,8)&&Prepared::u16(buffer+2)==8){
+        j.printerSession=Prepared::u16(buffer+6);jobPrinterSession(j.printerSession);ok=cleanup();
+      }
+    }
+    if(ok){portENTER_CRITICAL(&jobLock);if(currentJob.matches(j.id))currentJob.cancelOpcode=currentJob.cancelReply=0;portEXIT_CRITICAL(&jobLock);}
+
   }
   portENTER_CRITICAL(&jobLock);
   if(report&&currentJob.matches(j.id))strcpy(currentJob.printerCancel,ok?(j.printerSession?"cleared":"not_started"):"unverified");
