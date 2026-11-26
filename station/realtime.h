@@ -11,6 +11,7 @@ static String realtimeJSON() {
 }
 static String realtimeKey(const String &body) {
   auto *j=cJSON_Parse(body.c_str());if(!j)return "";
+  cJSON_DeleteItemFromObject(cJSON_GetObjectItem(j,"firmware"),"memory");
   cJSON_DeleteItemFromObject(cJSON_GetObjectItem(j,"capt"),"age_ms");
   cJSON_DeleteItemFromObject(cJSON_GetObjectItem(j,"server_queue"),"age_ms");
   cJSON_DeleteItemFromObject(cJSON_GetObjectItem(j,"cloud"),"http");

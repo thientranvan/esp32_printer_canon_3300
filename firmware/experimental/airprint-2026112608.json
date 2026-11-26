@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "channel": "experimental-airprint",
+  "version": 2026112608,
+  "board": "esp32-s3-n16r8",
+  "file": "airprint-2026112608.bin",
+  "bytes": 1427040,
+  "sha256": "68f8837d539d02beb42576e56be9bd5b09fc6eb0028e15608112ed2b5afac495",
+  "hardware_validated": false
+}

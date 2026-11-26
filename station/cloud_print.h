@@ -158,7 +158,7 @@ static void cloudTelemetryTask(void *) {
     if(stationSettings.cloudEnabled && WiFi.isConnected() && time(nullptr)>1700000000) {
       String body=cloudHeartbeatBody();
       auto *j=cJSON_Parse(body.c_str());
-      if(j){cJSON_DeleteItemFromObject(j,"uptime_s");auto *printer=cJSON_GetObjectItem(j,"printer");auto *capt=cJSON_GetObjectItem(printer,"capt");
+      if(j){cJSON_DeleteItemFromObject(cJSON_GetObjectItem(j,"firmware"),"memory");cJSON_DeleteItemFromObject(j,"uptime_s");auto *printer=cJSON_GetObjectItem(j,"printer");auto *capt=cJSON_GetObjectItem(printer,"capt");
         cJSON_DeleteItemFromObject(capt,"age_ms");auto *cloud=cJSON_GetObjectItem(j,"cloud");cJSON_DeleteItemFromObject(cloud,"http");cJSON_DeleteItemFromObject(cloud,"heartbeat_duration_ms");}
       char *encoded=j?cJSON_PrintUnformatted(j):nullptr;String key=encoded?String(encoded):String("");free(encoded);cJSON_Delete(j);
       if(key!=previous || uint32_t(millis()-sent)>=1000) {

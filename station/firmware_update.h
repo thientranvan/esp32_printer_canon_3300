@@ -4,7 +4,7 @@
 #include <mbedtls/sha256.h>
 #include <cJSON.h>
 #ifndef ESP32_FIRMWARE_VERSION
-#define ESP32_FIRMWARE_VERSION 2026112606
+#define ESP32_FIRMWARE_VERSION 2026112608
 #endif
 static constexpr unsigned FirmwareVersion=ESP32_FIRMWARE_VERSION;
 static constexpr const char *FirmwareBoard="esp32-s3-n16r8";
@@ -13,7 +13,7 @@ static std::atomic<bool> firmwareDownloading{false},firmwareChecking{false};
 static portMUX_TYPE firmwareLock=portMUX_INITIALIZER_UNLOCKED;
 static char firmwareState[96]="Chờ mạng để kiểm tra cập nhật";
 static void firmwareNote(const char *s){portENTER_CRITICAL(&firmwareLock);strlcpy(firmwareState,s,sizeof(firmwareState));portEXIT_CRITICAL(&firmwareLock);}
-static String firmwareJSON(){char state[96];portENTER_CRITICAL(&firmwareLock);strlcpy(state,firmwareState,sizeof(state));portEXIT_CRITICAL(&firmwareLock);return String("{\"version\":")+FirmwareVersion+",\"check_interval_s\":60,\"checking\":"+(firmwareChecking.load()?"true":"false")+",\"downloading\":"+(firmwareDownloading.load()?"true":"false")+",\"state\":"+jsonString(state)+"}";}
+static String firmwareJSON(){char state[96];portENTER_CRITICAL(&firmwareLock);strlcpy(state,firmwareState,sizeof(state));portEXIT_CRITICAL(&firmwareLock);return String("{\"version\":")+FirmwareVersion+",\"memory\":{\"internal_free\":"+heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)+",\"internal_largest\":"+heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)+",\"internal_minimum\":"+heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)+"},\"check_interval_s\":60,\"checking\":"+(firmwareChecking.load()?"true":"false")+",\"downloading\":"+(firmwareDownloading.load()?"true":"false")+",\"state\":"+jsonString(state)+"}";}
 static bool validFirmwareManifest(unsigned schema,unsigned version,const char *board,unsigned bytes,const char *hash,unsigned limit){
   if(schema!=1||version<=FirmwareVersion||!board||strcmp(board,FirmwareBoard)||bytes<288||bytes>limit||!hash||strlen(hash)!=64)return false;
   for(unsigned i=0;i<64;++i)if(!((hash[i]>='0'&&hash[i]<='9')||(hash[i]>='a'&&hash[i]<='f')))return false;

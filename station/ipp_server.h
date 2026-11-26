@@ -1,6 +1,8 @@
 #pragma once
 #ifdef ESP32_AIRPRINT_EXPERIMENTAL
 #include <mdns.h>
+#include <freertos/idf_additions.h>
+#include <esp_heap_caps.h>
 #include "ipp_protocol.h"
 #include "raster_job.h"
 // Experimental, opt-in build: never advertise unsupported PDF/JPEG or accept Internet clients.
@@ -183,8 +185,8 @@ static bool start(){
  connections=xQueueCreate(2,sizeof(WiFiClient*));if(!connections)return false;
  TaskHandle_t worker=nullptr,http[2]={nullptr,nullptr};
  bool ready=xTaskCreate(printTask,"ipp-print",12288,nullptr,1,&worker)==pdPASS;
- for(unsigned i=0;i<2&&ready;++i)ready=xTaskCreate(clientTask,"ipp-http",16384,nullptr,1,&http[i])==pdPASS;
- if(!ready||xTaskCreate(serverTask,"ipp-server",4096,nullptr,1,nullptr)!=pdPASS){if(worker)vTaskDelete(worker);for(auto task:http)if(task)vTaskDelete(task);vQueueDelete(connections);connections=nullptr;return false;}
+ for(unsigned i=0;i<2&&ready;++i)ready=xTaskCreateWithCaps(clientTask,"ipp-http",16384,nullptr,1,&http[i],MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)==pdPASS;
+ if(!ready||xTaskCreate(serverTask,"ipp-server",4096,nullptr,1,nullptr)!=pdPASS){if(worker)vTaskDelete(worker);for(auto task:http)if(task)vTaskDeleteWithCaps(task);vQueueDelete(connections);connections=nullptr;return false;}
  MDNS.addService("ipp","tcp",631);MDNS.addServiceTxt("ipp","tcp","txtvers","1");MDNS.addServiceTxt("ipp","tcp","qtotal","1");MDNS.addServiceTxt("ipp","tcp","rp","ipp/print");
  MDNS.addServiceTxt("ipp","tcp","ty","Canon LBP3300");MDNS.addServiceTxt("ipp","tcp","note",stationName.c_str());MDNS.addServiceTxt("ipp","tcp","pdl","image/urf,image/pwg-raster");
  MDNS.addServiceTxt("ipp","tcp","UUID",(String("00000000-0000-4000-8000-")+stationID.substring(6)).c_str());
