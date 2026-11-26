@@ -740,6 +740,7 @@ void setup() {
   });
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
+  if(!prepareCaptTransfer())Serial.println("CAPT USB transfer buffer unavailable");
   if(xTaskCreate(realtimeTask,"dashboard-events",12288,nullptr,1,nullptr)!=pdPASS)Serial.println("Dashboard SSE task failed");
 #ifdef ESP32_AIRPRINT_EXPERIMENTAL
   if(healthy&&!AirPrint::start())Serial.println("IPP experimental startup failed; discovery disabled");

@@ -256,6 +256,25 @@ static bool cancelCapt(uint32_t owner,bool report) {
   if(report&&currentJob.matches(j.id))strcpy(currentJob.printerCancel,ok?(j.printerSession?"cleared":"not_started"):"unverified");
   portEXIT_CRITICAL(&jobLock);return ok;
 }
+// The LAN sender retains raster; recover its disconnected session only from confirmed whole sheets.
+static bool lanResetInterruptedSession(uint32_t owner,PrintRecovery::Checkpoint &checkpoint){
+ auto j=jobSnapshot();auto usb=readUSB();
+ if(j.active||!j.waiting()||strcmp(j.source,"lan")||!j.matches(checkpoint.id.c_str())||j.stopping()||
+    !j.printerSession||j.sessionEpoch!=printerEpoch.load()||checkpoint.epoch!=printerEpoch.load()||
+    !usb.connected||!usb.responsive||usb.recovering)return false;
+ uint8_t buffer[134];auto command=[&](unsigned op,const uint8_t *p=nullptr,size_t n=0){return captExchange(buffer,sizeof(buffer),owner,op,p,n);};
+ if(!command(0xA0A1)||captPaperPresent(1)!=1||!command(0xA0A8)||Prepared::u16(buffer+2)<40)return false;
+ auto f=CaptStatus::decode(buffer);if(f.service||f.jam||f.cover||f.paper)return false;
+ if(!checkpoint.observe(f.completed))return false;
+ jobProgress(j.total,checkpoint.confirmed);jobRecoveryProgress(checkpoint);
+ uint8_t reservation[8]={0,0,30};
+ if(!command(0xA3A2)||!command(0xA2A0,reservation,8)||Prepared::u16(buffer+2)!=8)return false;
+ jobPrinterSession(Prepared::u16(buffer+6));
+ if(!cancelCapt(owner,false)||!command(0xA0A8)||Prepared::u16(buffer+2)<40)return false;
+ f=CaptStatus::decode(buffer);if(f.service||f.jam||f.cover||f.paper||(Prepared::u16(buffer+12)&0x84))return false;
+ for(unsigned i=0;i<4;++i)if(Prepared::u16(buffer+18+i*2))return false;
+ return true;
+}
 static PrintRecovery::Checkpoint cloudRecovery;
 static bool cloudTracking=false,cloudPreflight=false;static uint32_t cloudFaultTime=0;
 static bool cloudPollPaper(bool force=false) {
@@ -554,10 +573,10 @@ static void captStatusTask(void *) {
   uint8_t buffer[134];unsigned previous=~0U;CaptRecovery::Retry repairRetry;
   while(true){
     if(readUSB().responsive && claimCapt(CaptStatusOwner)){
-      if(discardOrphanRequested.exchange(false)){
+      if(discardOrphanRequested.load()){
         auto old=jobSnapshot();
         if(!old.id[0]&&!cloudBusy()&&!cloudClaiming.load()&&!captTCPState.load()&&!cloudSnapshot().job[0]){
-          jobBegin("discard-orphan","lan",true);jobFinish("uncertain");
+          discardOrphanRequested.store(false);jobBegin("discard-orphan","lan",true);jobFinish("uncertain");
           uint8_t reservation[8]={0,0,30};
           bool reserved=captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA3A2)&&
             captExchange(buffer,sizeof(buffer),CaptStatusOwner,0xA2A0,reservation,8)&&Prepared::u16(buffer+2)==8;

@@ -144,6 +144,9 @@ static bool captVerifyUSBRepair(const uint8_t *frame,size_t size) {
   printerEpoch.fetch_add(1);return true;
 }
 
+// One DMA-capable transfer for the serialized CAPT engine, reserved before network tasks fragment heap.
+static usb_transfer_t *captTransferBuffer=nullptr;
+static bool prepareCaptTransfer(){return captTransferBuffer||usb_host_transfer_alloc(4096,0,&captTransferBuffer)==ESP_OK;}
 static void captTransferDone(usb_transfer_t *) { captCommand.done = true; }
 
 static void serviceCapt(USBContext &context) {
@@ -172,8 +175,8 @@ static void serviceCapt(USBContext &context) {
     command.done = false;
     command.cancelled = false;
     command.received = 0;
-    command.error = usb_host_transfer_alloc(command.size, 0, &command.transfer);
-    if (command.error != ESP_OK) { command.state.store(3); return; }
+    if(command.size<1||command.size>4096||!prepareCaptTransfer()){command.error=ESP_ERR_NO_MEM;command.state.store(3);return;}
+    command.transfer=captTransferBuffer;
     auto *transfer = command.transfer;
     transfer->device_handle = context.device;
     transfer->bEndpointAddress = command.input ? 0x82 : 0x01;
@@ -183,7 +186,6 @@ static void serviceCapt(USBContext &context) {
     command.error = usb_host_transfer_submit(transfer);
     if (command.error != ESP_OK) {
       captTransferFailed(command.error,transfer->bEndpointAddress);
-      usb_host_transfer_free(transfer);
       command.transfer = nullptr;
       command.state.store(3);
       return;
@@ -210,7 +212,6 @@ static void serviceCapt(USBContext &context) {
       if (cleared != ESP_OK && command.error == ESP_OK) command.error = cleared;
     }
     if(command.error!=ESP_OK)captTransferFailed(command.error,transfer->bEndpointAddress);
-    usb_host_transfer_free(transfer);
     command.transfer = nullptr;
     command.state.store(3);
   } else if (state == 2 && uint32_t(millis() - command.started) >= CaptStatus::transferTimeout(command.input,captLastOpcode.load())) {

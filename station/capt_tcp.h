@@ -115,7 +115,10 @@ static void captTCPTask(void *) {
           }
           auto u=readUSB();unsigned offset=0xFFFFFFFF;
           if(!strcmp(previous.request,"pause_requested")){const uint8_t paused[10]={5,0xF0,10,0,0,1,255,255,255,255};client.write(paused,10);break;}
-          if(u.connected&&u.responsive&&!u.recovering&&captFresh()&&!captFault()&&lanRecovery.restart(printerEpoch.load())){
+          bool bufferCleared=false;
+          if(same&&previous.waiting()&&lanRecovery.started&&lanRecovery.epoch==printerEpoch.load()&&captFresh()&&!captFault())
+            bufferCleared=lanResetInterruptedSession(1,lanRecovery);
+          if(u.connected&&u.responsive&&!u.recovering&&captFresh()&&!captFault()&&lanRecovery.restart(printerEpoch.load(),bufferCleared)){
             recoverable=true;resumeBase=lanRecovery.base;offset=resumeBase;
           }
           uint8_t ack[10]={5,0xF0,10,0,0,1};
@@ -232,6 +235,6 @@ static void captTCPTask(void *) {
 }
 
 static void startCaptTCP() {
-  if (xTaskCreate(captTCPTask, "capt-tcp", 8192, nullptr, 1, nullptr) != pdPASS)
+  if (xTaskCreate(captTCPTask, "capt-tcp", 16384, nullptr, 1, nullptr) != pdPASS)
     captTCPError.store(ESP_ERR_NO_MEM);
 }

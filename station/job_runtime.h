@@ -17,3 +17,5 @@ static void jobRejectBeforeStart(const char *id,unsigned total,bool control) {po
 static void jobMetadata(const char *title,const char *client,const char *os) {portENTER_CRITICAL(&jobLock);currentJob.metadata(title,client,os);portEXIT_CRITICAL(&jobLock);}
 
 static void jobRecoveryProgress(const PrintRecovery::Checkpoint &checkpoint){portENTER_CRITICAL(&jobLock);currentJob.automaticRecovery=true;currentJob.completed=checkpoint.confirmed;currentJob.completedSheets=checkpoint.sheets();portEXIT_CRITICAL(&jobLock);}
+
+static bool lanResetInterruptedSession(uint32_t owner,PrintRecovery::Checkpoint &checkpoint);

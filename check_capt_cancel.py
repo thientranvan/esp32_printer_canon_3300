@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 source=Path('station/cloud_print.h').read_text()
-engine=source[source.index('static bool cancelCapt('):source.index('static PrintRecovery::Checkpoint cloudRecovery;')]
+engine=source[source.index('static bool cancelCapt('):source.index('// The LAN sender retains raster;')]
 harness=r'''
 #include "station/job_control.h"
 #include "station/prepared_job.h"

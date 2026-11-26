@@ -46,7 +46,7 @@ static void begin(){allocations=frees=submitted=failSubmit=0;ops.clear();printer
 request=Path('station/cloud_print.h').read_text()
 request=request[request.index('static bool cloudRequestUSBRepair()'):request.index('static bool cloudResetInterruptedSession(')]
 transport=Path('station/capt_transport.h').read_text()
-request=transport[transport.index('static bool captRequestUSBRepair('):transport.index('static void captTransferDone')]+request
+request=transport[transport.index('static bool captRequestUSBRepair('):transport.index('// One DMA-capable transfer')]+request
 prefix+=r'''
 static bool ownerAvailable=true;static unsigned released=0;
 static const unsigned CloudOwner=42;

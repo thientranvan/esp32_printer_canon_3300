@@ -292,10 +292,15 @@ sub plan_pages {
 }
 sub control_snapshot {
     my ($job)=@_;require JSON::PP;
-        open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2',"http://$stationHost/printer/status") or fail('Cannot read job control');
-        local $/; my $body=<$curl>;close($curl) or fail('ESP job control unavailable; outcome uncertain');
-        my $s=eval { JSON::PP::decode_json($body) };fail('Invalid job control response') unless $s && ($s->{job_control}{id}//'') eq $job;
-    return $s;
+    for my $attempt(1..3){
+        if(open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','1','--max-time','2','--max-filesize','16384',"http://$stationHost/printer/status")){
+            local $/;my $body=<$curl>;my $ok=close($curl);
+            my $s=$ok?eval{JSON::PP::decode_json($body)}:undef;
+            if($s){fail('ESP job changed; retained checkpoint, no blind replay') unless ($s->{job_control}{id}//'') eq $job;return $s;}
+        }
+        select(undef,undef,undef,0.2) if $attempt<3;
+    }
+    fail('ESP job control unavailable after 3 attempts; retained checkpoint');
 }
 sub check_control {
     my ($job) = @_; my $paused=0;
@@ -309,6 +314,18 @@ sub check_control {
         if (!$paused) {ack(0xF003,pack('C',1));$paused=1;}
         status();select(undef,undef,undef,0.25);
     }
+}
+sub job_identity {
+    my (@pages)=@_;require Digest::SHA;
+    my $digest=Digest::SHA->new(256);$digest->add(($stationId//'')."\0");
+    if(($ARGV[4]//'') =~ /(?:^|\s)job-uuid=(urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\s|$)/i){$digest->add(lc($1));}
+    else{$digest->add(($ARGV[0]//'')."\0");for my $p(@pages){for my $part($p->[0],@{$p->[1]}){$digest->add(pack('V',length($part)),$part);}}}
+    return 'mac-'.substr($digest->hexdigest,0,56);
+}
+sub pending_matches {
+    my ($id)=@_;require JSON::PP;return 0 unless -f $pending && -s $pending<=1024;
+    open(my $f,'<',$pending) or return 0;my $raw=do{local $/;<$f>};close($f);
+    my $r=eval{JSON::PP::decode_json($raw)};return ref($r) eq 'HASH'&&($r->{id}//'') eq $id;
 }
 sub print_pages_attempt {
     my ($job,@pages) = @_;$activeJob=$job;
@@ -338,7 +355,7 @@ sub print_pages_attempt {
     unless($recoverySupported && -e $pending){
     sysopen(my $marker, $pending, O_WRONLY | O_CREAT | O_EXCL, 0600)
         or fail('Uncertain previous job; inspect pending.txt before resuming');
-    print $marker "Job submission started; no automatic retry.\n" or fail('Cannot write pending marker');
+    print $marker JSON::PP::encode_json({schema=>1,id=>$job}) or fail('Cannot write pending marker');
     close($marker) or fail('Cannot save pending marker');
     }
     ack(0xA3A2);
@@ -386,14 +403,16 @@ sub print_pages_attempt {
     unlink($pending) or fail('Cannot clear pending marker');
 }
 sub print_pages {
-    my (@pages)=@_;my $job="mac-".time."-$$";
+    my (@pages)=@_;my $job=job_identity(@pages);
     while(1){
         my $ok=eval {print_pages_attempt($job,@pages);1};return if $ok;
         my $error=$@;
         die $error unless $recoverySupported && ($error =~ /^RECOVERY_WAIT:/ || -e $pending) && $error !~ /Operator cancelled/;
-        print STDERR "INFO: ESP giữ điểm khôi phục; chờ máy in bật lại và hết lỗi.\n";
+        $error =~ s/[\r\n]+/ /g;print STDERR "INFO: Đang nối lại đúng lệnh LAN: $error\n";
         close($socket) if $socket;sleep 1;
         while(1){
+            # A reboot loses ESP RAM checkpoints; never seed a replacement job and replay blindly.
+            control_snapshot($job);
             $socket=IO::Socket::INET->new(PeerAddr=>$stationHost,PeerPort=>$stationPort,Proto=>'tcp',Timeout=>5);
             last if $socket;sleep 1;
         }
@@ -418,9 +437,8 @@ sub monitor {
       !grep({$_>255} split /\./,$host) && $queue =~ /\A(?:ESP32_esp32[0-9a-f]{12}|Canon_LBP3300_ESP32)\z/;
     require JSON::PP;require File::Temp;
     my ($file,$path)=File::Temp::tempfile('esp-status-XXXX',TMPDIR=>1,UNLINK=>1);close($file);
-    my $last='';
     while(1){
-      my @reasons;my $message='ESP disconnected';my $state;
+      my $state;
       eval {
         lan_profile($host);
         open(my $curl,'-|','/usr/bin/curl','--fail','--silent','--noproxy','*','--connect-timeout','2','--max-time','3',"http://$host/printer/status") or die 'curl';
@@ -439,49 +457,8 @@ sub monitor {
           my %view;for my $k(qw(schema connected responsive capt job_control active total completed)){ $view{$k}=$state->{$k} if $state && exists $state->{$k}; }
           print $f JSON::PP::encode_json({received_at=>time,status=>\%view});close($f) or die 'cache';rename($dest.'.tmp',$dest) or die 'cache';};
       }
-      if(!$state || !$state->{connected} || !$state->{responsive}){push @reasons,'offline-report';}
-      elsif(!$state->{capt}{fresh}){push @reasons,'other-warning';$message='Waiting for fresh CAPT status';}
-      else {
-        my $p=$state->{capt};my @notes;
-        for my $c (['paper_jam','media-jam-error','Paper jam'],['cover_open','cover-open-error','Cover open'],
-          ['paper_required','media-empty-error','Check paper size/source'],['toner_warning','marker-supply-low-warning','Check toner'],
-          ['service_error','other-error','Canon service fault']){
-          if($p->{$c->[0]}){push @reasons,$c->[1];push @notes,$c->[2];}
-        }
-        push @notes,$p->{service_code} if ($p->{service_code}//'') =~ /\AE[0-9A-F]{3,4} [0-9A-F]{4}\z/;
-        $message=@notes?join(' / ',@notes):'Printer connected';
-        if($state->{active} && ($state->{total}//0)>0){$message.=' - completed '.int($state->{completed}//0).'/'.int($state->{total}).' impressions';}
-      }
-      my $key=join(',',@reasons).$message;
-      if($key ne $last){
-        # Preserve scheduler reasons (paused, backend failures, etc.). Only replace
-        # reasons owned by this monitor; never resume a paused/uncertain queue.
-        open(my $f,'>',$path) or die $!;
-        print $f "{ OPERATION Get-Printer-Attributes\nGROUP operation-attributes-tag\nATTR charset attributes-charset utf-8\nATTR language attributes-natural-language en\nATTR uri printer-uri ipp://localhost/printers/$queue\nATTR keyword requested-attributes printer-state-reasons\nSTATUS successful-ok\n}\n";close($f);
-        open(my $get,'-|','/usr/bin/ipptool','-tv','-T','3',"ipp://localhost/printers/$queue",$path) or die $!;
-        my $current=do{local $/;<$get>};my $ok=close($get);
-        if($ok && $current =~ /printer-state-reasons \((?:1setOf )?keyword\) = ([^\r\n]+)/){
-          my %owned=map {$_=>1} qw(none offline-report other-warning media-jam-error cover-open-error media-empty-error marker-supply-low-warning other-error);
-          push @reasons,grep {!$owned{$_} && /\A[a-z0-9-]+\z/} split(/,\s*/,$1);
-          my $reason=join(',',@reasons)||'none';
-          my $attr=sub {my($tag,$name,$value)=@_;return pack('Cn', $tag,length($name)).$name.pack('n',length($value)).$value;};
-          my $body=pack('CCnNC',1,1,0x4003,1,1).
-            $attr->(0x47,'attributes-charset','utf-8').$attr->(0x48,'attributes-natural-language','en').
-            $attr->(0x45,'printer-uri',"ipp://localhost/printers/$queue").
-            $attr->(0x42,'requesting-user-name',scalar(getpwuid($>))).pack('C',4).
-            $attr->(0x41,'printer-state-message',$message);
-          my $name='printer-state-reasons';for my $r (split /,/,$reason){$body.=$attr->(0x44,$name,$r);$name='';}$body.=pack('C',3);
-          open($f,'>',$path) or die $!;binmode($f);print $f $body;close($f);
-          # Unix socket preserves local peer credentials; TCP localhost requires
-          # interactive Basic auth on macOS and cannot serve a background monitor.
-          open(my $post,'-|','/usr/bin/curl','--silent','--show-error','--max-time','3','--noproxy','*',
-            '--unix-socket','/var/run/cupsd','-H','Authorization: PeerCred '.getpwuid($>),'-H','Content-Type: application/ipp','--data-binary',"\@$path",'http://localhost/admin/') or die $!;
-          my $reply='';read($post,$reply,4096);my $sent=close($post);
-          if($sent && length($reply)>=8 && unpack('x2n',$reply)<0x100){$last=$key;}
-          else {warn "CUPS status update rejected; check local administration permissions\n";}
-
-        }
-      }
+      # Read-only monitor: CUPS-Add-Modify-Printer can stop/restart active backends.
+      # The submitting backend owns CUPS STATE/ATTR updates; the status app reads this cache.
       last if $once;sleep 3;
     }
 }
@@ -539,7 +516,8 @@ sub main {
     my @pages = pages($job); # Validate the entire job before touching USB.
     sysopen(my $lock, "$cache/lock", O_WRONLY | O_CREAT, 0600) or fail('Cannot open local lock');
     flock($lock, LOCK_EX) or fail('Cannot lock local printer');
-    fail('Previous result uncertain; inspect pending.txt') if -e $pending;
+    my @plan = plan_pages(\@pages, $ARGV[3], $duplex, $collate);
+    fail('Previous result uncertain; inspect pending.txt') if -e $pending && (!$recoverySupported || !pending_matches(job_identity(@plan)));
     my $cloud;
     my $cloudDuplex=$duplex?($ARGV[4]=~/(?:BindEdge=Top|Duplex=DuplexTumble|sides=two-sided-short-edge)/i?3:2):1;
     if(cloud_was_selected(\@pages,$ARGV[3],$cloudDuplex,$collate)){
@@ -552,7 +530,6 @@ sub main {
         cloud_print($cloud,\@pages,$ARGV[3],$cloudDuplex,$collate,$job);return;
     }
     $socket->autoflush(1);
-    my @plan = plan_pages(\@pages, $ARGV[3], $duplex, $collate);
     print_pages(@plan);
     close($socket);
 }
