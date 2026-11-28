@@ -38,3 +38,9 @@ Bản thử giữ thay đổi stack IPP sang PSRAM của canary 2608; chưa phá
 Build cuối 1429392 byte, kiểm tra public-build không có mật khẩu riêng. Đã nạp OTA qua LAN riêng Máy 1 sau kiểm tra đúng ID/không job active hoặc cloud. /status xác nhận version2026112801, uptime37s, CAPT fresh, cloud idle/heartbeat200, download.phaseidle. Mac vẫn không thấy COM; không mở hoặc reset serial giả định. Dùng curl cho thao tác LAN vì Python urllib có lúc No route to host trong khi curl đọc đúng cùng IP/MAC; đây là quan sát từ Mac, không dùng làm bằng chứng rằng ESP vừa mất Wi-Fi.
 
 Đã đề nghị người dùng gửi đúng một lệnh web mới để nghiệm thu, không tự replay jobfailed cũ. Giữ stable OTA2606 trong thời gian thử; chưa phát hành2801 cho Máy2/3. Chưa sửa server app/DB/service; chỉ đọc log, metadata, kiểm tra artifact và chuẩn bị docs.
+
+## Lượt web thật sau sửa
+
+Người dùng gửi đúng một lệnh mới tới Máy 1: job_75bae92c587e0d19289490b9ec1a2e03. ESP 2801 ghi cloud.download attempt1, expected1101276, received1101276, HTTP200, error0, phaseverified, duration10854ms. Sau đó job completed2/2, inactive, cloudidle/errorrỗng. Nginx xác nhận GETdata lúc08:53:57UTC trả200 và gửi đủ1101276byte, chỉ một request trong lượt này. Không cần retry để đạt lượt này, nhưng các ca retry/truncated vẫn được kiểm tra bằng harness.
+
+Chờ người dùng xác nhận giấy/nội dung, không dùng counter2/2 thay xác nhận giấy. Stable manifest vẫn2606 trong lúc chờ; chưa khẳng định đã loại hết lỗi tầng mạng/Wi-Fi chỉ bằng một lượt thành công.
