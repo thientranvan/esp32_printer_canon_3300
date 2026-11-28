@@ -44,3 +44,9 @@ Build cuối 1429392 byte, kiểm tra public-build không có mật khẩu riên
 Người dùng gửi đúng một lệnh mới tới Máy 1: job_75bae92c587e0d19289490b9ec1a2e03. ESP 2801 ghi cloud.download attempt1, expected1101276, received1101276, HTTP200, error0, phaseverified, duration10854ms. Sau đó job completed2/2, inactive, cloudidle/errorrỗng. Nginx xác nhận GETdata lúc08:53:57UTC trả200 và gửi đủ1101276byte, chỉ một request trong lượt này. Không cần retry để đạt lượt này, nhưng các ca retry/truncated vẫn được kiểm tra bằng harness.
 
 Chờ người dùng xác nhận giấy/nội dung, không dùng counter2/2 thay xác nhận giấy. Stable manifest vẫn2606 trong lúc chờ; chưa khẳng định đã loại hết lỗi tầng mạng/Wi-Fi chỉ bằng một lượt thành công.
+
+## Phát hành OTA chung theo yêu cầu người dùng
+
+Người dùng yêu cầu phát hành sau lượt tải đủ và counter completed2/2. Promote đúng image2026112801 đã nạp Máy1, không build lại: 1429392byte, SHA-256 6e9aa812e9585e2428d710b576b1c72c7573a567fd863b15758d26fabfc91adb. firmware/station.bin và latest.json phát hành cùng commit. Các bo tự kiểm tra khi có mạng/rảnh theo gate hiện có; không ép reboot phiên in đang chạy hoặc bỏ khóa đối soát.
+
+Giữ hardware_validated=false/release_stageairprint-preview cho profile rộng. Chưa có phản hồi xác nhận giấy/nội dung của lượt mới tại thời điểm phát hành; kết quả đã xác minh là tải đủ/hash/framing/format đạt, server ghi gửi đủ byte và ESP completed2/2. Không gọi phát hành là bằng chứng cả Máy2/3 đã nạp hoặc mọi lỗi mạng đã hết. Không cần đổi bộ cài máy tính cho sửa download firmware này.
