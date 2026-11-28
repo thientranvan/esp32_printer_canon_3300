@@ -14,6 +14,11 @@ static const char *cloudOrigin="https://quanly.lophocbinhminh.com";
 static std::atomic<bool> cloudWorking{false}, cloudResolve{false}, cloudNeedsInspection{false};
 static portMUX_TYPE cloudLock=portMUX_INITIALIZER_UNLOCKED;
 struct CloudView { char state[24], error[128], job[65]; unsigned total, completed, submitted; int http, heartbeatHttp, claimHttp, eventHttp; bool progressKnown; char waitReason[32]; char heartbeatDiagnostic[192]; unsigned heartbeatDurationMs, heartbeatFailures; };
+struct DownloadView {unsigned attempt=0,expected=0,received=0,duration=0;int http=0,error=0;char phase[32]="idle";};
+static DownloadView downloadView;
+static DownloadView downloadSnapshot(){portENTER_CRITICAL(&cloudLock);auto v=downloadView;portEXIT_CRITICAL(&cloudLock);return v;}
+static void downloadProgress(const DownloadView &v){portENTER_CRITICAL(&cloudLock);downloadView=v;portEXIT_CRITICAL(&cloudLock);}
+static String downloadJSON(){auto v=downloadSnapshot();return String("{\"attempt\":")+v.attempt+",\"expected\":"+v.expected+",\"received\":"+v.received+",\"duration_ms\":"+v.duration+",\"http\":"+v.http+",\"error\":"+v.error+",\"phase\":"+jsonString(v.phase)+"}";}
 static CloudView cloudView={"disabled","","",0,0,0,0,0,0,0,false};
 static bool cloudBusy() { return cloudWorking.load(); }
 static CloudView cloudSnapshot() { portENTER_CRITICAL(&cloudLock); auto v=cloudView; portEXIT_CRITICAL(&cloudLock); return v; }
@@ -23,7 +28,7 @@ static void cloudState(const char *state,const char *error="",const char *waitRe
 }
 static String cloudStatusJSON() {
   auto v=cloudSnapshot();
-  return String("{\"enabled\":")+(stationSettings.cloudEnabled?"true":"false")+",\"state\":"+jsonString(v.state)+
+  return String("{\"download\":")+downloadJSON()+",\"enabled\":"+(stationSettings.cloudEnabled?"true":"false")+",\"state\":"+jsonString(v.state)+
     ",\"error\":"+jsonString(v.error)+",\"wait_reason\":"+jsonString(v.waitReason)+",\"http\":"+v.http+",\"heartbeat_http\":"+v.heartbeatHttp+",\"claim_http\":"+v.claimHttp+",\"event_http\":"+v.eventHttp+",\"heartbeat_diagnostic\":"+jsonString(v.heartbeatDiagnostic)+",\"heartbeat_duration_ms\":"+v.heartbeatDurationMs+",\"heartbeat_failures\":"+v.heartbeatFailures+",\"job\":"+jsonString(v.job)+
     ",\"progress_known\":"+(v.progressKnown?"true":"false")+",\"total\":"+v.total+",\"submitted\":"+v.submitted+",\"completed\":"+v.completed+"}";
 }
@@ -37,10 +42,10 @@ static bool cloudIdentifier(const String &s,size_t minimum=1,size_t maximum=64) 
 }
 #include "server_queue.h"
 static String cloudPath(const String &suffix) { return "/api/print/v1/stations/"+stationID+suffix; }
-static esp_http_client_handle_t cloudClient(const String &path,const String &lease="") {
+static esp_http_client_handle_t cloudClient(const String &path,const String &lease="",bool asynchronous=false) {
   String url=String(cloudOrigin)+cloudPath(path);
   esp_http_client_config_t cfg={}; cfg.url=url.c_str(); cfg.crt_bundle_attach=esp_crt_bundle_attach;
-  cfg.keep_alive_enable=true; cfg.timeout_ms=10000; cfg.disable_auto_redirect=true; cfg.buffer_size=2048;
+  cfg.keep_alive_enable=true; cfg.is_async=asynchronous; cfg.timeout_ms=10000; cfg.disable_auto_redirect=true; cfg.buffer_size=2048;
   auto h=esp_http_client_init(&cfg);
   if(h) {
     String auth="Bearer "+String(stationSettings.cloudToken);
@@ -179,23 +184,50 @@ static void cloudTelemetryTask(void *) {
     vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
-static bool cloudDownload(const String &id,const String &lease,uint8_t *data,size_t size,const String &expected) {
-  auto h=cloudClient("/jobs/"+id+"/data",lease);if(!h)return false;
-  bool ok=false;
-  if(esp_http_client_open(h,0)==ESP_OK && esp_http_client_fetch_headers(h)==int64_t(size) && esp_http_client_get_status_code(h)==200) {
-    size_t offset=0;uint32_t began=millis();
-    while(offset<size && uint32_t(millis()-began)<120000) {
-      int n=esp_http_client_read(h,reinterpret_cast<char *>(data+offset),min(size-offset,size_t(8192)));
-      if(n<=0)break;offset+=n;cloudHeartbeat();
-    }
-    if(offset==size) {
-      uint8_t hash[32];char text[65];
-      if(mbedtls_sha256(data,size,hash,0)!=0){esp_http_client_close(h);esp_http_client_cleanup(h);return false;}
-      for(int i=0;i<32;++i)snprintf(text+i*2,3,"%02x",hash[i]);
-      ok=expected==text;
-    }
+struct DownloadBuffer {uint8_t *data;size_t size,received=0;bool overflow=false;uint32_t started;DownloadView view;};
+static esp_err_t cloudDownloadEvent(esp_http_client_event_t *event){
+ auto *b=static_cast<DownloadBuffer*>(event->user_data);if(!b)return ESP_OK;
+ if(event->event_id==HTTP_EVENT_ON_DATA){
+  if(esp_http_client_get_status_code(event->client)!=200)return ESP_OK;
+  if(event->data_len<0||size_t(event->data_len)>b->size-b->received){b->overflow=true;return ESP_FAIL;}
+  memcpy(b->data+b->received,event->data,event->data_len);b->received+=event->data_len;
+  b->view.received=b->received;strcpy(b->view.phase,"receiving");
+ }else if(event->event_id==HTTP_EVENT_HEADERS_SENT)strcpy(b->view.phase,"headers_sent");
+ b->view.duration=millis()-b->started;downloadProgress(b->view);return ESP_OK;
+}
+static bool cloudDownload(const String &id,const String &lease,uint8_t *data,size_t size,const String &expected){
+ uint32_t began=millis();DownloadView view;view.expected=size;
+ // GET retries are safe only here, before USB submission. Never replay a print transfer.
+ for(unsigned attempt=1;attempt<=3&&uint32_t(millis()-began)<120000;++attempt){
+  view.attempt=attempt;view.received=0;view.http=0;view.error=0;strcpy(view.phase,"open");downloadProgress(view);
+  auto h=cloudClient("/jobs/"+id+"/data",lease,true);
+  if(!h){view.error=ESP_ERR_NO_MEM;strcpy(view.phase,"http_allocation");downloadProgress(view);return false;}
+  DownloadBuffer buffer{data,size,0,false,began,view};
+  int result=esp_http_client_set_method(h,HTTP_METHOD_GET);
+  if(result==ESP_OK)result=esp_http_client_set_event_handler(h,cloudDownloadEvent);
+  if(result==ESP_OK)result=esp_http_client_set_user_data(h,&buffer);
+  if(result==ESP_OK){
+   do{
+    unsigned elapsed=millis()-began;if(elapsed>=120000){result=ESP_ERR_TIMEOUT;break;}
+    esp_http_client_set_timeout_ms(h,min(15000U,120000-elapsed));result=esp_http_client_perform(h);
+    if(result==ESP_ERR_HTTP_EAGAIN)vTaskDelay(pdMS_TO_TICKS(10));
+   }while(result==ESP_ERR_HTTP_EAGAIN&&!buffer.overflow);
   }
-  esp_http_client_close(h);esp_http_client_cleanup(h);return ok;
+  view=buffer.view;view.received=buffer.received;view.duration=millis()-began;view.error=result;view.http=esp_http_client_get_status_code(h);
+  bool complete=result==ESP_OK&&!buffer.overflow&&view.http==200&&buffer.received==size&&esp_http_client_is_complete_data_received(h);
+  bool lengthOK=esp_http_client_is_chunked_response(h)||esp_http_client_get_content_length(h)==int64_t(size);
+  esp_http_client_close(h);esp_http_client_cleanup(h);
+  if(complete&&lengthOK){
+   uint8_t hash[32];char text[65]={};
+   if(mbedtls_sha256(data,size,hash,0)!=0){strcpy(view.phase,"hash_error");downloadProgress(view);return false;}
+   for(unsigned i=0;i<32;++i)snprintf(text+i*2,3,"%02x",hash[i]);
+   bool valid=expected==text;strcpy(view.phase,valid?"verified":"checksum_mismatch");downloadProgress(view);return valid;
+  }
+  strcpy(view.phase,buffer.overflow?"body_overflow":view.http==200&&!lengthOK?"length_mismatch":view.http==200?"incomplete_body":"http_error");downloadProgress(view);
+  if(buffer.overflow||(view.http>=400&&view.http<500&&view.http!=408&&view.http!=429)||(view.http==200&&!lengthOK))return false;
+  vTaskDelay(pdMS_TO_TICKS(250));
+ }
+ return false;
 }
 // Cloud uses a reserved owner, renewed for every transfer; shares USB arbiter with LAN.
 static constexpr uint32_t CloudOwner=CaptCloudOwner;
@@ -521,7 +553,12 @@ static void cloudTask(void *) {
         if(!persist()){cloudState("blocked","Cannot persist claimed job");vTaskDelete(nullptr);return;}
         cloudWorking.store(true);cloudState("downloading");
         auto *data=static_cast<uint8_t *>(ps_malloc(size_t(bytes)));Prepared::Job job;
-        bool validData=data && cloudDownload(id,lease,data,size_t(bytes),hash) && Prepared::parse(data,size_t(bytes),job);
+        bool downloaded=data&&cloudDownload(id,lease,data,size_t(bytes),hash);
+        bool validData=downloaded&&Prepared::parse(data,size_t(bytes),job);
+        String preparationError;
+        if(!data)preparationError="PSRAM allocation failed; no pages sent";
+        else if(!downloaded){auto v=downloadSnapshot();preparationError=String("Download ")+v.phase+": "+v.received+"/"+v.expected+" bytes; HTTP "+v.http+"; try "+v.attempt+"; no pages sent";}
+        else if(!validData)preparationError="ESPJOB format validation failed after verified download; no pages sent";
         bool acquired=false;
         if(validData) {
           cloudState("waiting_printer");
@@ -574,7 +611,7 @@ static void cloudTask(void *) {
           }
           jobFinish(done?"completed":stopped.stopping()?"cancelled":"uncertain");
           releaseCapt(CloudOwner);
-        }else {state="failed";error="Download, checksum, memory or format validation failed; no pages sent";}
+        }else {state="failed";error=preparationError;}
         free(data);
         if(!persist()){cloudState("blocked","Cannot persist outcome; journal retained");vTaskDelete(nullptr);return;}
         cloudWorking.store(false);
